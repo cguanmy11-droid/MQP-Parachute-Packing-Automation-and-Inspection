@@ -1,0 +1,246 @@
+[0.011s] Invoking command in '/home/my11/interbotix_ws/build/interbotix_xsarm_descriptions': AMENT_PREFIX_PATH=/home/my11/interbotix_ws/install/interbotix_xs_modules:/home/my11/interbotix_ws/install/interbotix_xs_sdk:/home/my11/interbotix_ws/install/interbotix_xs_driver:/home/my11/interbotix_ws/install/interbotix_xs_msgs:/home/my11/interbotix_ws/install/interbotix_common_modules:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/my11/interbotix_ws/install/interbotix_xs_sdk:/home/my11/interbotix_ws/install/interbotix_xs_driver:/home/my11/interbotix_ws/install/interbotix_xs_msgs:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox:/home/my11/apriltag_ws/install/apriltag_ros:/home/my11/ros2_ws/install/rrbot_gazebo:/home/my11/ros2_ws/install/rrbot_description:/home/my11/ros2_ws/install/plate_description:/home/my11/ros2_ws/install/opencv_test_py:/opt/ros/humble LD_LIBRARY_PATH=/home/my11/interbotix_ws/install/interbotix_xs_driver/lib:/home/my11/interbotix_ws/install/interbotix_xs_msgs/lib:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox/lib:/home/my11/apriltag_ws/install/apriltag_ros/lib:/usr/lib/x86_64-linux-gnu/gazebo-11/plugins:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins PYTHONPATH=/home/my11/interbotix_ws/install/interbotix_xs_modules/lib/python3.10/site-packages:/home/my11/interbotix_ws/install/interbotix_xs_msgs/local/lib/python3.10/dist-packages:/home/my11/interbotix_ws/install/interbotix_common_modules/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/cmake /home/my11/interbotix_ws/src/interbotix_ros_manipulators/interbotix_ros_xsarms/interbotix_xsarm_descriptions -DCMAKE_INSTALL_PREFIX=/home/my11/interbotix_ws/install/interbotix_xsarm_descriptions
+[0.057s] -- The C compiler identification is GNU 11.4.0
+[0.096s] -- The CXX compiler identification is GNU 11.4.0
+[0.101s] -- Detecting C compiler ABI info
+[0.153s] -- Detecting C compiler ABI info - done
+[0.157s] -- Check for working C compiler: /usr/bin/cc - skipped
+[0.157s] -- Detecting C compile features
+[0.158s] -- Detecting C compile features - done
+[0.159s] -- Detecting CXX compiler ABI info
+[0.223s] -- Detecting CXX compiler ABI info - done
+[0.227s] -- Check for working CXX compiler: /usr/bin/c++ - skipped
+[0.227s] -- Detecting CXX compile features
+[0.227s] -- Detecting CXX compile features - done
+[0.230s] -- Found ament_cmake: 1.3.10 (/opt/ros/humble/share/ament_cmake/cmake)
+[0.338s] -- Found Python3: /usr/bin/python3 (found version "3.10.12") found components: Interpreter 
+[0.398s] -- Found robot_state_publisher: 3.0.3 (/opt/ros/humble/share/robot_state_publisher/cmake)
+[0.426s] -- Found rosidl_generator_c: 3.1.5 (/opt/ros/humble/share/rosidl_generator_c/cmake)
+[0.431s] -- Found rosidl_adapter: 3.1.5 (/opt/ros/humble/share/rosidl_adapter/cmake)
+[0.439s] -- Found rosidl_generator_cpp: 3.1.5 (/opt/ros/humble/share/rosidl_generator_cpp/cmake)
+[0.449s] -- Using all available rosidl_typesupport_c: rosidl_typesupport_fastrtps_c;rosidl_typesupport_introspection_c
+[0.460s] -- Using all available rosidl_typesupport_cpp: rosidl_typesupport_fastrtps_cpp;rosidl_typesupport_introspection_cpp
+[0.498s] -- Found eigen3_cmake_module: 0.1.1 (/opt/ros/humble/share/eigen3_cmake_module/cmake)
+[0.499s] -- Found Eigen3: TRUE (found version "3.4.0") 
+[0.499s] -- Ensuring Eigen3 include directory is part of orocos-kdl CMake target
+[0.527s] -- Found rmw_implementation_cmake: 6.1.2 (/opt/ros/humble/share/rmw_implementation_cmake/cmake)
+[0.528s] -- Found rmw_fastrtps_cpp: 6.2.7 (/opt/ros/humble/share/rmw_fastrtps_cpp/cmake)
+[0.591s] -- Found OpenSSL: /usr/lib/x86_64-linux-gnu/libcrypto.so (found version "3.0.2")  
+[0.609s] -- Found FastRTPS: /opt/ros/humble/include  
+[0.635s] -- Using RMW implementation 'rmw_fastrtps_cpp' as default
+[0.640s] -- Looking for pthread.h
+[0.695s] -- Looking for pthread.h - found
+[0.695s] -- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+[0.749s] -- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+[0.751s] -- Found Threads: TRUE  
+[0.860s] -- Found rviz2: 11.2.19 (/opt/ros/humble/share/rviz2/cmake)
+[0.869s] -- Found xacro: 2.0.8 (/opt/ros/humble/share/xacro/cmake)
+[0.870s] -- Found ament_lint_auto: 0.12.14 (/opt/ros/humble/share/ament_lint_auto/cmake)
+[0.922s] -- Added test 'copyright' to check source files copyright and LICENSE
+[0.927s] -- Added test 'flake8' to check Python code syntax and style conventions
+[0.927s] -- Added test 'lint_cmake' to check CMake code style
+[0.928s] -- Added test 'pep257' to check Python code against some of the docstring style conventions in PEP 257
+[0.931s] -- Added test 'xmllint' to check XML markup files
+[0.931s] -- Configuring done
+[0.934s] -- Generating done
+[0.935s] -- Build files have been written to: /home/my11/interbotix_ws/build/interbotix_xsarm_descriptions
+[0.942s] Invoked command in '/home/my11/interbotix_ws/build/interbotix_xsarm_descriptions' returned '0': AMENT_PREFIX_PATH=/home/my11/interbotix_ws/install/interbotix_xs_modules:/home/my11/interbotix_ws/install/interbotix_xs_sdk:/home/my11/interbotix_ws/install/interbotix_xs_driver:/home/my11/interbotix_ws/install/interbotix_xs_msgs:/home/my11/interbotix_ws/install/interbotix_common_modules:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/my11/interbotix_ws/install/interbotix_xs_sdk:/home/my11/interbotix_ws/install/interbotix_xs_driver:/home/my11/interbotix_ws/install/interbotix_xs_msgs:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox:/home/my11/apriltag_ws/install/apriltag_ros:/home/my11/ros2_ws/install/rrbot_gazebo:/home/my11/ros2_ws/install/rrbot_description:/home/my11/ros2_ws/install/plate_description:/home/my11/ros2_ws/install/opencv_test_py:/opt/ros/humble LD_LIBRARY_PATH=/home/my11/interbotix_ws/install/interbotix_xs_driver/lib:/home/my11/interbotix_ws/install/interbotix_xs_msgs/lib:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox/lib:/home/my11/apriltag_ws/install/apriltag_ros/lib:/usr/lib/x86_64-linux-gnu/gazebo-11/plugins:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins PYTHONPATH=/home/my11/interbotix_ws/install/interbotix_xs_modules/lib/python3.10/site-packages:/home/my11/interbotix_ws/install/interbotix_xs_msgs/local/lib/python3.10/dist-packages:/home/my11/interbotix_ws/install/interbotix_common_modules/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/cmake /home/my11/interbotix_ws/src/interbotix_ros_manipulators/interbotix_ros_xsarms/interbotix_xsarm_descriptions -DCMAKE_INSTALL_PREFIX=/home/my11/interbotix_ws/install/interbotix_xsarm_descriptions
+[0.943s] Invoking command in '/home/my11/interbotix_ws/build/interbotix_xsarm_descriptions': AMENT_PREFIX_PATH=/home/my11/interbotix_ws/install/interbotix_xs_modules:/home/my11/interbotix_ws/install/interbotix_xs_sdk:/home/my11/interbotix_ws/install/interbotix_xs_driver:/home/my11/interbotix_ws/install/interbotix_xs_msgs:/home/my11/interbotix_ws/install/interbotix_common_modules:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/my11/interbotix_ws/install/interbotix_xs_sdk:/home/my11/interbotix_ws/install/interbotix_xs_driver:/home/my11/interbotix_ws/install/interbotix_xs_msgs:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox:/home/my11/apriltag_ws/install/apriltag_ros:/home/my11/ros2_ws/install/rrbot_gazebo:/home/my11/ros2_ws/install/rrbot_description:/home/my11/ros2_ws/install/plate_description:/home/my11/ros2_ws/install/opencv_test_py:/opt/ros/humble LD_LIBRARY_PATH=/home/my11/interbotix_ws/install/interbotix_xs_driver/lib:/home/my11/interbotix_ws/install/interbotix_xs_msgs/lib:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox/lib:/home/my11/apriltag_ws/install/apriltag_ros/lib:/usr/lib/x86_64-linux-gnu/gazebo-11/plugins:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins PYTHONPATH=/home/my11/interbotix_ws/install/interbotix_xs_modules/lib/python3.10/site-packages:/home/my11/interbotix_ws/install/interbotix_xs_msgs/local/lib/python3.10/dist-packages:/home/my11/interbotix_ws/install/interbotix_common_modules/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/cmake --build /home/my11/interbotix_ws/build/interbotix_xsarm_descriptions -- -j20 -l20
+[0.975s] Invoked command in '/home/my11/interbotix_ws/build/interbotix_xsarm_descriptions' returned '0': AMENT_PREFIX_PATH=/home/my11/interbotix_ws/install/interbotix_xs_modules:/home/my11/interbotix_ws/install/interbotix_xs_sdk:/home/my11/interbotix_ws/install/interbotix_xs_driver:/home/my11/interbotix_ws/install/interbotix_xs_msgs:/home/my11/interbotix_ws/install/interbotix_common_modules:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/my11/interbotix_ws/install/interbotix_xs_sdk:/home/my11/interbotix_ws/install/interbotix_xs_driver:/home/my11/interbotix_ws/install/interbotix_xs_msgs:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox:/home/my11/apriltag_ws/install/apriltag_ros:/home/my11/ros2_ws/install/rrbot_gazebo:/home/my11/ros2_ws/install/rrbot_description:/home/my11/ros2_ws/install/plate_description:/home/my11/ros2_ws/install/opencv_test_py:/opt/ros/humble LD_LIBRARY_PATH=/home/my11/interbotix_ws/install/interbotix_xs_driver/lib:/home/my11/interbotix_ws/install/interbotix_xs_msgs/lib:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox/lib:/home/my11/apriltag_ws/install/apriltag_ros/lib:/usr/lib/x86_64-linux-gnu/gazebo-11/plugins:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins PYTHONPATH=/home/my11/interbotix_ws/install/interbotix_xs_modules/lib/python3.10/site-packages:/home/my11/interbotix_ws/install/interbotix_xs_msgs/local/lib/python3.10/dist-packages:/home/my11/interbotix_ws/install/interbotix_common_modules/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/cmake --build /home/my11/interbotix_ws/build/interbotix_xsarm_descriptions -- -j20 -l20
+[0.996s] Invoking command in '/home/my11/interbotix_ws/build/interbotix_xsarm_descriptions': AMENT_PREFIX_PATH=/home/my11/interbotix_ws/install/interbotix_xs_modules:/home/my11/interbotix_ws/install/interbotix_xs_sdk:/home/my11/interbotix_ws/install/interbotix_xs_driver:/home/my11/interbotix_ws/install/interbotix_xs_msgs:/home/my11/interbotix_ws/install/interbotix_common_modules:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/my11/interbotix_ws/install/interbotix_xs_sdk:/home/my11/interbotix_ws/install/interbotix_xs_driver:/home/my11/interbotix_ws/install/interbotix_xs_msgs:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox:/home/my11/apriltag_ws/install/apriltag_ros:/home/my11/ros2_ws/install/rrbot_gazebo:/home/my11/ros2_ws/install/rrbot_description:/home/my11/ros2_ws/install/plate_description:/home/my11/ros2_ws/install/opencv_test_py:/opt/ros/humble LD_LIBRARY_PATH=/home/my11/interbotix_ws/install/interbotix_xs_driver/lib:/home/my11/interbotix_ws/install/interbotix_xs_msgs/lib:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox/lib:/home/my11/apriltag_ws/install/apriltag_ros/lib:/usr/lib/x86_64-linux-gnu/gazebo-11/plugins:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins PYTHONPATH=/home/my11/interbotix_ws/install/interbotix_xs_modules/lib/python3.10/site-packages:/home/my11/interbotix_ws/install/interbotix_xs_msgs/local/lib/python3.10/dist-packages:/home/my11/interbotix_ws/install/interbotix_common_modules/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/cmake --install /home/my11/interbotix_ws/build/interbotix_xsarm_descriptions
+[1.003s] -- Install configuration: ""
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/mobile_wx200.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/vx250.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/control.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/mobile_px100.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/ar_tag.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/rx200.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/aloha_wx250s.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/wx250s.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/wx200.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/gazebo_configs.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/aloha_vx300s.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/px150.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/vx300.urdf.xacro
+[1.003s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/rx150.urdf.xacro
+[1.004s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/wx250.urdf.xacro
+[1.004s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/px100.urdf.xacro
+[1.004s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/vx300s.urdf.xacro
+[1.004s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//urdf/mobile_wx250s.urdf.xacro
+[1.004s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//launch
+[1.004s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//launch/remote_view.launch.py
+[1.004s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//launch/xsarm_description.launch.py
+[1.004s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes
+[1.004s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_vx300s_meshes
+[1.004s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_vx300s_meshes/gripper_bar.stl
+[1.005s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_vx300s_meshes/gripper.stl
+[1.005s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_vx300s_meshes/upper_arm.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_vx300s_meshes/upper_forearm.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_vx300s_meshes/gripper_finger.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_vx300s_meshes/gripper_prop.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_vx300s_meshes/shoulder.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_vx300s_meshes/lower_forearm.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_vx300s_meshes/base.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_vx300s_meshes/wrist.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250s_meshes
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250s_meshes/gripper_bar.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250s_meshes/gripper.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250s_meshes/upper_arm.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250s_meshes/upper_forearm.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250s_meshes/gripper_finger.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250s_meshes/gripper_prop.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250s_meshes/shoulder.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250s_meshes/lower_forearm.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250s_meshes/base.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250s_meshes/wrist.stl
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx200_meshes
+[1.006s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx200_meshes/gripper_bar.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx200_meshes/gripper.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx200_meshes/forearm.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx200_meshes/upper_arm.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx200_meshes/gripper_finger.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx200_meshes/gripper_prop.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx200_meshes/shoulder.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx200_meshes/base.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx200_meshes/wrist.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx200_meshes
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx200_meshes/gripper_bar.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx200_meshes/gripper.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx200_meshes/forearm.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx200_meshes/upper_arm.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx200_meshes/gripper_finger.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx200_meshes/gripper_prop.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx200_meshes/shoulder.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx200_meshes/base.stl
+[1.007s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx200_meshes/wrist.stl
+[1.008s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300_meshes
+[1.008s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300_meshes/gripper_bar.stl
+[1.008s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300_meshes/gripper.stl
+[1.008s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300_meshes/forearm.stl
+[1.008s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300_meshes/upper_arm.stl
+[1.008s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300_meshes/gripper_finger.stl
+[1.008s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300_meshes/gripper_prop.stl
+[1.008s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300_meshes/shoulder.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300_meshes/base.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300_meshes/wrist.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx200_meshes
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx200_meshes/gripper_bar.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx200_meshes/gripper.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx200_meshes/forearm.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx200_meshes/upper_arm.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx200_meshes/gripper_finger.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx200_meshes/gripper_prop.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx200_meshes/shoulder.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx200_meshes/base.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx200_meshes/wrist.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx250s_meshes
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx250s_meshes/gripper_bar.stl
+[1.009s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx250s_meshes/gripper.stl
+[1.010s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx250s_meshes/upper_arm.stl
+[1.010s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx250s_meshes/upper_forearm.stl
+[1.010s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx250s_meshes/gripper_finger.stl
+[1.010s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx250s_meshes/gripper_prop.stl
+[1.010s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx250s_meshes/shoulder.stl
+[1.010s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx250s_meshes/lower_forearm.stl
+[1.010s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx250s_meshes/base.stl
+[1.010s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_wx250s_meshes/wrist.stl
+[1.010s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250_meshes
+[1.010s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250_meshes/gripper_bar.stl
+[1.010s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250_meshes/gripper.stl
+[1.010s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250_meshes/forearm.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250_meshes/upper_arm.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250_meshes/gripper_finger.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250_meshes/gripper_prop.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250_meshes/shoulder.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250_meshes/base.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/wx250_meshes/wrist.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/interbotix_black.png
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px100_meshes
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px100_meshes/gripper_bar.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px100_meshes/gripper.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px100_meshes/forearm.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px100_meshes/upper_arm.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px100_meshes/gripper_finger.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px100_meshes/gripper_prop.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px100_meshes/shoulder.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px100_meshes/base.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_px100_meshes
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_px100_meshes/gripper_bar.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_px100_meshes/gripper.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_px100_meshes/forearm.stl
+[1.011s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_px100_meshes/upper_arm.stl
+[1.012s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_px100_meshes/gripper_finger.stl
+[1.012s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_px100_meshes/gripper_prop.stl
+[1.012s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_px100_meshes/shoulder.stl
+[1.012s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/mobile_px100_meshes/base.stl
+[1.012s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx150_meshes
+[1.012s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx150_meshes/gripper_bar.stl
+[1.012s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx150_meshes/gripper.stl
+[1.012s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx150_meshes/forearm.stl
+[1.012s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx150_meshes/upper_arm.stl
+[1.012s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx150_meshes/gripper_finger.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx150_meshes/gripper_prop.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx150_meshes/shoulder.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx150_meshes/base.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/rx150_meshes/wrist.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300s_meshes
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300s_meshes/gripper_bar.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300s_meshes/gripper.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300s_meshes/upper_arm.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300s_meshes/upper_forearm.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300s_meshes/gripper_finger.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300s_meshes/gripper_prop.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300s_meshes/shoulder.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300s_meshes/lower_forearm.stl
+[1.013s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300s_meshes/base.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx300s_meshes/wrist.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_wx250s_meshes
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_wx250s_meshes/gripper_bar.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_wx250s_meshes/gripper.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_wx250s_meshes/upper_arm.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_wx250s_meshes/upper_forearm.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_wx250s_meshes/gripper_finger.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_wx250s_meshes/gripper_prop.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_wx250s_meshes/shoulder.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_wx250s_meshes/lower_forearm.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_wx250s_meshes/base.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/aloha_wx250s_meshes/wrist.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/ar_tag.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px150_meshes
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px150_meshes/gripper_bar.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px150_meshes/gripper.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px150_meshes/forearm.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px150_meshes/upper_arm.stl
+[1.014s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px150_meshes/gripper_finger.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px150_meshes/gripper_prop.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px150_meshes/shoulder.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px150_meshes/base.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/px150_meshes/wrist.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx250_meshes
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx250_meshes/gripper_bar.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx250_meshes/gripper.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx250_meshes/forearm.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx250_meshes/upper_arm.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx250_meshes/gripper_finger.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx250_meshes/gripper_prop.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx250_meshes/shoulder.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx250_meshes/base.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//meshes/vx250_meshes/wrist.stl
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//rviz
+[1.015s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions//rviz/xsarm_description.rviz
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/ament_index/resource_index/package_run_dependencies/interbotix_xsarm_descriptions
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/ament_index/resource_index/parent_prefix_path/interbotix_xsarm_descriptions
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions/environment/ament_prefix_path.sh
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions/environment/ament_prefix_path.dsv
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions/environment/path.sh
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions/environment/path.dsv
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions/local_setup.bash
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions/local_setup.sh
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions/local_setup.zsh
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions/local_setup.dsv
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions/package.dsv
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/ament_index/resource_index/packages/interbotix_xsarm_descriptions
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions/cmake/interbotix_xsarm_descriptionsConfig.cmake
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions/cmake/interbotix_xsarm_descriptionsConfig-version.cmake
+[1.016s] -- Installing: /home/my11/interbotix_ws/install/interbotix_xsarm_descriptions/share/interbotix_xsarm_descriptions/package.xml
+[1.018s] Invoked command in '/home/my11/interbotix_ws/build/interbotix_xsarm_descriptions' returned '0': AMENT_PREFIX_PATH=/home/my11/interbotix_ws/install/interbotix_xs_modules:/home/my11/interbotix_ws/install/interbotix_xs_sdk:/home/my11/interbotix_ws/install/interbotix_xs_driver:/home/my11/interbotix_ws/install/interbotix_xs_msgs:/home/my11/interbotix_ws/install/interbotix_common_modules:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox:${AMENT_PREFIX_PATH} CMAKE_PREFIX_PATH=/home/my11/interbotix_ws/install/interbotix_xs_sdk:/home/my11/interbotix_ws/install/interbotix_xs_driver:/home/my11/interbotix_ws/install/interbotix_xs_msgs:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox:/home/my11/apriltag_ws/install/apriltag_ros:/home/my11/ros2_ws/install/rrbot_gazebo:/home/my11/ros2_ws/install/rrbot_description:/home/my11/ros2_ws/install/plate_description:/home/my11/ros2_ws/install/opencv_test_py:/opt/ros/humble LD_LIBRARY_PATH=/home/my11/interbotix_ws/install/interbotix_xs_driver/lib:/home/my11/interbotix_ws/install/interbotix_xs_msgs/lib:/home/my11/interbotix_ws/install/dynamixel_workbench_toolbox/lib:/home/my11/apriltag_ws/install/apriltag_ros/lib:/usr/lib/x86_64-linux-gnu/gazebo-11/plugins:/opt/ros/humble/opt/rviz_ogre_vendor/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/lib:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins:/usr/share/gazebo/../../lib/x86_64-linux-gnu/gazebo-11/plugins PYTHONPATH=/home/my11/interbotix_ws/install/interbotix_xs_modules/lib/python3.10/site-packages:/home/my11/interbotix_ws/install/interbotix_xs_msgs/local/lib/python3.10/dist-packages:/home/my11/interbotix_ws/install/interbotix_common_modules/lib/python3.10/site-packages:${PYTHONPATH} /usr/bin/cmake --install /home/my11/interbotix_ws/build/interbotix_xsarm_descriptions

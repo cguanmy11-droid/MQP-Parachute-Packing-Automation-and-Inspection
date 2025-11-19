@@ -1,0 +1,105 @@
+/**:
+  ros__parameters:
+    # 话题配置
+    image_topic: '/camera1/image_raw'
+    camera_info_topic: '/camera1/camera_info'
+    result_topic: '/segmentation/results'
+
+    # HSV 颜色范围 - 红色示例 (可根据实际调整)
+    # 注意: OpenCV的H范围是0-179, S和V是0-255
+    hsv_lower_h: 0      # 红色在HSV中跨越0度，需要两个范围或调整
+    hsv_lower_s: 100    # 饱和度下限
+    hsv_lower_v: 100    # 明度下限
+    hsv_upper_h: 10     # 色调上限
+    hsv_upper_s: 255    # 饱和度上限
+    hsv_upper_v: 255    # 明度上限
+
+    # 形态学操作参数
+    morph_kernel_size: 5        # 核大小 (奇数)
+    morph_iterations: 2         # 迭代次数
+
+    # 轮廓筛选参数
+    min_area: 500.0             # 最小面积 (像素)
+    max_area: 50000.0           # 最大面积 (像素)
+    min_aspect_ratio: 0.7       # 最小宽高比 (w/h)
+    max_aspect_ratio: 1.3       # 最大宽高比 (接近1为正方形)
+
+    # 角点检测参数
+    approx_epsilon_factor: 0.02  # 轮廓逼近精度 (0.01-0.05)
+
+    # 可视化
+    enable_debug_view: true     # 显示调试窗口
+    color_name: 'red'           # 目标颜色名称
+
+# ========== 预设颜色配置 (注释掉的是备选方案) ==========
+
+# 红色 (方案1 - 低色调范围)
+# hsv_lower_h: 0
+# hsv_lower_s: 100
+# hsv_lower_v: 100
+# hsv_upper_h: 10
+# hsv_upper_s: 255
+# hsv_upper_v: 255
+
+# 红色 (方案2 - 高色调范围，170-179)
+# hsv_lower_h: 170
+# hsv_lower_s: 100
+# hsv_lower_v: 100
+# hsv_upper_h: 179
+# hsv_upper_s: 255
+# hsv_upper_v: 255
+
+# 蓝色
+# hsv_lower_h: 100
+# hsv_lower_s: 100
+# hsv_lower_v: 100
+# hsv_upper_h: 130
+# hsv_upper_s: 255
+# hsv_upper_v: 255
+
+# 绿色
+# hsv_lower_h: 40
+# hsv_lower_s: 50
+# hsv_lower_v: 50
+# hsv_upper_h: 80
+# hsv_upper_s: 255
+# hsv_upper_v: 255
+
+# 黄色
+# hsv_lower_h: 20
+# hsv_lower_s: 100
+# hsv_lower_v: 100
+# hsv_upper_h: 40
+# hsv_upper_s: 255
+# hsv_upper_v: 255
+
+# 橙色
+# hsv_lower_h: 10
+# hsv_lower_s: 100
+# hsv_lower_v: 100
+# hsv_upper_h: 25
+# hsv_upper_s: 255
+# hsv_upper_v: 255
+
+# 紫色
+# hsv_lower_h: 130
+# hsv_lower_s: 50
+# hsv_lower_v: 50
+# hsv_upper_h: 160
+# hsv_upper_s: 255
+# hsv_upper_v: 255
+
+# ========== 环境光照调整建议 ==========
+#
+# 强光环境: 提高 hsv_lower_v (如150-200)
+# 弱光环境: 降低 hsv_lower_v (如50-80)
+# 饱和度不足: 降低 hsv_lower_s (如50-80)
+# 过度饱和: 提高 hsv_lower_s (如150-200)
+#
+# ========== 面积与形状调整 ==========
+#
+# 目标太小: 降低 min_area (如100-300)
+# 目标太大: 提高 max_area (如100000+)
+# 长方形目标: 扩大 aspect_ratio 范围 (如0.5-2.0)
+# 严格正方形: 缩小范围 (如0.9-1.1)
+

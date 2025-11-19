@@ -1,0 +1,3 @@
+ros2 launch interbotix_xsarm_joy xsarm_joy.launch.py robot_model:=wx200 controller:=xboxone use_sim:=true
+ros2 launch interbotix_xsarm_joy xsarm_joy.launch.py robot_model:=wx200 controller:=xboxone
+

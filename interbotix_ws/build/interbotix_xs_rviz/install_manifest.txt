@@ -1,0 +1,27 @@
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/plugin_description.xml
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/lib/libinterbotix_xs_rviz.so
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/include//interbotix_xs_rviz/interbotix_control_panel.hpp
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/include//interbotix_xs_rviz/xs_register_descriptions.hpp
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz//icons/classes/Interbotix Control Panel.png
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/environment/library_path.sh
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/environment/library_path.dsv
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/ament_index/resource_index/package_run_dependencies/interbotix_xs_rviz
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/ament_index/resource_index/parent_prefix_path/interbotix_xs_rviz
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/environment/ament_prefix_path.sh
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/environment/ament_prefix_path.dsv
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/environment/path.sh
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/environment/path.dsv
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/local_setup.bash
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/local_setup.sh
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/local_setup.zsh
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/local_setup.dsv
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/package.dsv
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/ament_index/resource_index/packages/interbotix_xs_rviz
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/ament_index/resource_index/rviz_common__pluginlib__plugin/interbotix_xs_rviz
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/cmake/interbotix_xs_rvizExport.cmake
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/cmake/interbotix_xs_rvizExport-noconfig.cmake
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/cmake/ament_cmake_export_targets-extras.cmake
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/cmake/ament_cmake_export_dependencies-extras.cmake
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/cmake/interbotix_xs_rvizConfig.cmake
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/cmake/interbotix_xs_rvizConfig-version.cmake
+/home/my11/interbotix_ws/install/interbotix_xs_rviz/share/interbotix_xs_rviz/package.xml

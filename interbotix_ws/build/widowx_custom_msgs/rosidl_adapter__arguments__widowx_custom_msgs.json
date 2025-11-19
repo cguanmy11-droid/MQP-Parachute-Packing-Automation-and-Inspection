@@ -1,0 +1,6 @@
+{
+  "package_name": "widowx_custom_msgs",
+  "non_idl_tuples": [
+    "/home/my11/interbotix_ws/src/widowx_custom_msgs:msg/SegmentationResult.msg"
+  ]
+}
