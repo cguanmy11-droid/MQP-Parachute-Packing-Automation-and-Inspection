@@ -1,0 +1,6 @@
+path: C:/Users/40386/Desktop/WPI/MQP/Yolo_detect/dataset_yolo
+train: C:/Users/40386/Desktop/WPI/MQP/Yolo_detect/dataset_yolo/images/train
+val: C:/Users/40386/Desktop/WPI/MQP/Yolo_detect/dataset_yolo/images/val
+nc: 1
+names:
+  0: hole
