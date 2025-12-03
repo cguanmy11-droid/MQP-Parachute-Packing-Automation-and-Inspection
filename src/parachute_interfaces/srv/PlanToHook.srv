@@ -1,0 +1,8 @@
+# Request motion planning to stow line around hook
+
+geometry_msgs/Point hook_position  # Position of inserted hook
+---
+bool success                       # Whether planning succeeded
+geometry_msgs/Pose[] waypoints    # Planned waypoints for trajectory
+float64 estimated_duration        # Estimated time to execute (seconds)
+string message                    # Additional information or error

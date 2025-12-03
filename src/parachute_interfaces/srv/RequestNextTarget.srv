@@ -1,0 +1,5 @@
+# Request the next target loop to process
+---
+bool target_available    # Whether a target loop is available
+DetectedLoop target_loop # The selected target loop
+string message          # Additional information
