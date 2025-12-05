@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple Main Arm Interface Node - Test Version
+Simple Main Arm Interface Node 
 Provides action server for trajectory execution
 """
 
@@ -23,35 +23,48 @@ class MainArmInterfaceNode(Node):
         self.declare_parameter('use_sim', False)
         self.declare_parameter('robot_model', 'wx200')
         self.declare_parameter('robot_name', 'wx200')
+        self.declare_parameter('moving_time', 2.0)  # Time for each movement
+        self.declare_parameter('accel_time', 0.5)   # Acceleration time
+
         self.test_mode = self.get_parameter('test_mode').value
         self.use_sim = self.get_parameter('use_sim').value
         robot_model = self.get_parameter('robot_model').value
         robot_name = self.get_parameter('robot_name').value
-
-        # Determine if we should initialize robot, not in test or simulation mode
-        self.init_robot = not self.test_mode and not self.use_sim
+        moving_time = self.get_parameter('moving_time').value
+        accel_time = self.get_parameter('accel_time').value
         
+        self.bot = None
+
         # Initialize robot (only if not in test mode)
-        if self.init_robot:
+        if self.test_mode:
+            # Initialize robot for hardware and simulation
             self.get_logger().info(f'Initializing {robot_model} arm...')
             try:
                 self.bot = InterbotixManipulatorXS(
                     robot_model=robot_model,
                     robot_name=robot_name,
-                    moving_time=2.0,
-                    accel_time=0.5
+                    moving_time=moving_time,
+                    accel_time=accel_time,
                 )
-                self.get_logger().info('Robot arm initialized successfully')
+                if self.use_sim:
+                    self.get_logger().info('Running in SIMULATION MODE')
+                    self.get_logger().info('Robot controlled via RViz simulation')
+                else: 
+                    self.get_logger().info('Robot arm initialized successfully')
+                
+                # Now initialize using the Interbotix Node instead
+                # super().__init__('main_arm_interface_node')
+                
+                # Go to home pose on startup
+                self.bot.arm.go_to_home_pose()
+                self.current_pose_name = 'home'
             except Exception as e:
                 self.get_logger().error(f'Failed to initialize robot: {e}')
                 self.bot = None
         else:
-            if self.use_sim:
-                self.get_logger().info('Running in SIMULATION MODE')
-                self.get_logger().info('Robot controlled via RViz simulation')
-            elif self.test_mode:
-                self.get_logger().info('Running in TEST MODE - no robot initialization')
-            self.bot = None
+            self.get_logger().info('Running in TEST MODE - no robot initialization')
+            # super().__init__('main_arm_interface_node')
+        
 
         # Action server for trajectory execution
         self.action_server = ActionServer(self, ExecuteTrajectory, '/main_arm/execute_trajectory', self.execute_trajectory_callback)
@@ -71,8 +84,8 @@ class MainArmInterfaceNode(Node):
 
         # State tracking
         self.current_state = ArmStatus.STATE_IDLE
-        self.current_pose_name = 'unknown'
-        self.gripper_effort = 0.5
+        self.current_pose_name = 'home' if self.bot else 'unknown'
+        self.gripper_effort = 0.5  # Default gripper effort (0.0-1.0)
         self.is_moving = False
         self.error_message = ""
         
@@ -106,7 +119,7 @@ class MainArmInterfaceNode(Node):
         
         self.status_publisher.publish(msg)
 
-        # Also publish simple status fof other nodes
+        # Also publish simple status for other nodes
         simple_status = String()
         if self.is_moving:
             simple_status.data = f'moving_to_{self.current_pose_name}'

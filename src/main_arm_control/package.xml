@@ -12,6 +12,8 @@
   <depend>geometry_msgs</depend>
   <depend>cv_bridge</depend>
   <depend>parachute_interfaces</depend>
+  <depend>interbotix_xs_modules</depend>
+  <depend>interbotix_xs_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
