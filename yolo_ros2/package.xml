@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>yolo_detect_ros</name>
+  <version>0.1.0</version>
+  <description>ROS 2 nodes and launch files for running the existing YOLOv8 detector with a USB camera.</description>
+
+  <maintainer email="zheren@example.com">zheren</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>ament_index_python</depend>
+
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>ultralytics</exec_depend>
+  <exec_depend>numpy</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>
+
+
+
