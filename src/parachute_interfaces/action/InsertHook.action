@@ -1,0 +1,19 @@
+# Goal: Insert hook through target loop
+DetectedLoop target_loop
+---
+# Result
+bool success
+geometry_msgs/Point final_hook_position
+float64 execution_time
+string message
+---
+# Feedback
+uint8 current_state
+float32 progress          # 0.0 to 1.0
+geometry_msgs/Point current_position
+
+# State constants for feedback
+uint8 STATE_APPROACHING = 0
+uint8 STATE_ALIGNING = 1
+uint8 STATE_INSERTING = 2
+uint8 STATE_VERIFYING = 3

@@ -1,0 +1,15 @@
+# Goal: Execute main arm stowing trajectory
+geometry_msgs/Pose[] waypoints
+float64 speed_factor      # Speed multiplier (0.0 to 1.0)
+---
+# Result
+bool success
+int32 waypoints_completed
+float64 execution_time
+string message
+---
+# Feedback
+uint8 current_waypoint_index
+float32 progress          # 0.0 to 1.0
+geometry_msgs/Pose current_pose
+float64 time_elapsed

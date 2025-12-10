@@ -1,0 +1,6 @@
+# Request to rotate the hook by specified angle
+float32 angle_degrees    # Angle to rotate (e.g., 90.0, -90.0)
+---
+bool success
+float32 final_angle      # Final angle after rotation
+string message

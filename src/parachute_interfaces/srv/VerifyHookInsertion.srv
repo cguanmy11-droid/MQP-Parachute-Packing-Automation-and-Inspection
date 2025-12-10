@@ -1,0 +1,5 @@
+# Request verification that hook went through loop
+---
+bool success              # Whether hook is properly inserted
+geometry_msgs/Point hook_position  # Verified position of hook in space
+string message           # Additional information or error message
