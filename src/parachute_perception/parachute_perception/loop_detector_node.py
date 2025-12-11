@@ -6,7 +6,7 @@ Detects parachute loops in camera feed and publishes their positions
 import rclpy
 from rclpy.node import Node
 from parachute_interfaces.msg import DetectedLoops, DetectedLoop
-from geometry_msgs.msg import PoseStamped, Point, Quaternion 
+from geometry_msgs.msg import Pose, PoseStamped, Point, Quaternion, PoseArray
 from std_msgs.msg import Header 
 
 class LoopDetectorNode(Node):
@@ -18,7 +18,8 @@ class LoopDetectorNode(Node):
         self.declare_parameter('test_mode', True)
         self.test_mode = self.get_parameter('test_mode').value
         
-        # TODO: Create subscribers for camera feed
+        # In real mode, Create subscribers for camera feed
+        self.subscriber = self.create_subscription(PoseArray, '/yolo/centers', self.publish_detected_loops, 10)
         # Create publisher for detected loops
         self.publisher = self.create_publisher(DetectedLoops, '/detected_loops', 10)
 
@@ -30,8 +31,8 @@ class LoopDetectorNode(Node):
             self.timer = self.create_timer(2.0, self.publish_test_loops)
         else:
             self.get_logger().info('Loop Detector Node initialized')
-            # In real mode, subscribe to camera
-            # TODO: Add camera subscriber
+            # In real mode, Create subscribers for camera feed
+            # self.subscriber = self.create_subscription(PoseArray, '/yolo/centers', self.publish_detected_loops, 10)
         
     def camera_callback(self, msg):
         """Process camera image and detect loops"""
@@ -40,8 +41,40 @@ class LoopDetectorNode(Node):
         
     def publish_detected_loops(self, loops):
         """Publish detected loop positions"""
-        # TODO: Implement publishing
-        pass
+        # Check is poses is empty
+        if loops.poses == []:
+            return
+
+        msg = DetectedLoops()
+        msg.header = Header()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "camera_frame"
+
+        # Loop over poses in PoseArray
+        for loop in loops.poses:
+            # Set up detected loop header
+            detected_loop = DetectedLoop()
+            detected_loop.header = Header()
+            detected_loop.pose = PoseStamped()
+
+            # Pass pose info from recieved message
+            detected_loop.pose.header = msg.header
+            detected_loop.pose.pose = Pose()
+            detected_loop.pose.pose.position = Point(
+                x=loop.position.x, 
+                y=-0.11,   
+                z=loop.position.z
+            )
+            detected_loop.pose.pose.orientation = Quaternion(x= 0.0, y= 0.907, z= 0.0, w= 0.907)
+
+            # Add to the list of detected loops
+            msg.loops.append(detected_loop)
+
+        # Publish detected loops message
+        msg.total_count = len(msg.loops)
+        self.publisher.publish(msg)
+        # self.get_logger().info(f'Published {msg.total_count} test loops')
+
 
     def publish_test_loops(self):
         """Test function: Publish fake data to simulate detected loops"""

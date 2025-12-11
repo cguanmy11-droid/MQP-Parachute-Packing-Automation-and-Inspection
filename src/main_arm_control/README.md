@@ -14,3 +14,42 @@ Controls the WidowX-200 robot arm for parachute line stowing.
 
 ## Topics
 - Publishes: `/main_arm/status`
+
+
+
+
+The WidowX-200 uses a **right-handed coordinate system** with the base frame at the robot's base:
+```
+         Z (up)
+         |
+         |
+         |_______ Y (left when facing robot)
+        /
+       /
+      X (forward from robot base)
+
+
+Top View:
+     
+        Y (left)
+        ^
+        |
+        |
+        |______> X (forward)
+       /
+      /
+    base
+
+
+Side View:
+
+    Z (up)
+    ^
+    |     gripper
+    |      /
+    |     /
+    |    /_____ end-effector
+    |
+    |________> X (forward)
+   base
+```

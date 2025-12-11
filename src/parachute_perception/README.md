@@ -8,8 +8,8 @@ Handles loop detection data from camera processing node for parachute packing au
 - `stow_verification_node` - Verifies a completed stow with line
 
 ## Topics
-- Publishes: `/target_loop`
-- Subscribes: `/detected_loops` (from Yolo_detect)
+- Publishes: `/target_loop`, `/detected_loops`
+- Subscribes: `/yolo/centers` (from Yolo_detect)
 
 ## Services
 - `/request_next_target` - Request next loop to target
