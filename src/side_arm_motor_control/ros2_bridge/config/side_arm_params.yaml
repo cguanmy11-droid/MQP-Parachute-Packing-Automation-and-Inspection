@@ -1,0 +1,9 @@
+side_arm_serial_bridge:
+  ros__parameters:
+    serial_port: /dev/ttyUSB0
+    baud_rate: 115200
+    command_topic: /side_arm/command
+    state_topic: /side_arm/state
+    state_request_hz: 5.0
+    auto_request_state: true
+
