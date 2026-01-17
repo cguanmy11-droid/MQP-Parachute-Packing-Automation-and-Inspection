@@ -76,6 +76,24 @@ ros2 topic pub --once /side_arm/command std_msgs/msg/String "data: 'STEPPER_MOVE
 ros2 topic echo /side_arm/state
 ```
 
+```bash
+# For testing here are important commands to be able to use with the ros bridge communication
+# Stop all motors gracefully (STOP_NOW for immediate)
+ros2 topic pub --once /side_arm/command std_msgs/msg/String "data: 'STOP_ALL'"
+
+# Move the side arm left/right (Positive is left, negative is right)
+ros2 topic pub --once /side_arm/command std_msgs/msg/String "data: 'STEPPER_MOVE,2,1000,200'"
+
+# Move the hook up and down (positive id down, negative is up) (moves much further in fewer steps)
+ros2 topic pub --once /side_arm/command std_msgs/msg/String "data: 'STEPPER_MOVE,1,100,200'"
+
+# DC motor to move hook forward back (positive is back, negative is forward)
+ros2 topic pub --once /side_arm/command std_msgs/msg/String "data: 'DC_SPEED,30'"
+# You can press the limit switch to stop it (either direction) there is a slight backup once pressed
+
+# THE HOME COMMANDS MOVE IN THE WRONG DIRECTION SO DON'T USE THOSE FOR NOW
+```
+
 ### Relation to `motor_control`
 
 - `motor_control` is a minimal, hand-coded pulse/accel demo that was tested on hardware. We keep its pinout and PWM settings, then add:
