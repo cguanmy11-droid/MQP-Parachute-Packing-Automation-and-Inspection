@@ -18,12 +18,15 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DetectedLoops.msg"
   "msg/HookStatus.msg"
   "msg/ArmStatus.msg"
+  "msg/SideArmState.msg"
   "srv/VerifyHookInsertion.srv"
   "srv/RequestNextTarget.srv"
   "srv/PlanToHook.srv"
-  "srv/RotateHook.srv"   
+  "srv/RotateHook.srv"
+  "srv/MoveToPosition.srv"
   "action/InsertHook.action"
   "action/ExecuteTrajectory.action"
+  "action/MoveToCoordinate.action"
   DEPENDENCIES geometry_msgs std_msgs action_msgs
 )
 

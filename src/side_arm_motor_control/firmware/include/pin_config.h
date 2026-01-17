@@ -16,6 +16,10 @@ constexpr uint8_t STEPPER2_STEP = 21;
 constexpr uint8_t STEPPER2_DIR  = 22;
 constexpr uint8_t STEPPER_ENABLE = 12;  // LOW = enabled (shared)
 
+// Direction inversion (set to true if motor moves wrong way)
+constexpr bool STEPPER1_INVERT_DIR = true;
+constexpr bool STEPPER2_INVERT_DIR = true;
+
 // DC motor (BTS7960 dual PWM + shared EN)
 constexpr uint8_t DC_R_PWM = 14;
 constexpr uint8_t DC_L_PWM = 15;

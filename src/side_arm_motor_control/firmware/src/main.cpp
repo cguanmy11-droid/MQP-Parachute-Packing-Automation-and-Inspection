@@ -11,13 +11,7 @@ using namespace side_arm;
 constexpr unsigned long STATE_INTERVAL_MS = 100;
 constexpr size_t MAX_CMD_LEN = 96;
 constexpr long HOMING_TRAVEL_STEPS = 40000;
-constexpr unsigned long RECOVER_DELAY_MS = 2000;
-constexpr long STEP1_RECOVER_STEPS = -3000;         // backoff for stepper1
-constexpr long STEP2_RECOVER_STEPS = -3000;         // backoff for stepper2
-constexpr int DC_RECOVER_PERCENT = -50;             // -50% duty
-constexpr unsigned long DC_RECOVER_DURATION_MS = 1500;
 constexpr float INSTANT_ACCEL = 1e6F;               // very high accel to approximate immediate speed
-constexpr unsigned long STEP_REENABLE_DELAY_MS = 1000;
 
 AccelStepper stepper1(AccelStepper::DRIVER, STEPPER1_STEP, STEPPER1_DIR);
 AccelStepper stepper2(AccelStepper::DRIVER, STEPPER2_STEP, STEPPER2_DIR);
@@ -30,16 +24,6 @@ unsigned long lastStatePublish = 0;
 bool limit1Latched = false;
 bool limit2Latched = false;
 bool limit3Latched = false;
-bool step1Pending = false;
-unsigned long step1StartAt = 0;
-bool step2Pending = false;
-unsigned long step2StartAt = 0;
-bool step2ReenablePending = false;
-unsigned long step2ReenableAt = 0;
-bool dcPending = false;
-unsigned long dcStartAt = 0;
-bool dcRecoverActive = false;
-unsigned long dcRecoverEnd = 0;
 
 String serialBuffer;
 
@@ -233,79 +217,41 @@ void readSerial() {
   }
 }
 
-void processRecoveries() {
-  const unsigned long now = millis();
-
-  if (step1Pending && now >= step1StartAt) {
-    stepper1.move(STEP1_RECOVER_STEPS);
-    step1Pending = false;
-  }
-
-  if (step2Pending && now >= step2StartAt) {
-    // re-enable driver then move back
-    enableSteppers(true);
-    stepper2.move(STEP2_RECOVER_STEPS);
-    step2Pending = false;
-  }
-
-  if (step2ReenablePending && now >= step2ReenableAt) {
-    enableSteppers(true);
-    step2ReenablePending = false;
-  }
-
-  if (dcPending && now >= dcStartAt) {
-    applyDcCommand(DC_RECOVER_PERCENT);
-    dcPending = false;
-    dcRecoverActive = true;
-    dcRecoverEnd = now + DC_RECOVER_DURATION_MS;
-  }
-
-  if (dcRecoverActive && now >= dcRecoverEnd) {
-    applyDcCommand(0);
-    dcRecoverActive = false;
-  }
-}
-
 void checkLimits() {
   const LimitStates limits = readLimitStates();
 
-  // l1 -> DC motor
+  // l1 -> DC motor: stop and wait for next command
   if (limits.sw1) {
     if (!limit1Latched) {
       limit1Latched = true;
       applyDcCommand(0);
-      dcPending = true;
-      dcStartAt = millis() + RECOVER_DELAY_MS;
-      Serial.println("EVENT Limit1 -> stop dc");
+      Serial.println("EVENT Limit1 -> DC stopped, position zeroed, awaiting command");
     }
   } else {
     limit1Latched = false;
   }
 
-  // l2 -> stepper2
+  // l2 -> stepper2: stop, zero position, wait for next command
   if (limits.sw2) {
     if (!limit2Latched) {
       limit2Latched = true;
-      enableSteppers(false);  // cut current immediately
       haltStepperImmediate(stepper2);
+      stepper2.setCurrentPosition(0);  // Zero the position
       stepper2Homing = false;
-      step2Pending = true;
-      step2StartAt = millis() + STEP_REENABLE_DELAY_MS;
-      Serial.println("EVENT Limit2 -> disable and stop stepper2");
+      Serial.println("EVENT Limit2 -> stepper2 stopped, position zeroed, awaiting command");
     }
   } else {
     limit2Latched = false;
   }
 
-  // l3 -> stepper1
+  // l3 -> stepper1: stop, zero position, wait for next command
   if (limits.sw3) {
     if (!limit3Latched) {
       limit3Latched = true;
       haltStepperImmediate(stepper1);
+      stepper1.setCurrentPosition(0);  // Zero the position
       stepper1Homing = false;
-      step1Pending = true;
-      step1StartAt = millis() + RECOVER_DELAY_MS;
-      Serial.println("EVENT Limit3 -> stop stepper1");
+      Serial.println("EVENT Limit3 -> stepper1 stopped, position zeroed, awaiting command");
     }
   } else {
     limit3Latched = false;
@@ -328,6 +274,10 @@ void setup() {
   configureStepper(stepper1);
   configureStepper(stepper2);
 
+  // Apply direction inversion if configured
+  stepper1.setPinsInverted(STEPPER1_INVERT_DIR, false, false);
+  stepper2.setPinsInverted(STEPPER2_INVERT_DIR, false, false);
+
   pinMode(DC_EN, OUTPUT);
   digitalWrite(DC_EN, HIGH);
   pinMode(DC_R_PWM, OUTPUT);
@@ -344,7 +294,6 @@ void setup() {
 void loop() {
   readSerial();
   checkLimits();
-  processRecoveries();
 
   if (steppersEnabled) {
     stepper1.run();
