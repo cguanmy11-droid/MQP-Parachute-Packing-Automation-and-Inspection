@@ -19,7 +19,9 @@ AccelStepper stepper2(AccelStepper::DRIVER, STEPPER2_STEP, STEPPER2_DIR);
 bool steppersEnabled = true;
 bool stepper1Homing = false;
 bool stepper2Homing = false;
+bool dcHoming = false;
 int currentDcPercent = 0;
+constexpr int DC_HOMING_SPEED = 30;
 unsigned long lastStatePublish = 0;
 bool limit1Latched = false;
 bool limit2Latched = false;
@@ -122,7 +124,10 @@ void haltSteppersImmediate(bool disableDrivers = true) {
 }
 
 void requestHome(uint8_t target) {
-  if (target == 1) {
+  if (target == 0) {
+    dcHoming = true;
+    applyDcCommand(DC_HOMING_SPEED);
+  } else if (target == 1) {
     stepper1Homing = true;
     stepper1.setMaxSpeed(HOMING_SPEED);
     stepper1.setAcceleration(HOMING_SPEED * 2);
@@ -133,6 +138,12 @@ void requestHome(uint8_t target) {
     stepper2.setAcceleration(HOMING_SPEED * 2);
     stepper2.move(-HOMING_TRAVEL_STEPS);
   }
+}
+
+void requestHomeAll() {
+  requestHome(0);
+  requestHome(1);
+  requestHome(2);
 }
 
 long parseLong(const char* token, long fallback = 0) {
@@ -193,8 +204,14 @@ void processCommand(const String& cmd) {
     haltSteppersImmediate(true);
     applyDcCommand(0);
   } else if (verb == "HOME") {
-    uint8_t id = static_cast<uint8_t>(parseLong(strtok_r(nullptr, ",", &savePtr), 0));
-    requestHome(id);
+    uint8_t id = static_cast<uint8_t>(parseLong(strtok_r(nullptr, ",", &savePtr), 255));
+    if (id == 255) {
+      requestHomeAll();
+    } else {
+      requestHome(id);
+    }
+  } else if (verb == "HOME_ALL") {
+    requestHomeAll();
   } else if (verb == "REQUEST_STATE") {
     sendState(true);
   } else {
@@ -225,7 +242,8 @@ void checkLimits() {
     if (!limit1Latched) {
       limit1Latched = true;
       applyDcCommand(0);
-      Serial.println("EVENT Limit1 -> DC stopped, position zeroed, awaiting command");
+      dcHoming = false;
+      Serial.println("EVENT Limit1 -> DC stopped, z position zeroed, awaiting command");
     }
   } else {
     limit1Latched = false;

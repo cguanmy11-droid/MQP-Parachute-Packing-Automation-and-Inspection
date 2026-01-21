@@ -64,6 +64,9 @@ class SideArmCoordinateNode(Node):
         self._position_z_mm = 0.0  # DC motor - estimated from timed moves
         self._dc_move_start: Optional[float] = None
         self._dc_target_z_mm: Optional[float] = None
+        self._dc_start_z_mm: float = 0.0      
+        self._dc_duration: float = 0.0        
+        self._dc_direction: int = 0           
         self._state_lock = threading.Lock()
 
         # Callback group for concurrent callbacks
@@ -91,6 +94,9 @@ class SideArmCoordinateNode(Node):
 
         # Timer to publish parsed state
         self.create_timer(0.1, self._publish_parsed_state)
+
+        # Timer to monitor DC motor and stop after duration (50ms interval)
+        self.create_timer(0.05, self._dc_motor_monitor_callback)
 
         self.get_logger().info(
             f'Coordinate node initialized. Calibration: '
@@ -131,22 +137,22 @@ class SideArmCoordinateNode(Node):
                 self._position_y_mm = s1 / self.steps_per_mm_vertical
                 self._position_x_mm = s2 / self.steps_per_mm_horizontal
 
-                # Track DC motor position via timed estimation
-                if self._dc_move_start is not None and self._dc_target_z_mm is not None:
-                    dc_percent = int(state.get('dc', 0))
-                    if dc_percent == 0:
-                        # Movement complete
-                        self._position_z_mm = self._dc_target_z_mm
-                        self._dc_move_start = None
-                        self._dc_target_z_mm = None
-
                 # Check homing status (all limits triggered and positions zeroed)
                 l1 = bool(int(state.get('l1', 0)))  # Depth limit
                 l2 = bool(int(state.get('l2', 0)))  # Horizontal limit
                 l3 = bool(int(state.get('l3', 0)))  # Vertical limit
 
-                # Consider homed if positions are at zero (after limit hit)
-                if s1 == 0 and s2 == 0:
+                # Reset Z position to 0 when depth limit is hit
+                if l1:
+                    self._position_z_mm = 0.0
+                    self._dc_move_start = None
+                    self._dc_target_z_mm = None
+                    self._dc_start_z_mm = 0.0
+                    self._dc_duration = 0.0
+                    self._dc_direction = 0
+
+                # Consider homed if all positions are at zero (after limits hit)
+                if s1 == 0 and s2 == 0 and l1:
                     self._is_homed = True
 
         except Exception as e:
@@ -172,6 +178,101 @@ class SideArmCoordinateNode(Node):
             msg.is_homed = self._is_homed
 
         self._state_pub.publish(msg)
+
+    def _dc_motor_monitor_callback(self):
+        """Monitor DC motor movement and stop after calculated duration."""
+        with self._state_lock:
+            if self._dc_move_start is None or self._dc_duration <= 0:
+                return
+
+            elapsed = time.time() - self._dc_move_start
+
+            # Interpolate Z position during movement
+            distance_moved = elapsed * self.dc_mm_per_second
+            if self._dc_direction > 0:
+                self._position_z_mm = min(
+                    self._dc_start_z_mm + distance_moved,
+                    self._dc_target_z_mm if self._dc_target_z_mm else self.max_z_mm
+                )
+            elif self._dc_direction < 0:
+                self._position_z_mm = max(
+                    self._dc_start_z_mm - distance_moved,
+                    self._dc_target_z_mm if self._dc_target_z_mm is not None else 0.0
+                )
+
+            # Check if duration has elapsed - time to stop
+            if elapsed >= self._dc_duration:
+                # Stop the DC motor
+                self._send_command('DC_SPEED,0')
+
+                # Set final position to target
+                if self._dc_target_z_mm is not None:
+                    self._position_z_mm = self._dc_target_z_mm
+
+                # Clear tracking variables
+                self._dc_move_start = None
+                self._dc_target_z_mm = None
+                self._dc_duration = 0.0
+                self._dc_direction = 0
+
+                self.get_logger().info(
+                    f'DC motor stopped at Z={self._position_z_mm:.1f}mm'
+                )
+    
+    # def _dc_motor_monitor_callback(self): 
+    #     """Monitor DC motor movement and stop after calculated duration.""" 
+    #     should_stop = False 
+    #     final_z = 0.0 
+        
+    #     with self._state_lock: 
+    #         # Debug: log when tracking is active 
+    #         if self._dc_move_start is not None: 
+    #             self.get_logger().debug( 
+    #                 f'DC monitor: start={self._dc_move_start}, ' 
+    #                 f'duration={self._dc_duration}, dir={self._dc_direction}' 
+    #             ) 
+            
+    #         if self._dc_move_start is None or self._dc_duration <= 0: 
+    #         return 
+            
+    #         elapsed = time.time() - self._dc_move_start 
+    #         self.get_logger().info( 
+    #             f'DC moving: elapsed={elapsed:.2f}s / {self._dc_duration:.2f}s, ' 
+    #             f'Z={self._position_z_mm:.1f}mm' 
+    #         ) 
+            
+    #         # Interpolate Z position during movement 
+    #         distance_moved = elapsed * self.dc_mm_per_second 
+    #         if self._dc_direction > 0: 
+    #             self._position_z_mm = min( 
+    #                 self._dc_start_z_mm + distance_moved, 
+    #                 self._dc_target_z_mm if self._dc_target_z_mm else self.max_z_mm 
+    #             )
+    #         elif self._dc_direction < 0: 
+    #             self._position_z_mm = max( 
+    #                 self._dc_start_z_mm - distance_moved, 
+    #                 self._dc_target_z_mm if self._dc_target_z_mm is not None else 0.0 
+    #             ) 
+            
+    #         # Check if duration has elapsed - time to stop 
+    #         if elapsed >= self._dc_duration: 
+    #         should_stop = True 
+            
+    #         # Set final position to target 
+    #         if self._dc_target_z_mm is not None: 
+    #             self._position_z_mm = self._dc_target_z_mm 
+    #             final_z = self._position_z_mm 
+            
+    #         # Clear tracking variables 
+    #         self._dc_move_start = None 
+    #         self._dc_target_z_mm = None 
+    #         self._dc_duration = 0.0 
+    #         self._dc_direction = 0 
+            
+    #         # Send stop command OUTSIDE the lock 
+    #         if should_stop: 
+    #             self._send_command('DC_SPEED,0') 
+    #             self.get_logger().info(f'DC motor stopped at Z={final_z:.1f}mm') 
 
     def _send_command(self, cmd: str):
         """Send command to ESP32 via serial bridge."""
@@ -237,11 +338,18 @@ class SideArmCoordinateNode(Node):
                 dc_percent = int(dc_percent * speed_scale)
 
                 with self._state_lock:
+                    self._dc_start_z_mm = self._position_z_mm
                     self._dc_move_start = time.time()
                     self._dc_target_z_mm = z
+                    self._dc_duration = dc_duration
+                    self._dc_direction = 1 if dz > 0 else -1
 
                 self._send_command(f'DC_SPEED,{dc_percent}')
                 estimated_time = max(estimated_time, dc_duration)
+                self.get_logger().info(
+                    f'DC motor moving Z: {self._dc_start_z_mm:.1f} -> {z:.1f}mm '
+                    f'(duration={dc_duration:.2f}s)'
+                )
 
             response.success = True
             response.message = f'Moving to ({x:.1f}, {y:.1f}, {z:.1f}) mm'
@@ -301,8 +409,11 @@ class SideArmCoordinateNode(Node):
             dc_percent = int(dc_percent * speed_scale)
             self._send_command(f'DC_SPEED,{dc_percent}')
             with self._state_lock:
+                self._dc_start_z_mm = start_z
                 self._dc_move_start = time.time()
                 self._dc_target_z_mm = z
+                self._dc_duration = dc_duration
+                self._dc_direction = 1 if dz > 0 else -1
 
         # Calculate max duration for timeout
         max_duration = max(
@@ -328,6 +439,11 @@ class SideArmCoordinateNode(Node):
                 with self._state_lock:
                     self._position_z_mm = z
                     current_z = z
+                    # Clear tracking variables
+                    self._dc_move_start = None
+                    self._dc_target_z_mm = None
+                    self._dc_duration = 0.0
+                    self._dc_direction = 0
                 dc_stopped = True
 
             # Calculate progress

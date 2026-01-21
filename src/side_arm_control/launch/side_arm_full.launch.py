@@ -50,12 +50,12 @@ def generate_launch_description():
         executable='coordinate_node',
         name='side_arm_coordinate_node',
         parameters=[{
-            'steps_per_mm_horizontal': 600.0,   # Stepper2 - belt drive (6000 steps to ~1cm)
-            'steps_per_mm_vertical': 10.0,    # Stepper1 - lead screw (1000 steps to ~1cm)
-            'dc_mm_per_second': 8.0,          # DC motor travel rate (5sec for ~3cm)
+            'steps_per_mm_horizontal': 300.0,   # Stepper2 - belt drive (300 steps to ~1cm)
+            'steps_per_mm_vertical': 100.0,    # Stepper1 - lead screw (100 steps to ~1cm)
+            'dc_mm_per_second': 4.0,          # DC motor travel rate (5sec for ~3cm)
             'dc_speed_percent': 50,
             'default_speed_horizontal': 1200.0,
-            'default_speed_vertical': 200.0,
+            'default_speed_vertical': 500.0,
             'max_x_mm': 300.0,
             'max_y_mm': 200.0,
             'max_z_mm': 150.0,

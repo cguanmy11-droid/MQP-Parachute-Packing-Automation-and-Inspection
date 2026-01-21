@@ -71,7 +71,8 @@ class ManualJog(Node):
         print('  w/s  - Vertical (stepper1 up/down)')
         print('  q/e  - Depth (DC motor in/out)')
         print('  SPACE - Stop DC motor')
-        print('  h    - Home all | 1/2 - Home stepper 1/2')
+        print('  h    - Home all axes | Steppers and DC')
+        print('  0/1/2- Home DC/Stepper1/Stepper2 individually')
         print('  x    - EMERGENCY STOP')
         print('  +/-  - Step size | [/] - Speed')
         print('  r    - Request state')
@@ -118,8 +119,9 @@ class ManualJog(Node):
 
                     elif ch == 'h':
                         print('\n\rHoming all axes...')
-                        self.send('HOME,1')
-                        self.send('HOME,2')
+                        self.send('HOME_ALL')
+                    elif ch == '0':
+                        self.send('HOME,0')
                     elif ch == '1':
                         self.send('HOME,1')
                     elif ch == '2':
