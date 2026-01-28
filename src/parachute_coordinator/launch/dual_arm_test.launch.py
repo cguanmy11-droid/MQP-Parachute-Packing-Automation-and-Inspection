@@ -161,6 +161,19 @@ def generate_launch_description():
         )
     )
 
+    # Joy node for Xbox controller
+    joy_node = Node(
+        package='joy',
+        executable='joy_node',
+        name='joy_node',
+        parameters=[{
+            'device_id': 0,
+            'deadzone': 0.1,
+            'autorepeat_rate': 20.0,
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_teleop'))
+    )
+
     # ==================== SIDE ARM NODES ====================
 
     # Serial bridge node (communicates with ESP32)
@@ -226,13 +239,19 @@ def generate_launch_description():
         name='side_arm_visualizer',
         output='screen',
         parameters=[{
-            'roll': 3.1416,
-            'pitch': 1.5708,
-            'yaw': 0.0,
-            'offset_x': 0.0,
-            'offset_y': 0.05,
-            'offset_z': 0.0,
+            'roll': -1.5708,
+            'pitch': 0.0,
+            'yaw': -1.5708,
+            'offset_x': -0.01,
+            'offset_y': 0.009,
+            'offset_z': 0.07,
             'scale': 0.001,
+            'servo_axis': 'pitch',      # servo rotation
+            'servo_scale': 0.001,     # TODO: tune
+            'test_mode': LaunchConfiguration('side_arm_test_mode'),
+            'test_x': 0.15,
+            'test_y': 0.10,
+            'test_z': 0.05,
         }],
         condition=IfCondition(
             PythonExpression([
@@ -274,8 +293,8 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='side_arm_static_tf',
         arguments=[
-            '--x', '0.35', '--y', '0.25', '--z', '-0.05',
-            '--roll', '0', '--pitch', '0', '--yaw', '0',
+            '--x', '0.4', '--y', '0.19', '--z', '-0.03',
+            '--roll', '1.5708', '--pitch', '0', '--yaw', '3.1416',
             '--frame-id', 'wx200/base_link',
             '--child-frame-id', 'side_arm_origin'
         ],
@@ -296,6 +315,7 @@ def generate_launch_description():
         serial_port_arg,
         enable_visualization_arg,
         use_rviz_arg,
+        joy_node,
 
         # Main arm nodes
         main_arm_control_launch,

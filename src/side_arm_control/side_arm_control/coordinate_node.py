@@ -80,6 +80,10 @@ class SideArmCoordinateNode(Node):
         self._raw_state_sub = self.create_subscription(
             String, '/side_arm/state', self._raw_state_callback, 10)
 
+        # Subscribe to commands to track DC movements from any source
+        self._cmd_sub = self.create_subscription(
+            String, '/side_arm/command', self._command_callback, 10)
+
         # Services
         self._move_srv = self.create_service(
             MoveToPosition, '/side_arm/move_to_position',
@@ -180,44 +184,97 @@ class SideArmCoordinateNode(Node):
         self._state_pub.publish(msg)
 
     def _dc_motor_monitor_callback(self):
-        """Monitor DC motor movement and stop after calculated duration."""
+        """Monitor DC motor movement and update position estimate."""
         with self._state_lock:
-            if self._dc_move_start is None or self._dc_duration <= 0:
+            if self._dc_move_start is None:
                 return
 
             elapsed = time.time() - self._dc_move_start
 
             # Interpolate Z position during movement
             distance_moved = elapsed * self.dc_mm_per_second
+            
             if self._dc_direction > 0:
-                self._position_z_mm = min(
-                    self._dc_start_z_mm + distance_moved,
-                    self._dc_target_z_mm if self._dc_target_z_mm else self.max_z_mm
-                )
-            elif self._dc_direction < 0:
-                self._position_z_mm = max(
-                    self._dc_start_z_mm - distance_moved,
-                    self._dc_target_z_mm if self._dc_target_z_mm is not None else 0.0
-                )
-
-            # Check if duration has elapsed - time to stop
-            if elapsed >= self._dc_duration:
-                # Stop the DC motor
-                self._send_command('DC_SPEED,0')
-
-                # Set final position to target
+                new_z = self._dc_start_z_mm + distance_moved
                 if self._dc_target_z_mm is not None:
+                    new_z = min(new_z, self._dc_target_z_mm)
+                self._position_z_mm = min(new_z, self.max_z_mm)
+            elif self._dc_direction < 0:
+                new_z = self._dc_start_z_mm - distance_moved
+                if self._dc_target_z_mm is not None:
+                    new_z = max(new_z, self._dc_target_z_mm)
+                self._position_z_mm = max(new_z, 0.0)
+
+            # Only auto-stop if we have a target and duration (service/action initiated)
+            if self._dc_target_z_mm is not None and self._dc_duration < 900:
+                if elapsed >= self._dc_duration:
+                    self._send_command('DC_SPEED,0')
                     self._position_z_mm = self._dc_target_z_mm
 
-                # Clear tracking variables
-                self._dc_move_start = None
-                self._dc_target_z_mm = None
-                self._dc_duration = 0.0
-                self._dc_direction = 0
+                    self._dc_move_start = None
+                    self._dc_target_z_mm = None
+                    self._dc_duration = 0.0
+                    self._dc_direction = 0
 
-                self.get_logger().info(
-                    f'DC motor stopped at Z={self._position_z_mm:.1f}mm'
-                )
+                    self.get_logger().info(
+                        f'DC motor stopped at Z={self._position_z_mm:.1f}mm'
+                    )
+
+    def _command_callback(self, msg: String):
+        """Track DC motor commands from any source (including manual_jog)."""
+        cmd = msg.data.strip().upper()
+        
+        if cmd.startswith('DC_SPEED,'):
+            try:
+                # Parse the speed percent
+                parts = cmd.split(',')
+                if len(parts) >= 2:
+                    dc_percent = int(parts[1])
+                    
+                    with self._state_lock:
+                        if dc_percent == 0:
+                            # Motor stopped - finalize position
+                            if self._dc_move_start is not None:
+                                elapsed = time.time() - self._dc_move_start
+                                distance = elapsed * self.dc_mm_per_second
+                                
+                                if self._dc_direction > 0:
+                                    self._position_z_mm = min(
+                                        self._dc_start_z_mm + distance,
+                                        self.max_z_mm
+                                    )
+                                elif self._dc_direction < 0:
+                                    self._position_z_mm = max(
+                                        self._dc_start_z_mm - distance,
+                                        0.0
+                                    )
+                                
+                                self.get_logger().info(
+                                    f'DC stopped (external): Z={self._position_z_mm:.1f}mm'
+                                )
+                            
+                            # Clear tracking
+                            self._dc_move_start = None
+                            self._dc_target_z_mm = None
+                            self._dc_duration = 0.0
+                            self._dc_direction = 0
+                        
+                        else:
+                            # Motor starting - only start tracking if not already tracking
+                            if self._dc_move_start is None:
+                                self._dc_start_z_mm = self._position_z_mm
+                                self._dc_move_start = time.time()
+                                self._dc_target_z_mm = None  # Unknown target for manual moves
+                                self._dc_duration = 999.0  # Will run until stopped
+                                self._dc_direction = -1 if dc_percent > 0 else 1  # Negative speed = positive Z
+                                
+                                self.get_logger().info(
+                                    f'DC started (external): from Z={self._dc_start_z_mm:.1f}mm, '
+                                    f'direction={self._dc_direction}'
+                                )
+            
+            except (ValueError, IndexError) as e:
+                self.get_logger().warn(f'Failed to parse DC command: {e}')
     
     # def _dc_motor_monitor_callback(self): 
     #     """Monitor DC motor movement and stop after calculated duration.""" 

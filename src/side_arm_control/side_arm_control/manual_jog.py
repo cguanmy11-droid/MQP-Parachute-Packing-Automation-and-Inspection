@@ -12,10 +12,10 @@ Controls:
     a/d - Horizontal movement (stepper2, left/right)
     w/s - Vertical movement (stepper1, up/down)
     q/e - Depth movement (DC motor, in/out)
-    SPACE - Stop DC motor
+    z/c - Servo rotation (left/right)
+    SPACE - Stop DC motor and servo
     h - Home all axes
-    1 - Home stepper 1 only
-    2 - Home stepper 2 only
+    0/1/2 - Home DC/Stepper1/Stepper2 individually
     x - Emergency stop all motors
     +/- - Adjust step size
     [/] - Adjust speed
@@ -43,6 +43,8 @@ class ManualJog(Node):
         self.step_size = 500    # steps per keypress
         self.speed = 500        # steps/second
         self.dc_speed = 50      # DC motor speed percent
+        self.servo_step = 50    # servo offset increment (microseconds)
+        self.servo_offset = 0   # current servo offset from neutral
 
         self._last_state = None
         self._running = True
@@ -64,17 +66,19 @@ class ManualJog(Node):
         print('SIDE ARM MANUAL JOG')
         print('=' * 60)
         print(f'Step size: {self.step_size} steps | Speed: {self.speed} steps/s')
-        print(f'DC speed: {self.dc_speed}%')
+        print(f'DC speed: {self.dc_speed}% | Servo step: {self.servo_step}us')
         print('-' * 60)
         print('Controls:')
         print('  a/d  - Horizontal (stepper2 left/right)')
         print('  w/s  - Vertical (stepper1 up/down)')
         print('  q/e  - Depth (DC motor in/out)')
-        print('  SPACE - Stop DC motor')
+        print('  z/c  - Servo rotation (left/right)')
+        print('  SPACE - Stop DC motor and center servo')
         print('  h    - Home all axes | Steppers and DC')
         print('  0/1/2- Home DC/Stepper1/Stepper2 individually')
         print('  x    - EMERGENCY STOP')
         print('  +/-  - Step size | [/] - Speed')
+        print('  </> - Servo step size')
         print('  r    - Request state')
         print('  ESC  - Quit')
         print('=' * 60)
@@ -98,6 +102,7 @@ class ManualJog(Node):
                     if ch == '\x1b':  # ESC
                         print('\n\rQuitting...')
                         self.send('STOP_ALL')
+                        self.send('SERVO,0')  # Center servo on exit
                         break
 
                     elif ch == 'a':
@@ -114,8 +119,24 @@ class ManualJog(Node):
                         self.send(f'DC_SPEED,-{self.dc_speed}')
                     elif ch == 'e':
                         self.send(f'DC_SPEED,{self.dc_speed}')
+
+                    # Servo controls
+                    elif ch == 'z':
+                        self.servo_offset -= self.servo_step
+                        self.servo_offset = max(-500, self.servo_offset)  # Limit range
+                        self.send(f'SERVO,{self.servo_offset}')
+                        print(f'\n\rServo offset: {self.servo_offset}us')
+                    elif ch == 'c':
+                        self.servo_offset += self.servo_step
+                        self.servo_offset = min(500, self.servo_offset)  # Limit range
+                        self.send(f'SERVO,{self.servo_offset}')
+                        print(f'\n\rServo offset: {self.servo_offset}us')
+
                     elif ch == ' ':
                         self.send('DC_SPEED,0')
+                        self.servo_offset = 0
+                        self.send('SERVO,0')  # Center servo
+                        print('\n\rDC stopped, servo centered')
 
                     elif ch == 'h':
                         print('\n\rHoming all axes...')
@@ -130,6 +151,8 @@ class ManualJog(Node):
                     elif ch == 'x':
                         print('\n\rEMERGENCY STOP!')
                         self.send('STOP_NOW')
+                        self.servo_offset = 0
+                        self.send('SERVO,0')
 
                     elif ch == '+' or ch == '=':
                         self.step_size += 100
@@ -144,6 +167,14 @@ class ManualJog(Node):
                     elif ch == '[':
                         self.speed = max(100, self.speed - 100)
                         print(f'\n\rSpeed: {self.speed}')
+
+                    # Servo step size adjustment
+                    elif ch == '>':
+                        self.servo_step += 10
+                        print(f'\n\rServo step: {self.servo_step}us')
+                    elif ch == '<':
+                        self.servo_step = max(10, self.servo_step - 10)
+                        print(f'\n\rServo step: {self.servo_step}us')
 
                     elif ch == 'r':
                         self.send('REQUEST_STATE')
