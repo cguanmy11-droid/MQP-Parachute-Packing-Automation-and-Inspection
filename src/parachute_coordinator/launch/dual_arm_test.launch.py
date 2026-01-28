@@ -22,6 +22,8 @@ Usage:
     ros2 launch parachute_coordinator dual_arm_test.launch.py enable_side_arm:=false
 """
 
+import os
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
@@ -32,6 +34,16 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    # Load frame URDF
+    frame_urdf_path = os.path.join(
+        get_package_share_directory('main_arm_control'),
+        'urdf',
+        'framemodel.urdf'
+    )
+
+    with open(frame_urdf_path, 'r') as f:
+        frame_urdf = f.read()
+
     # ==================== LAUNCH ARGUMENTS ====================
 
     # Main arm arguments
@@ -130,19 +142,6 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_main_arm'))
     )
 
-    # Main arm planner node
-    main_arm_planner = Node(
-        package='main_arm_control',
-        executable='main_arm_planner_node',
-        name='main_arm_planner_node',
-        output='screen',
-        parameters=[{
-            'robot_model': LaunchConfiguration('robot_model'),
-            'robot_name': LaunchConfiguration('robot_model'),
-        }],
-        condition=IfCondition(LaunchConfiguration('enable_main_arm'))
-    )
-
     # Main arm teleop node (optional)
     main_arm_teleop = Node(
         package='main_arm_control',
@@ -178,7 +177,12 @@ def generate_launch_description():
             'auto_request_state': True,
         }],
         output='screen',
-        condition=IfCondition(LaunchConfiguration('enable_side_arm'))
+        condition=IfCondition(
+            PythonExpression([
+                "'", LaunchConfiguration('enable_side_arm'), "' == 'true' and '",
+                LaunchConfiguration('side_arm_test_mode'), "' == 'false'"
+            ])
+        )
     )
 
     # Coordinate node (converts mm to motor commands)
@@ -229,6 +233,46 @@ def generate_launch_description():
         )
     )
 
+    # ==================== DIGITAL TWIN LAUNCH ====================
+
+    # Frame state publisher
+    frame_state_publisher = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='frame_state_publisher',
+        parameters=[{'robot_description': frame_urdf}],
+        remappings=[('robot_description', 'frame_description')],
+        condition=IfCondition(LaunchConfiguration('enable_main_arm'))
+    )
+
+    # Frame TF (position relative to robot base)
+    frame_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='frame_static_tf',
+        arguments=[
+            '--x', '0', '--y', '-0.15', '--z', '-0.22',
+            '--roll', '1.5708', '--pitch', '0', '--yaw', '-1.5708',
+            '--frame-id', 'wx200/base_link',
+            '--child-frame-id', 'framemodel_root'
+        ],
+        condition=IfCondition(LaunchConfiguration('enable_main_arm'))
+    )
+
+    # Side arm origin TF
+    side_arm_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='side_arm_static_tf',
+        arguments=[
+            '--x', '0.35', '--y', '0.25', '--z', '-0.05',
+            '--roll', '0', '--pitch', '0', '--yaw', '0',
+            '--frame-id', 'wx200/base_link',
+            '--child-frame-id', 'side_arm_origin'
+        ],
+        condition=IfCondition(LaunchConfiguration('enable_side_arm'))
+    )
+
     # ==================== LAUNCH DESCRIPTION ====================
 
     return LaunchDescription([
@@ -247,7 +291,6 @@ def generate_launch_description():
         # Main arm nodes
         main_arm_control_launch,
         main_arm_interface,
-        main_arm_planner,
         main_arm_teleop,
 
         # Side arm nodes
@@ -255,4 +298,9 @@ def generate_launch_description():
         side_arm_coordinate,
         side_arm_interface,
         side_arm_visualizer,
+
+        # Digital twin visualization
+        frame_state_publisher,
+        frame_tf,
+        side_arm_tf,
     ])
