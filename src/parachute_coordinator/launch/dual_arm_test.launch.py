@@ -219,12 +219,21 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
 
-    # Side arm visualizer (RViz marker)
+    #  Side arm visualizer (RViz marker)
     side_arm_visualizer = Node(
         package='side_arm_control',
         executable='side_arm_visualizer',
         name='side_arm_visualizer',
         output='screen',
+        parameters=[{
+            'roll': 3.1416,
+            'pitch': 1.5708,
+            'yaw': 0.0,
+            'offset_x': 0.0,
+            'offset_y': 0.05,
+            'offset_z': 0.0,
+            'scale': 0.001,
+        }],
         condition=IfCondition(
             PythonExpression([
                 "'", LaunchConfiguration('enable_side_arm'), "' == 'true' and '",
