@@ -334,7 +334,7 @@ class SideArmCoordinateNode(Node):
             # DC motor: timed movement
             if abs(dz) > 0.5:  # Threshold to avoid tiny moves
                 dc_duration = self._mm_to_dc_duration(dz)
-                dc_percent = self.dc_speed_percent if dz > 0 else -self.dc_speed_percent
+                dc_percent = -self.dc_speed_percent if dz > 0 else self.dc_speed_percent
                 dc_percent = int(dc_percent * speed_scale)
 
                 with self._state_lock:
@@ -405,7 +405,7 @@ class SideArmCoordinateNode(Node):
         dc_duration = 0.0
         if abs(dz) > 0.5:
             dc_duration = self._mm_to_dc_duration(dz)
-            dc_percent = self.dc_speed_percent if dz > 0 else -self.dc_speed_percent
+            dc_percent = -self.dc_speed_percent if dz > 0 else self.dc_speed_percent
             dc_percent = int(dc_percent * speed_scale)
             self._send_command(f'DC_SPEED,{dc_percent}')
             with self._state_lock:

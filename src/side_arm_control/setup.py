@@ -31,6 +31,7 @@ setup(
             'side_arm_interface_node = side_arm_control.side_arm_interface_node:main',
             'coordinate_node = side_arm_control.coordinate_node:main',
             'manual_jog = side_arm_control.manual_jog:main',
+            'side_arm_visualizer = side_arm_control.side_arm_visualizer:main',
         ],
     },
 )
