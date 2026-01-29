@@ -1,3 +1,5 @@
+import os
+from glob import glob
 from setuptools import find_packages, setup
 
 package_name = 'side_arm_control'
@@ -10,6 +12,10 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        (os.path.join('share', package_name, 'launch'),
+            glob('launch/*.py')),
+        (os.path.join('share', package_name, 'meshes'),
+            glob('meshes/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -24,7 +30,10 @@ setup(
     },
     entry_points={
         'console_scripts': [
-        'side_arm_interface_node = side_arm_control.side_arm_interface_node:main'
+            'side_arm_interface_node = side_arm_control.side_arm_interface_node:main',
+            'coordinate_node = side_arm_control.coordinate_node:main',
+            'manual_jog = side_arm_control.manual_jog:main',
+            'side_arm_visualizer = side_arm_control.side_arm_visualizer:main',
         ],
     },
 )

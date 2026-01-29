@@ -28,6 +28,7 @@ setup(
     entry_points={
         'console_scripts': [
 		'packing_coordinator_node = parachute_coordinator.packing_coordinator_node:main',
+        'packing_demo_node = parachute_coordinator.packing_demo_node:main',
         ],
     },
 )

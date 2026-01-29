@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<robot name="framemodel">
+  
+  <!-- Dummy root link for TF connection -->
+  <link name="framemodel_root"/>
+  
+  <link name="framemodel">
+    <visual>
+      <geometry>
+        <mesh filename="package://main_arm_control/meshes/framemodel.stl" scale="0.01 0.01 0.01"/>
+      </geometry>
+      <material name="aluminum">
+        <color rgba="0.8 0.8 0.85 1.0"/>
+      </material>
+    </visual>
+  </link>
+
+  <joint name="root_to_frame" type="fixed">
+    <parent link="framemodel_root"/>
+    <child link="framemodel"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Parachute bag -->
+  <link name="parachute_bag">
+    <visual>
+      <geometry>
+        <mesh filename="package://main_arm_control/meshes/parachute_bag.stl" scale="0.5 0.5 0.5"/>
+      </geometry>
+      <material name="fabric">
+        <color rgba="0.2 0.4 0.2 1.0"/>  <!-- greenish -->
+      </material>
+    </visual>
+  </link>
+
+  <joint name="bag_to_frame" type="fixed">
+    <parent link="framemodel"/>
+    <child link="parachute_bag"/>
+    <origin xyz="-0.17 0.13 -0.22" rpy="-1.458 0 0"/>  <!-- Position relative to frame -->
+  </joint>
+
+</robot>

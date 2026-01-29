@@ -1,0 +1,19 @@
+# Goal: Move side arm to absolute coordinate position
+float64 x_mm               # Horizontal position (stepper2 - belt rails)
+float64 y_mm               # Vertical position (stepper1 - lead screw)
+float64 z_mm               # Depth position (DC motor - lead screw)
+float64 speed_scale        # 0.0 to 1.0, scales default speeds
+---
+# Result
+bool success
+float64 final_x_mm
+float64 final_y_mm
+float64 final_z_mm
+float64 execution_time_sec
+string message
+---
+# Feedback
+float64 current_x_mm
+float64 current_y_mm
+float64 current_z_mm
+float64 progress           # 0.0 to 1.0

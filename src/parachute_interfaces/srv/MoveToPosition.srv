@@ -1,0 +1,9 @@
+# Request to move side arm to absolute position in mm
+float64 x_mm               # Horizontal position (stepper2 - belt rails)
+float64 y_mm               # Vertical position (stepper1 - lead screw)
+float64 z_mm               # Depth position (DC motor - lead screw)
+float64 speed_scale        # 0.0 to 1.0, scales default speeds
+---
+bool success
+string message
+float64 estimated_time_sec

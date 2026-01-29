@@ -13,7 +13,9 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
-        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        (os.path.join('share', package_name, 'config'), glob('config/*')),
+        (os.path.join('share', package_name, 'meshes'), glob('meshes/*')),
+        (os.path.join('share', package_name, 'urdf'), glob('urdf/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -27,7 +29,8 @@ setup(
         'main_arm_interface_node = main_arm_control.main_arm_interface_node:main',
         'main_arm_planner_node = main_arm_control.main_arm_planner_node:main',
         'main_arm_teleop_node = main_arm_control.main_arm_teleop_node:main',
-        'xbox_arm_controller_node = main_arm_control.xbox_arm_controller_node:main'
+        'xbox_arm_controller_node = main_arm_control.xbox_arm_controller_node:main',
+        'test_kinematics = main_arm_control.test_kinematics:main'
         ],
     },
 )

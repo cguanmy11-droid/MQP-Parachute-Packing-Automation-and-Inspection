@@ -8,6 +8,8 @@ import rclpy
 from rclpy.node import Node
 from parachute_interfaces.msg import DetectedLoops, DetectedLoop
 from parachute_interfaces.srv import RequestNextTarget
+from geometry_msgs.msg import Pose, PoseStamped, Point, Quaternion
+from std_msgs.msg import Header 
 
 class TargetSelectorNode(Node):
     def __init__(self):
@@ -20,16 +22,44 @@ class TargetSelectorNode(Node):
         # Subscriber for detected loops
         self.subscription = self.create_subscription(DetectedLoops, '/detected_loops', self.loops_callback, 10)
         
+        # Publisher for demo purposes
+        self.publisher = self.create_publisher(DetectedLoops, '/loop_positions', 10)
         # Service to provide next target
         self.service = self.create_service(RequestNextTarget, '/request_next_target', self.request_target_callback)
         
         self.current_loops = []
-        self.get_logger().info('Target Selector Node initialized')
+        for i in range(8):
+            x_pos = 0.18 + (0.02*i)
+            loop = DetectedLoop()
+            loop.pose = PoseStamped()
+            loop.pose.pose = Pose(position=Point(x=x_pos, y=-0.11, z=0.06), orientation=Quaternion(x=0.0, y=0.907, z=0.0, w=0.907))
+            self.current_loops.append(loop)
+
+        self.get_logger().info(f'Target Selector Node initialized, current loops len {len(self.current_loops)}')
         
     def loops_callback(self, msg):
         """Store the latest detected loops"""
-        self.current_loops = msg.loops
-        self.get_logger().info(f'Received {len(self.current_loops)} loops')
+        # For demo test, don't change the current loops
+        # self.current_loops = msg.loops 
+        # self.get_logger().info(f'Received {len(self.current_loops)} loops')
+        response = DetectedLoops()
+        response.header = Header()
+        response.header.stamp = self.get_clock().now().to_msg()
+        response.header.frame_id = "camera_frame"
+
+        # Revert to just use the array because the "kinda camera" thing didn't fly
+        if (msg.total_count >= 4):
+            self.current_loops = []
+            for i in range(msg.total_count):
+                x_pos = 0.18 + (0.02*i)
+                loop = DetectedLoop()
+                loop.pose = PoseStamped()
+                loop.pose.pose = Pose(position=Point(x=x_pos, y=-0.11, z=0.06), orientation=Quaternion(x=0.0, y=0.907, z=0.0, w=0.907))
+                self.current_loops.append(loop)
+                response.loops.append(loop)
+
+        response.total_count = msg.total_count
+        self.publisher.publish(response)
         
     def request_target_callback(self, request, response):
         """Service callback - return rightmost loop"""

@@ -36,7 +36,7 @@ class MainArmInterfaceNode(Node):
         self.bot = None
 
         # Initialize robot (only if not in test mode)
-        if self.test_mode:
+        if not self.test_mode:
             # Initialize robot for hardware and simulation
             self.get_logger().info(f'Initializing {robot_model} arm...')
             try:
@@ -73,7 +73,9 @@ class MainArmInterfaceNode(Node):
         self.pose_cmd_sub = self.create_subscription(String, '/main_arm/pose_command', self.pose_command_callback, 10)
         self.pose_cmd_sub = self.create_subscription(String, '/main_arm/gripper_command', self.gripper_command_callback, 10)
         self.gripper_effort_sub = self.create_subscription(Float32, '/main_arm/gripper_effort', self.gripper_effort_callback, 10)
-
+        # Add this subscriber for testing positions
+        self.test_position_sub = self.create_subscription(Pose, '/main_arm/test_position', self.test_position_callback, 10)
+        
         # Publisher for arm and pose status
         self.status_publisher = self.create_publisher(ArmStatus, '/main_arm/status', 10)
         self.simple_status_publisher = self.create_publisher(String, '/main_arm/simple_status', 10)
@@ -193,15 +195,14 @@ class MainArmInterfaceNode(Node):
         command = msg.data.lower().strip()
         self.get_logger().info(f'Received pose command: {command}')
 
-        if self.bot is None and not self.test_mode:
-            self.get_logger().warn('No robot available (test mode or initialization failed)')
-            return
-        
-        # In simulation mode, we can't use the Python API
-        if self.use_sim:
-            self.get_logger().warn('Pose commands not yet implemented for simulation mode')
-            self.get_logger().info('Tip: Use RViz interactive markers or joint state publisher')
-            return
+        if self.bot is None:
+            if self.test_mode:
+                self.get_logger().info(f'TEST: Would move to {command} pose')
+                self.current_pose_name = command
+                return
+            else:
+                self.get_logger().error('Robot not initialized!')
+                return
         
         try:
             self.is_moving = True
@@ -216,9 +217,14 @@ class MainArmInterfaceNode(Node):
                 self.current_pose_name = 'sleep'
                 
             elif command == 'upright':
-                # Custom upright pose
                 self.bot.arm.set_joint_positions([0, 0, 0, 0, 0])
                 self.current_pose_name = 'upright'
+            
+            elif command == 'test_fk' or command == 'fk':
+                self.test_forward_kinematics()
+                self.is_moving = False
+                self.current_state = ArmStatus.STATE_SUCCESS
+                return
                 
             else:
                 self.get_logger().warn(f'Unknown pose: {command}')
@@ -231,6 +237,10 @@ class MainArmInterfaceNode(Node):
             self.current_state = ArmStatus.STATE_SUCCESS
             self.error_message = ""
             self.get_logger().info(f'Successfully moved to {command} pose')
+            
+            # After any movement, print FK
+            # if command != 'test_fk':
+            #     self.test_forward_kinematics()
             
         except Exception as e:
             self.is_moving = False
@@ -281,6 +291,150 @@ class MainArmInterfaceNode(Node):
                 self.bot.shutdown()
             except:
                 pass
+    
+    def test_position_callback(self, msg):
+        """Test moving to an arbitrary Cartesian position with orientation"""
+        x = msg.position.x
+        y = msg.position.y
+        z = msg.position.z
+        
+        # Extract roll, pitch, yaw from quaternion
+        from scipy.spatial.transform import Rotation as R
+        quat = [msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w]
+        
+        # Check if orientation was specified (non-zero quaternion)
+        if sum([abs(q) for q in quat]) > 0.01:
+            euler = R.from_quat(quat).as_euler('xyz', degrees=False)
+            roll, pitch, yaw = euler
+            self.get_logger().info(f'Testing: X={x:.3f}, Y={y:.3f}, Z={z:.3f}, Roll={roll:.3f}, Pitch={pitch:.3f}, Yaw={yaw:.3f}')
+        else:
+            roll = pitch = yaw = None
+            self.get_logger().info(f'Testing position: X={x:.3f}, Y={y:.3f}, Z={z:.3f} (auto orientation)')
+        
+        if self.bot is None:
+            self.get_logger().warn('No robot available')
+            return
+        
+        try:
+            self.is_moving = True
+            self.current_state = ArmStatus.STATE_EXECUTING
+            
+            # Move to position with optional orientation
+            if roll is not None:
+                success = self.bot.arm.set_ee_pose_components(
+                    x=x, y=y, z=z,
+                    roll=roll, pitch=pitch
+                    # Note: For 5-DOF arm, yaw is derived from x,y position
+                )
+            else:
+                # Just position, let IK figure out orientation
+                success = self.bot.arm.set_ee_pose_components(x=x, y=y, z=z)
+            
+            if success:
+                self.get_logger().info('Successfully reached target')
+                time.sleep(0.5)
+                
+                # Show actual position achieved
+                # self.test_forward_kinematics()
+            else:
+                self.get_logger().warn(' Target unreachable (IK failed)')
+            
+            self.is_moving = False
+            self.current_state = ArmStatus.STATE_SUCCESS if success else ArmStatus.STATE_ERROR
+            
+        except Exception as e:
+            self.is_moving = False
+            self.current_state = ArmStatus.STATE_ERROR
+            self.get_logger().error(f'Error: {e}')
+    
+    def test_forward_kinematics(self):
+        """Test function to understand coordinate frames and FK"""
+        if self.bot is None:
+            self.get_logger().warn('No robot available for FK test')
+            return
+        
+        self.get_logger().info('='*50)
+        self.get_logger().info('FORWARD KINEMATICS TEST')
+        self.get_logger().info('='*50)
+        
+        # Get current end-effector pose (4x4 transformation matrix)
+        T_sb = self.bot.arm.get_ee_pose()
+        
+        # Extract position (translation)
+        x = T_sb[0, 3]
+        y = T_sb[1, 3]
+        z = T_sb[2, 3]
+        
+        self.get_logger().info(f'End-Effector Position (in base frame):')
+        self.get_logger().info(f'  X: {x:.4f} meters')
+        self.get_logger().info(f'  Y: {y:.4f} meters')
+        self.get_logger().info(f'  Z: {z:.4f} meters')
+        
+        # Extract rotation matrix (orientation)
+        R = T_sb[0:3, 0:3]
+        
+        # Convert rotation matrix to roll-pitch-yaw (Euler angles)
+        import numpy as np
+        
+        # Roll (rotation around X-axis)
+        roll = np.arctan2(R[2, 1], R[2, 2])
+        
+        # Pitch (rotation around Y-axis)
+        pitch = np.arctan2(-R[2, 0], np.sqrt(R[2, 1]**2 + R[2, 2]**2))
+        
+        # Yaw (rotation around Z-axis)
+        yaw = np.arctan2(R[1, 0], R[0, 0])
+        
+        self.get_logger().info(f'End-Effector Orientation (roll-pitch-yaw):')
+        self.get_logger().info(f'  Roll:  {np.degrees(roll):.2f}° ({roll:.4f} rad)')
+        self.get_logger().info(f'  Pitch: {np.degrees(pitch):.2f}° ({pitch:.4f} rad)')
+        self.get_logger().info(f'  Yaw:   {np.degrees(yaw):.2f}° ({yaw:.4f} rad)')
+        
+        # Get current joint positions
+        joint_positions = self.bot.arm.get_joint_commands()
+        joint_names = self.bot.arm.group_info.joint_names
+        
+        self.get_logger().info(f'Current Joint Positions:')
+        for name, pos in zip(joint_names, joint_positions):
+            self.get_logger().info(f'  {name}: {np.degrees(pos):.2f}° ({pos:.4f} rad)')
+        
+        self.get_logger().info('='*50)
+        
+        # Also publish this as a Pose message
+        pose_msg = Pose()
+        pose_msg.position.x = x
+        pose_msg.position.y = y
+        pose_msg.position.z = z
+        
+        # Convert euler angles to quaternion for ROS message
+        from scipy.spatial.transform import Rotation as R_scipy
+        quat = R_scipy.from_euler('xyz', [roll, pitch, yaw]).as_quat()
+        pose_msg.orientation.x = quat[0]
+        pose_msg.orientation.y = quat[1]
+        pose_msg.orientation.z = quat[2]
+        pose_msg.orientation.w = quat[3]
+        
+        self.pose_publisher.publish(pose_msg)
+        
+        return T_sb, x, y, z, roll, pitch, yaw
+
+    def print_tf_tree(self):
+        """Print the TF transformation tree"""
+        if self.bot is None:
+            return
+        
+        self.get_logger().info('='*50)
+        self.get_logger().info('TF FRAME TREE')
+        self.get_logger().info('='*50)
+        self.get_logger().info('Frame hierarchy:')
+        self.get_logger().info('  /wx200/base_link (world frame)')
+        self.get_logger().info('    └─> /wx200/shoulder_link')
+        self.get_logger().info('        └─> /wx200/upper_arm_link')
+        self.get_logger().info('            └─> /wx200/forearm_link')
+        self.get_logger().info('                └─> /wx200/wrist_link')
+        self.get_logger().info('                    └─> /wx200/gripper_link')
+        self.get_logger().info('                        └─> /wx200/ee_gripper_link (end-effector)')
+        self.get_logger().info('='*50)
 
 def main(args=None):
     rclpy.init(args=args)
