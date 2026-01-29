@@ -232,7 +232,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
 
-    #  Side arm visualizer (RViz marker)
+    #  Side arm visualizer (RViz marker) -0.01, 0.009, 0.07
     side_arm_visualizer = Node(
         package='side_arm_control',
         executable='side_arm_visualizer',
@@ -249,9 +249,9 @@ def generate_launch_description():
             'servo_axis': 'pitch',      # servo rotation
             'servo_scale': 0.001,     # TODO: tune
             'test_mode': LaunchConfiguration('side_arm_test_mode'),
-            'test_x': 0.15,
-            'test_y': 0.10,
-            'test_z': 0.05,
+            'test_x': 0.0,
+            'test_y': 0.0,
+            'test_z': 0.0,
         }],
         condition=IfCondition(
             PythonExpression([
