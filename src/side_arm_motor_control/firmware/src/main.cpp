@@ -11,35 +11,37 @@ using namespace side_arm;
 constexpr unsigned long STATE_INTERVAL_MS = 100;
 constexpr size_t MAX_CMD_LEN = 96;
 constexpr long HOMING_TRAVEL_STEPS = 40000;
-constexpr unsigned long RECOVER_DELAY_MS = 2000;
-constexpr long STEP1_RECOVER_STEPS = -3000;         // backoff for stepper1
-constexpr long STEP2_RECOVER_STEPS = -3000;         // backoff for stepper2
-constexpr int DC_RECOVER_PERCENT = -50;             // -50% duty
-constexpr unsigned long DC_RECOVER_DURATION_MS = 1500;
-constexpr float INSTANT_ACCEL = 1e6F;               // very high accel to approximate immediate speed
-constexpr unsigned long STEP_REENABLE_DELAY_MS = 1000;
+constexpr float INSTANT_ACCEL = 1e6F;
 
 AccelStepper stepper1(AccelStepper::DRIVER, STEPPER1_STEP, STEPPER1_DIR);
 AccelStepper stepper2(AccelStepper::DRIVER, STEPPER2_STEP, STEPPER2_DIR);
 
+// ===== SERVO SUPPORT (added from File 1) =====
+constexpr int SERVO_PIN = 13;
+constexpr int SERVO_PWM_CHANNEL = 6;
+constexpr int SERVO_PWM_FREQ = 50;
+constexpr int SERVO_PWM_RES_BITS = 16;
+
+constexpr int SERVO_NEUTRAL_US = 1500 - 21;
+constexpr int SERVO_MIN_US = 1000;
+constexpr int SERVO_MAX_US = 2000;
+constexpr int SERVO_DEADBAND_US = 6;
+
+int servoPulseUs = SERVO_NEUTRAL_US;
+int servoTargetPulseUs = SERVO_NEUTRAL_US;
+int servoCurrentPulseUs = SERVO_NEUTRAL_US;
+// ===== END SERVO SUPPORT =====
+
 bool steppersEnabled = true;
 bool stepper1Homing = false;
 bool stepper2Homing = false;
+bool dcHoming = false;
 int currentDcPercent = 0;
+constexpr int DC_HOMING_SPEED = 30;
 unsigned long lastStatePublish = 0;
 bool limit1Latched = false;
 bool limit2Latched = false;
 bool limit3Latched = false;
-bool step1Pending = false;
-unsigned long step1StartAt = 0;
-bool step2Pending = false;
-unsigned long step2StartAt = 0;
-bool step2ReenablePending = false;
-unsigned long step2ReenableAt = 0;
-bool dcPending = false;
-unsigned long dcStartAt = 0;
-bool dcRecoverActive = false;
-unsigned long dcRecoverEnd = 0;
 
 String serialBuffer;
 
@@ -57,6 +59,18 @@ LimitStates readLimitStates() {
   };
 }
 
+// ===== SERVO HELPER (added from File 1) =====
+void setServoPulseUs(int pulseUs) {
+  pulseUs = constrain(pulseUs, SERVO_MIN_US, SERVO_MAX_US);
+
+  if (abs(pulseUs - SERVO_NEUTRAL_US) <= SERVO_DEADBAND_US) {
+    pulseUs = SERVO_NEUTRAL_US;
+  }
+
+  servoTargetPulseUs = pulseUs;
+}
+// ===== END SERVO HELPER =====
+
 void sendState(bool force = false) {
   const unsigned long now = millis();
   if (!force && (now - lastStatePublish) < STATE_INTERVAL_MS) {
@@ -65,12 +79,14 @@ void sendState(bool force = false) {
 
   const LimitStates limits = readLimitStates();
 
+  // Added servo to state output
   String payload = String("STATE {\"l1\":") + String(limits.sw1 ? 1 : 0) +
                    ",\"l2\":" + String(limits.sw2 ? 1 : 0) +
                    ",\"l3\":" + String(limits.sw3 ? 1 : 0) +
                    ",\"s1\":" + String(stepper1.currentPosition()) +
                    ",\"s2\":" + String(stepper2.currentPosition()) +
-                   ",\"dc\":" + String(currentDcPercent) + "}";
+                   ",\"dc\":" + String(currentDcPercent) +
+                   ",\"servo\":" + String(servoPulseUs - SERVO_NEUTRAL_US) + "}";
   Serial.println(payload);
   lastStatePublish = now;
 }
@@ -123,7 +139,6 @@ void haltStepperImmediate(AccelStepper& motor) {
 }
 
 void haltSteppersImmediate(bool disableDrivers = true) {
-  // Force targets to current position and zero speed to stop without decel.
   const long p1 = stepper1.currentPosition();
   const long p2 = stepper2.currentPosition();
   stepper1.move(0);
@@ -133,12 +148,15 @@ void haltSteppersImmediate(bool disableDrivers = true) {
   stepper1.setCurrentPosition(p1);
   stepper2.setCurrentPosition(p2);
   if (disableDrivers) {
-    enableSteppers(false);  // EN=HIGH, immediate driver disable
+    enableSteppers(false);
   }
 }
 
 void requestHome(uint8_t target) {
-  if (target == 1) {
+  if (target == 0) {
+    dcHoming = true;
+    applyDcCommand(DC_HOMING_SPEED);
+  } else if (target == 1) {
     stepper1Homing = true;
     stepper1.setMaxSpeed(HOMING_SPEED);
     stepper1.setAcceleration(HOMING_SPEED * 2);
@@ -149,6 +167,12 @@ void requestHome(uint8_t target) {
     stepper2.setAcceleration(HOMING_SPEED * 2);
     stepper2.move(-HOMING_TRAVEL_STEPS);
   }
+}
+
+void requestHomeAll() {
+  requestHome(0);
+  requestHome(1);
+  requestHome(2);
 }
 
 long parseLong(const char* token, long fallback = 0) {
@@ -166,7 +190,7 @@ void handleStepperMove(uint8_t id, long steps, long speed) {
   }
 
   motor->setMaxSpeed(abs(speed) > 0 ? abs(speed) : DEFAULT_MAX_SPEED);
-  motor->setAcceleration(INSTANT_ACCEL);  // jump to target speed with minimal ramp
+  motor->setAcceleration(INSTANT_ACCEL);
   motor->move(steps);
 }
 
@@ -203,14 +227,25 @@ void processCommand(const String& cmd) {
   } else if (verb == "DC_SPEED") {
     long percent = parseLong(strtok_r(nullptr, ",", &savePtr), 0);
     applyDcCommand(percent);
+  // ===== SERVO COMMAND =====
+  } else if (verb == "SERVO") {
+    long offset = parseLong(strtok_r(nullptr, ",", &savePtr), 0);
+    setServoPulseUs(SERVO_NEUTRAL_US + offset);
+  // ===== END SERVO COMMAND =====
   } else if (verb == "STOP_ALL") {
     stopAllMotion();
   } else if (verb == "STOP_NOW") {
     haltSteppersImmediate(true);
     applyDcCommand(0);
   } else if (verb == "HOME") {
-    uint8_t id = static_cast<uint8_t>(parseLong(strtok_r(nullptr, ",", &savePtr), 0));
-    requestHome(id);
+    uint8_t id = static_cast<uint8_t>(parseLong(strtok_r(nullptr, ",", &savePtr), 255));
+    if (id == 255) {
+      requestHomeAll();
+    } else {
+      requestHome(id);
+    }
+  } else if (verb == "HOME_ALL") {
+    requestHomeAll();
   } else if (verb == "REQUEST_STATE") {
     sendState(true);
   } else {
@@ -233,79 +268,42 @@ void readSerial() {
   }
 }
 
-void processRecoveries() {
-  const unsigned long now = millis();
-
-  if (step1Pending && now >= step1StartAt) {
-    stepper1.move(STEP1_RECOVER_STEPS);
-    step1Pending = false;
-  }
-
-  if (step2Pending && now >= step2StartAt) {
-    // re-enable driver then move back
-    enableSteppers(true);
-    stepper2.move(STEP2_RECOVER_STEPS);
-    step2Pending = false;
-  }
-
-  if (step2ReenablePending && now >= step2ReenableAt) {
-    enableSteppers(true);
-    step2ReenablePending = false;
-  }
-
-  if (dcPending && now >= dcStartAt) {
-    applyDcCommand(DC_RECOVER_PERCENT);
-    dcPending = false;
-    dcRecoverActive = true;
-    dcRecoverEnd = now + DC_RECOVER_DURATION_MS;
-  }
-
-  if (dcRecoverActive && now >= dcRecoverEnd) {
-    applyDcCommand(0);
-    dcRecoverActive = false;
-  }
-}
-
 void checkLimits() {
   const LimitStates limits = readLimitStates();
 
-  // l1 -> DC motor
+  // l1 -> DC motor: stop and wait for next command
   if (limits.sw1) {
     if (!limit1Latched) {
       limit1Latched = true;
       applyDcCommand(0);
-      dcPending = true;
-      dcStartAt = millis() + RECOVER_DELAY_MS;
-      Serial.println("EVENT Limit1 -> stop dc");
+      dcHoming = false;
+      Serial.println("EVENT Limit1 -> DC stopped, z position zeroed, awaiting command");
     }
   } else {
     limit1Latched = false;
   }
 
-  // l2 -> stepper2
+  // l2 -> stepper2: stop, zero position, wait for next command
   if (limits.sw2) {
     if (!limit2Latched) {
       limit2Latched = true;
-      enableSteppers(false);  // cut current immediately
       haltStepperImmediate(stepper2);
+      stepper2.setCurrentPosition(0);
       stepper2Homing = false;
-      step2Pending = true;
-      step2StartAt = millis() + STEP_REENABLE_DELAY_MS;
-      Serial.println("EVENT Limit2 -> disable and stop stepper2");
+      Serial.println("EVENT Limit2 -> stepper2 stopped, position zeroed, awaiting command");
     }
   } else {
     limit2Latched = false;
   }
 
-  // l3 -> stepper1
+  // l3 -> stepper1: stop, zero position, wait for next command
   if (limits.sw3) {
     if (!limit3Latched) {
       limit3Latched = true;
       haltStepperImmediate(stepper1);
+      stepper1.setCurrentPosition(0);
       stepper1Homing = false;
-      step1Pending = true;
-      step1StartAt = millis() + RECOVER_DELAY_MS;
-      Serial.println("EVENT Limit3 -> stop stepper1");
+      Serial.println("EVENT Limit3 -> stepper1 stopped, position zeroed, awaiting command");
     }
   } else {
     limit3Latched = false;
@@ -328,6 +326,10 @@ void setup() {
   configureStepper(stepper1);
   configureStepper(stepper2);
 
+  // Direction inversion (from File 2)
+  stepper1.setPinsInverted(STEPPER1_INVERT_DIR, false, false);
+  stepper2.setPinsInverted(STEPPER2_INVERT_DIR, false, false);
+
   pinMode(DC_EN, OUTPUT);
   digitalWrite(DC_EN, HIGH);
   pinMode(DC_R_PWM, OUTPUT);
@@ -338,19 +340,41 @@ void setup() {
   ledcAttachPin(DC_L_PWM, DC_L_PWM_CHANNEL);
   applyDcCommand(0);
 
+  // ===== SERVO SETUP (added from File 1) =====
+  ledcSetup(SERVO_PWM_CHANNEL, SERVO_PWM_FREQ, SERVO_PWM_RES_BITS);
+  ledcAttachPin(SERVO_PIN, SERVO_PWM_CHANNEL);
+  setServoPulseUs(SERVO_NEUTRAL_US);
+  // ===== END SERVO SETUP =====
+
   Serial.println("READY SideArm controller online");
 }
 
 void loop() {
   readSerial();
   checkLimits();
-  processRecoveries();
 
   if (steppersEnabled) {
     stepper1.run();
     stepper2.run();
   }
 
+  // ===== SERVO RAMPING (added from Oliver's servo file) =====
+  const int SERVO_RAMP_STEP_US = 2;
+
+  if (servoCurrentPulseUs < servoTargetPulseUs) {
+    servoCurrentPulseUs = min(servoCurrentPulseUs + SERVO_RAMP_STEP_US, servoTargetPulseUs);
+  } else if (servoCurrentPulseUs > servoTargetPulseUs) {
+    servoCurrentPulseUs = max(servoCurrentPulseUs - SERVO_RAMP_STEP_US, servoTargetPulseUs);
+  }
+
+  if (servoCurrentPulseUs != servoPulseUs) {
+    servoPulseUs = servoCurrentPulseUs;
+
+    constexpr uint32_t MAX_DUTY = (1UL << SERVO_PWM_RES_BITS) - 1;
+    uint32_t duty = (static_cast<uint64_t>(servoPulseUs) * MAX_DUTY) / 20000UL;
+    ledcWrite(SERVO_PWM_CHANNEL, duty);
+  }
+  // ===== END SERVO RAMPING =====
+
   sendState();
 }
-

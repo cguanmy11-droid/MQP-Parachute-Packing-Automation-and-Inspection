@@ -36,7 +36,7 @@ class MainArmInterfaceNode(Node):
         self.bot = None
 
         # Initialize robot (only if not in test mode)
-        if self.test_mode:
+        if not self.test_mode:
             # Initialize robot for hardware and simulation
             self.get_logger().info(f'Initializing {robot_model} arm...')
             try:

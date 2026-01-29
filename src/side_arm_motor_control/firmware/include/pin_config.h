@@ -16,6 +16,10 @@ constexpr uint8_t STEPPER2_STEP = 21;
 constexpr uint8_t STEPPER2_DIR  = 22;
 constexpr uint8_t STEPPER_ENABLE = 12;  // LOW = enabled (shared)
 
+// Direction inversion (set to true if motor moves wrong way)
+constexpr bool STEPPER1_INVERT_DIR = true;
+constexpr bool STEPPER2_INVERT_DIR = true;
+
 // DC motor (BTS7960 dual PWM + shared EN)
 constexpr uint8_t DC_R_PWM = 14;
 constexpr uint8_t DC_L_PWM = 15;
@@ -24,7 +28,7 @@ constexpr uint8_t DC_EN    = 4;   // tie both EN pins to GPIO4
 // Motion defaults
 constexpr float DEFAULT_MAX_SPEED    = 800.0F;   // steps / s
 constexpr float DEFAULT_ACCELERATION = 200.0F;   // steps / s^2
-constexpr float HOMING_SPEED         = 150.0F;
+constexpr float HOMING_SPEED         = 800.0F;
 
 // DC PWM
 constexpr uint8_t DC_R_PWM_CHANNEL = 0;
