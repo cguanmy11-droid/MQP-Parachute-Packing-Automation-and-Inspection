@@ -115,10 +115,19 @@ class LoopVisualizerNode(Node):
         stamp = self.get_clock().now().to_msg()
 
         # Add grid marker in camera_frame (shows camera's view area)
+        # Note: Grid will only display if camera_frame TF is available
         if self.get_parameter('grid_enabled').value:
-            grid_marker = self.create_grid_marker(input_frame, stamp)
-            if grid_marker:
-                marker_array.markers.append(grid_marker)
+            # Check if camera_frame transform exists before adding grid
+            try:
+                self.tf_buffer.lookup_transform(
+                    'world', input_frame, rclpy.time.Time(),
+                    timeout=rclpy.duration.Duration(seconds=0.05))
+                grid_marker = self.create_grid_marker(input_frame, stamp)
+                if grid_marker:
+                    marker_array.markers.append(grid_marker)
+            except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
+                    tf2_ros.ExtrapolationException):
+                pass  # Skip grid if TF not available
 
         # Get marker parameters
         scale = self.get_parameter('marker_scale').value

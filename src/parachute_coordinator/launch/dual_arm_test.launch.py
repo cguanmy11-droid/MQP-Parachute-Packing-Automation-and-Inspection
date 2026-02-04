@@ -316,6 +316,25 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_main_arm'))
     )
 
+    # Fallback: world -> wx200/base_link TF when main arm is disabled
+    # This allows the side arm TF chain to work without the main arm
+    world_to_base_fallback_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='world_to_base_fallback_tf',
+        arguments=[
+            '--x', '0', '--y', '0', '--z', '0',
+            '--roll', '0', '--pitch', '0', '--yaw', '0',
+            '--frame-id', 'world',
+            '--child-frame-id', 'wx200/base_link'
+        ],
+        condition=IfCondition(
+            PythonExpression([
+                "'", LaunchConfiguration('enable_main_arm'), "' == 'false'"
+            ])
+        )
+    )
+
     # Side arm origin TF
     side_arm_tf = Node(
         package='tf2_ros',
@@ -447,6 +466,7 @@ def generate_launch_description():
         # Digital twin visualization
         frame_state_publisher,
         frame_tf,
+        world_to_base_fallback_tf,
         side_arm_tf,
         # camera_frame is now published by side_arm_visualizer
 
