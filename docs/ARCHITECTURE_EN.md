@@ -1,4 +1,4 @@
-### WidowX-200 Perception and Control System Architecture Details (Based on Existing Interbotix ROS2 Packages)
+\### WidowX-200 Perception and Control System Architecture Details (Based on Existing Interbotix ROS2 Packages)
 
 This document is oriented towards actual deployment, detailing which components can be directly reused, which need modification on existing code, and which need to be newly created and introduce third-party dependencies; it also provides in-depth text-only explanations of key concepts (Waypoint generation, Trajectory following, Gripper partial open/close, ESP32 motor/sensor control). All symbol names, topics, and class names are annotated according to the current state of the project.
 

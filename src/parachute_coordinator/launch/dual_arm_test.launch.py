@@ -245,26 +245,42 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
 
-    #  Side arm visualizer (RViz marker) -0.01, 0.009, 0.07
+    #  Side arm visualizer (RViz marker + TF for hook and camera)
     side_arm_visualizer = Node(
         package='side_arm_control',
         executable='side_arm_visualizer',
         name='side_arm_visualizer',
         output='screen',
         parameters=[{
+            # Hook mesh orientation
             'roll': -1.5708,
             'pitch': 0.0,
             'yaw': -1.5708,
+            # Hook mesh offset
             'offset_x': -0.01,
             'offset_y': 0.009,
             'offset_z': 0.07,
             'scale': 0.001,
-            'servo_axis': 'pitch',      # servo rotation
-            'servo_scale': 0.001,     # TODO: tune
+            # Servo rotation
+            'servo_axis': 'pitch',
+            'servo_scale': 0.001,
+            # Test mode
             'test_mode': LaunchConfiguration('side_arm_test_mode'),
             'test_x': 0.0,
             'test_y': 0.0,
             'test_z': 0.0,
+            # TF publishing
+            'publish_hook_tf': True,
+            'hook_frame_id': 'side_arm_hook',
+            # Camera frame (child of hook) - adjust these to calibrate camera position
+            'publish_camera_tf': True,
+            'camera_frame_id': 'camera_frame',
+            'camera_offset_x': 0.0,    # Forward from hook
+            'camera_offset_y': 0.0,    # Left/right from hook
+            'camera_offset_z': 0.05,   # Distance from hook tip
+            'camera_roll': 0.0,        # Camera orientation relative to hook
+            'camera_pitch': 0.0,
+            'camera_yaw': 0.0,
         }],
         condition=IfCondition(
             PythonExpression([
@@ -314,19 +330,8 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
 
-    # Camera frame TF (for loop detection visualization)
-    camera_frame_tf = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='camera_frame_static_tf',
-        arguments=[
-            '--x', '0.3', '--y', '0.0', '--z', '0.2',
-            '--roll', '0', '--pitch', '1.5708', '--yaw', '0',
-            '--frame-id', 'wx200/base_link',
-            '--child-frame-id', 'camera_frame'
-        ],
-        condition=IfCondition(LaunchConfiguration('enable_loop_visualization'))
-    )
+    # NOTE: camera_frame TF is now published dynamically by side_arm_visualizer
+    # as a child of side_arm_hook, so it moves with the side arm
 
     # ==================== PERCEPTION VISUALIZATION NODES ====================
 
@@ -400,7 +405,7 @@ def generate_launch_description():
         frame_state_publisher,
         frame_tf,
         side_arm_tf,
-        camera_frame_tf,
+        # camera_frame is now published by side_arm_visualizer
 
         # Perception visualization
         loop_visualizer,

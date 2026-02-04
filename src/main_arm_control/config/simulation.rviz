@@ -137,6 +137,8 @@ Visualization Manager:
           Value: true
         parachute_bag:
           Value: true
+        side_arm_hook:
+          Value: true
         side_arm_origin:
           Value: true
         world:
@@ -175,14 +177,14 @@ Visualization Manager:
       Tree:
         world:
           wx200/base_link:
-            camera_frame:
-              {}
             framemodel_root:
               framemodel:
                 parachute_bag:
                   {}
             side_arm_origin:
-              {}
+              side_arm_hook:
+                camera_frame:
+                  {}
             wx200/shoulder_link:
               wx200/upper_arm_link:
                 wx200/forearm_link:
