@@ -433,16 +433,16 @@ def generate_launch_description():
         parameters=[{
             'frame_id': 'world',
             'publish_rate': 10.0,
-            'pattern': 'static',  # static, random, grid, line
+            'pattern': 'line',  # static, random, grid, line
             'num_loops': 5,
             'loop_radius': 0.015,
             # Position bounds for random/grid/line patterns
-            'x_min': 0.30,
-            'x_max': 0.50,
-            'y_min': -0.10,
-            'y_max': 0.0,
-            'z_min': -0.05,
-            'z_max': 0.05,
+            'x_min': 0.25,
+            'x_max': 0.40,
+            'y_min': 0.148,
+            'y_max': 0.152,
+            'z_min': -0.04,
+            'z_max': 0.01,
             # Static positions: [x0,y0,z0, x1,y1,z1, ...] - adjust to match physical setup
             'static_positions': [
                 0.35, -0.05, -0.02,
