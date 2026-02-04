@@ -371,7 +371,8 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('vision_test_mode'))
     )
 
-    # Loop visualizer (subscribes to /detected_loops, publishes /loop_markers)
+    # Loop visualizer (subscribes to /detected_loops, publishes /detected_loop_markers)
+    # Transforms detections from camera_frame to world for display
     loop_visualizer = Node(
         package='parachute_perception',
         executable='loop_visualizer_node',
@@ -379,10 +380,12 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'marker_scale': 0.015,
+            'input_frame_id': 'camera_frame',  # Frame detections arrive in
+            'output_frame_id': 'world',        # Frame to publish markers in
             'grid_enabled': True,
             'grid_size_x': 0.4,
             'grid_size_y': 0.3,
-            'frame_id': 'camera_frame',
+            'grid_offset_z': 0.15,  # Grid distance in front of camera
         }],
         condition=IfCondition(LaunchConfiguration('enable_loop_visualization'))
     )

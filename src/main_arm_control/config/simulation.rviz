@@ -258,7 +258,7 @@ Visualization Manager:
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
-      Name: LoopMarkers
+      Name: DetectedLoopMarkers
       Namespaces:
         {}
       Topic:
@@ -266,7 +266,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /loop_markers
+        Value: /detected_loop_markers
       Value: true
     - Class: rviz_default_plugins/MarkerArray
       Enabled: true
