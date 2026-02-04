@@ -50,6 +50,10 @@ class DetectionSimulatorNode(Node):
         self.declare_parameter('confidence_noise', 0.05)
         self.declare_parameter('false_negative_rate', 0.0)  # Probability of missing a visible loop
 
+        # Debug parameters
+        self.declare_parameter('debug_bypass_fov', False)  # Bypass FOV/range checks for debugging
+        self.declare_parameter('debug_verbose', True)  # Print verbose debug info
+
         # Publishing rate
         self.declare_parameter('publish_rate', 5.0)  # Hz
 
@@ -118,6 +122,8 @@ class DetectionSimulatorNode(Node):
         conf_base = self.get_parameter('confidence_base').value
         conf_noise = self.get_parameter('confidence_noise').value
         false_neg_rate = self.get_parameter('false_negative_rate').value
+        debug_bypass = self.get_parameter('debug_bypass_fov').value
+        debug_verbose = self.get_parameter('debug_verbose').value
 
         # Create DetectedLoops message
         detected_msg = DetectedLoops()
@@ -146,16 +152,38 @@ class DetectionSimulatorNode(Node):
             y = point_camera.point.y
             z = point_camera.point.z
 
+            # Debug: always log transformed position when verbose
+            if debug_verbose:
+                self.get_logger().info(
+                    f'Loop {loop_id} in camera_frame: x={x:.3f}, y={y:.3f}, z={z:.3f}')
+
             # Check range (z should be positive - in front of camera)
-            if z < min_range or z > max_range:
-                continue
+            # Use abs(z) for range check if bypassing, to detect loops behind camera
+            z_for_range = abs(z) if debug_bypass else z
+            if z_for_range < min_range or z_for_range > max_range:
+                if debug_verbose:
+                    self.get_logger().warn(
+                        f'Loop {loop_id} REJECTED: z={z:.3f} outside range [{min_range}, {max_range}]')
+                if not debug_bypass:
+                    continue
 
             # Check FOV (angle from optical axis)
-            angle_h = math.atan2(x, z)  # Horizontal angle
-            angle_v = math.atan2(y, z)  # Vertical angle
+            # Use abs(z) for angle calculation if z is negative (camera pointing wrong way)
+            z_for_angle = abs(z) if z < 0 else z
+            angle_h = math.atan2(x, z_for_angle)  # Horizontal angle
+            angle_v = math.atan2(y, z_for_angle)  # Vertical angle
 
             if abs(angle_h) > fov_h / 2 or abs(angle_v) > fov_v / 2:
-                continue
+                if debug_verbose:
+                    self.get_logger().warn(
+                        f'Loop {loop_id} REJECTED: angles h={math.degrees(angle_h):.1f}° v={math.degrees(angle_v):.1f}° outside FOV')
+                if not debug_bypass:
+                    continue
+
+            # Warn if loop is behind camera but we're bypassing checks
+            if debug_bypass and z < 0:
+                self.get_logger().warn(
+                    f'Loop {loop_id} DETECTED despite being behind camera (z={z:.3f}). Fix camera orientation!')
 
             # Simulate false negative (randomly miss some detections)
             if random.random() < false_neg_rate:
@@ -191,8 +219,11 @@ class DetectionSimulatorNode(Node):
         # Publish detections
         self.detection_pub.publish(detected_msg)
 
+        # Always log detection status for debugging
         if detected_msg.total_count > 0:
-            self.get_logger().debug(f'Published {detected_msg.total_count} simulated detections')
+            self.get_logger().info(f'Published {detected_msg.total_count} simulated detections')
+        else:
+            self.get_logger().debug(f'No loops in camera FOV (checked {len(gt.positions)} ground truth loops)')
 
 
 def main(args=None):

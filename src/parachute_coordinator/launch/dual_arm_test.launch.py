@@ -273,13 +273,17 @@ def generate_launch_description():
             'publish_hook_tf': True,
             'hook_frame_id': 'side_arm_hook',
             # Camera frame (child of hook) - adjust these to calibrate camera position
+            # Camera convention: +Z is forward (looking direction), +X right, +Y down
             'publish_camera_tf': True,
             'camera_frame_id': 'camera_frame',
             'camera_offset_x': 0.0,    # Forward from hook
             'camera_offset_y': 0.0,    # Left/right from hook
             'camera_offset_z': 0.05,   # Distance from hook tip
-            'camera_roll': 0.0,        # Camera orientation relative to hook
-            'camera_pitch': 0.0,
+            # Rotate camera to look toward the ground truth loops
+            # These values need tuning based on actual setup
+            # Try pitch=π to flip camera forward direction
+            'camera_roll': 0.0,
+            'camera_pitch': 3.1416,    # 180 degrees - flip forward direction
             'camera_yaw': 0.0,
         }],
         condition=IfCondition(
@@ -419,17 +423,20 @@ def generate_launch_description():
         parameters=[{
             'camera_frame_id': 'camera_frame',
             'world_frame_id': 'world',
-            # Camera FOV (adjust to match real camera)
-            'camera_fov_horizontal': 60.0,  # degrees
-            'camera_fov_vertical': 45.0,    # degrees
-            'max_detection_range': 0.5,     # meters
-            'min_detection_range': 0.02,    # meters
+            # Camera FOV - set wide for testing, narrow later to match real camera
+            'camera_fov_horizontal': 120.0,  # degrees (wide for testing)
+            'camera_fov_vertical': 120.0,    # degrees (wide for testing)
+            'max_detection_range': 1.0,      # meters (extended for testing)
+            'min_detection_range': 0.01,     # meters
             # Detection simulation
             'detection_noise_stddev': 0.003,  # meters
             'confidence_base': 0.90,
             'confidence_noise': 0.05,
             'false_negative_rate': 0.0,
             'publish_rate': 5.0,
+            # Debug - enable to bypass FOV checks and see what's happening
+            'debug_bypass_fov': True,   # TEMP: Enable to detect loops even if camera wrong way
+            'debug_verbose': True,      # Show detailed logging
         }],
         condition=IfCondition(LaunchConfiguration('vision_test_mode'))
     )
