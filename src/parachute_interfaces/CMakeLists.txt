@@ -16,6 +16,7 @@ find_package(action_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DetectedLoop.msg"
   "msg/DetectedLoops.msg"
+  "msg/LoopGroundTruth.msg"
   "msg/HookStatus.msg"
   "msg/ArmStatus.msg"
   "msg/SideArmState.msg"

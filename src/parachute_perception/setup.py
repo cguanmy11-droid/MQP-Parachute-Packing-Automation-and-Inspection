@@ -29,6 +29,7 @@ setup(
             'hook_verification_node = parachute_perception.hook_verification_node:main',
             'loop_visualizer_node = parachute_perception.loop_visualizer_node:main',
             'test_loop_publisher_node = parachute_perception.test_loop_publisher_node:main',
+            'loop_ground_truth_node = parachute_perception.loop_ground_truth_node:main',
         ],
     },
 )

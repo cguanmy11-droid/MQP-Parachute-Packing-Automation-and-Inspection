@@ -335,6 +335,42 @@ def generate_launch_description():
 
     # ==================== PERCEPTION VISUALIZATION NODES ====================
 
+    # Loop ground truth (publishes actual loop positions in world frame)
+    loop_ground_truth = Node(
+        package='parachute_perception',
+        executable='loop_ground_truth_node',
+        name='loop_ground_truth_node',
+        output='screen',
+        parameters=[{
+            'frame_id': 'world',
+            'publish_rate': 10.0,
+            'pattern': 'static',  # static, random, grid, line
+            'num_loops': 5,
+            'loop_radius': 0.015,
+            # Position bounds for random/grid/line patterns
+            'x_min': 0.30,
+            'x_max': 0.50,
+            'y_min': -0.10,
+            'y_max': 0.0,
+            'z_min': -0.05,
+            'z_max': 0.05,
+            # Static positions: [x0,y0,z0, x1,y1,z1, ...] - adjust to match physical setup
+            'static_positions': [
+                0.35, -0.05, -0.02,
+                0.38, -0.05, 0.00,
+                0.41, -0.05, -0.01,
+                0.44, -0.05, 0.01,
+                0.47, -0.05, -0.02,
+            ],
+            # Marker visualization (blue for ground truth)
+            'marker_color_r': 0.2,
+            'marker_color_g': 0.4,
+            'marker_color_b': 0.9,
+            'marker_color_a': 0.7,
+        }],
+        condition=IfCondition(LaunchConfiguration('vision_test_mode'))
+    )
+
     # Loop visualizer (subscribes to /detected_loops, publishes /loop_markers)
     loop_visualizer = Node(
         package='parachute_perception',
@@ -352,6 +388,7 @@ def generate_launch_description():
     )
 
     # Test loop publisher (publishes simulated /detected_loops when camera not available)
+    # NOTE: This will be replaced by detection_simulator_node in Phase 3
     test_loop_publisher = Node(
         package='parachute_perception',
         executable='test_loop_publisher_node',
@@ -408,6 +445,7 @@ def generate_launch_description():
         # camera_frame is now published by side_arm_visualizer
 
         # Perception visualization
+        loop_ground_truth,
         loop_visualizer,
         test_loop_publisher,
     ])
