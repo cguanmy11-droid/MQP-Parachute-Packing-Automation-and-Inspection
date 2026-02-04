@@ -295,12 +295,11 @@ def generate_launch_description():
             'camera_offset_x': 0.0,    # Forward from hook
             'camera_offset_y': 0.0,    # Left/right from hook
             'camera_offset_z': 0.05,   # Distance from hook tip
-            # Rotate camera to look toward the ground truth loops
-            # These values need tuning based on actual setup
-            # Try pitch=π to flip camera forward direction
+            # Rotate camera to look toward the ground truth loops (toward y=0 in world)
+            # Yaw rotates the camera's view direction
             'camera_roll': 0.0,
             'camera_pitch': 3.1416,    # 180 degrees - flip forward direction
-            'camera_yaw': 0.0,
+            'camera_yaw': -1.5708,     # -90 degrees - rotate to face toward y=0
         }],
         condition=IfCondition(
             PythonExpression([

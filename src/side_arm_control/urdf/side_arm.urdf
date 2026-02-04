@@ -44,8 +44,8 @@
   </material>
 
   <!-- ==================== BASE LINK ==================== -->
-  <!-- Fixed base - attaches to side_arm_origin frame -->
-  <link name="side_arm_base">
+  <!-- Root link - must match the TF frame name 'side_arm_origin' to connect to TF tree -->
+  <link name="side_arm_origin">
     <!-- Small visual to show the origin point -->
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -58,9 +58,10 @@
 
   <!-- ==================== X-AXIS (HORIZONTAL) ==================== -->
   <!-- X Rail - horizontal beam for belt-driven movement -->
+  <!-- Offset negative so rail appears "behind" the carriage/hook -->
   <link name="x_rail_link">
     <visual>
-      <origin xyz="0.15 0 0" rpy="0 0 0"/>
+      <origin xyz="-0.15 0 0" rpy="0 0 0"/>
       <geometry>
         <box size="0.32 0.02 0.02"/>
       </geometry>
@@ -70,7 +71,7 @@
 
   <!-- Fixed joint from base to X rail -->
   <joint name="base_to_x_rail" type="fixed">
-    <parent link="side_arm_base"/>
+    <parent link="side_arm_origin"/>
     <child link="x_rail_link"/>
     <origin xyz="0 0 0" rpy="0 0 0"/>
   </joint>
@@ -97,9 +98,10 @@
 
   <!-- ==================== Y-AXIS (VERTICAL) ==================== -->
   <!-- Y Rail - vertical beam for lead-screw movement -->
+  <!-- Offset negative so rail appears "behind" the carriage/hook -->
   <link name="y_rail_link">
     <visual>
-      <origin xyz="0 0.10 0" rpy="0 0 0"/>
+      <origin xyz="0 -0.10 0" rpy="0 0 0"/>
       <geometry>
         <box size="0.02 0.22 0.02"/>
       </geometry>
@@ -136,9 +138,10 @@
 
   <!-- ==================== Z-AXIS (DEPTH) ==================== -->
   <!-- Z Rail - depth beam for DC motor movement -->
+  <!-- Offset negative so rail appears "behind" the carriage/hook -->
   <link name="z_rail_link">
     <visual>
-      <origin xyz="0 0 0.08" rpy="0 0 0"/>
+      <origin xyz="0 0 -0.08" rpy="0 0 0"/>
       <geometry>
         <box size="0.02 0.02 0.17"/>
       </geometry>
