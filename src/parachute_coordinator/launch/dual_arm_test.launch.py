@@ -44,6 +44,16 @@ def generate_launch_description():
     with open(frame_urdf_path, 'r') as f:
         frame_urdf = f.read()
 
+    # Load side arm URDF
+    side_arm_urdf_path = os.path.join(
+        get_package_share_directory('side_arm_control'),
+        'urdf',
+        'side_arm.urdf'
+    )
+
+    with open(side_arm_urdf_path, 'r') as f:
+        side_arm_urdf = f.read()
+
     # ==================== LAUNCH ARGUMENTS ====================
 
     # Main arm arguments
@@ -94,6 +104,12 @@ def generate_launch_description():
         'serial_port',
         default_value='/dev/ttyUSB0',
         description='Serial port for side arm ESP32 connection'
+    )
+
+    use_joint_sliders_arg = DeclareLaunchArgument(
+        'use_joint_sliders',
+        default_value='false',
+        description='Use joint_state_publisher_gui for manual side arm control via sliders'
     )
 
     # Visualization arguments
@@ -294,6 +310,56 @@ def generate_launch_description():
         )
     )
 
+    # ==================== SIDE ARM URDF ====================
+
+    # Side arm robot state publisher (publishes URDF to /side_arm/robot_description)
+    side_arm_state_publisher = Node(
+        package='robot_state_publisher',
+        executable='robot_state_publisher',
+        name='side_arm_robot_state_publisher',
+        namespace='side_arm',
+        parameters=[{'robot_description': side_arm_urdf}],
+        condition=IfCondition(LaunchConfiguration('enable_side_arm'))
+    )
+
+    # Joint state publisher GUI (for manual slider control in test mode)
+    side_arm_joint_gui = Node(
+        package='joint_state_publisher_gui',
+        executable='joint_state_publisher_gui',
+        name='side_arm_joint_gui',
+        namespace='side_arm',
+        condition=IfCondition(
+            PythonExpression([
+                "'", LaunchConfiguration('enable_side_arm'), "' == 'true' and '",
+                LaunchConfiguration('use_joint_sliders'), "' == 'true'"
+            ])
+        )
+    )
+
+    # Joint state bridge (converts hardware state to joint states)
+    side_arm_joint_bridge = Node(
+        package='side_arm_control',
+        executable='side_arm_joint_state_publisher',
+        name='side_arm_joint_state_publisher',
+        namespace='side_arm',
+        parameters=[{
+            'servo_scale': 0.001,
+            'publish_rate': 50.0,
+            'test_mode': LaunchConfiguration('side_arm_test_mode'),
+            'test_x': 0.15,
+            'test_y': 0.10,
+            'test_z': 0.05,
+            'test_servo': 0.0,
+        }],
+        output='screen',
+        condition=IfCondition(
+            PythonExpression([
+                "'", LaunchConfiguration('enable_side_arm'), "' == 'true' and '",
+                LaunchConfiguration('use_joint_sliders'), "' == 'false'"
+            ])
+        )
+    )
+
     # ==================== DIGITAL TWIN LAUNCH ====================
 
     # Frame state publisher
@@ -453,6 +519,7 @@ def generate_launch_description():
         enable_side_arm_arg,
         side_arm_test_mode_arg,
         serial_port_arg,
+        use_joint_sliders_arg,
         enable_visualization_arg,
         use_rviz_arg,
         vision_test_mode_arg,
@@ -469,6 +536,11 @@ def generate_launch_description():
         side_arm_coordinate,
         side_arm_interface,
         side_arm_visualizer,
+
+        # Side arm URDF visualization
+        side_arm_state_publisher,
+        side_arm_joint_gui,
+        side_arm_joint_bridge,
 
         # Digital twin visualization
         frame_state_publisher,

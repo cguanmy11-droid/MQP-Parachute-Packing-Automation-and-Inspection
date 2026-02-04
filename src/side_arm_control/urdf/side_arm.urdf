@@ -1,0 +1,237 @@
+<?xml version="1.0"?>
+<!--
+  Side Arm URDF - Cartesian Gantry Manipulator
+
+  This URDF defines the side arm as a 4-DOF Cartesian gantry with:
+  - X axis: Horizontal movement (belt drive, 0-300mm)
+  - Y axis: Vertical movement (lead screw, 0-200mm)
+  - Z axis: Depth movement (DC motor, 0-150mm)
+  - Servo: Hook rotation (revolute, ±0.5 rad)
+
+  Coordinate system (in side_arm_origin frame):
+  - X positive: horizontal movement
+  - Y positive: vertical movement (down)
+  - Z positive: depth movement (hook extends)
+
+  Parameters from launch configuration:
+  - max_x_mm: 300.0
+  - max_y_mm: 200.0
+  - max_z_mm: 150.0
+  - Hook offset: (-0.01, 0.009, 0.07)
+  - Hook orientation: roll=-90°, pitch=0°, yaw=-90°
+-->
+<robot name="side_arm">
+
+  <!-- ==================== MATERIALS ==================== -->
+  <material name="rail_gray">
+    <color rgba="0.5 0.5 0.5 1.0"/>
+  </material>
+
+  <material name="carriage_blue">
+    <color rgba="0.2 0.4 0.8 1.0"/>
+  </material>
+
+  <material name="carriage_green">
+    <color rgba="0.2 0.7 0.3 1.0"/>
+  </material>
+
+  <material name="carriage_orange">
+    <color rgba="0.9 0.5 0.1 1.0"/>
+  </material>
+
+  <material name="hook_dark">
+    <color rgba="0.3 0.3 0.3 1.0"/>
+  </material>
+
+  <!-- ==================== BASE LINK ==================== -->
+  <!-- Fixed base - attaches to side_arm_origin frame -->
+  <link name="side_arm_base">
+    <!-- Small visual to show the origin point -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.01"/>
+      </geometry>
+      <material name="rail_gray"/>
+    </visual>
+  </link>
+
+  <!-- ==================== X-AXIS (HORIZONTAL) ==================== -->
+  <!-- X Rail - horizontal beam for belt-driven movement -->
+  <link name="x_rail_link">
+    <visual>
+      <origin xyz="0.15 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.32 0.02 0.02"/>
+      </geometry>
+      <material name="rail_gray"/>
+    </visual>
+  </link>
+
+  <!-- Fixed joint from base to X rail -->
+  <joint name="base_to_x_rail" type="fixed">
+    <parent link="side_arm_base"/>
+    <child link="x_rail_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- X Carriage - moves along X rail -->
+  <link name="x_carriage_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.04 0.03 0.03"/>
+      </geometry>
+      <material name="carriage_blue"/>
+    </visual>
+  </link>
+
+  <!-- Prismatic joint for X movement (0 to 0.3m) -->
+  <joint name="joint_x" type="prismatic">
+    <parent link="x_rail_link"/>
+    <child link="x_carriage_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="1 0 0"/>
+    <limit lower="0.0" upper="0.3" effort="10" velocity="0.1"/>
+  </joint>
+
+  <!-- ==================== Y-AXIS (VERTICAL) ==================== -->
+  <!-- Y Rail - vertical beam for lead-screw movement -->
+  <link name="y_rail_link">
+    <visual>
+      <origin xyz="0 0.10 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.22 0.02"/>
+      </geometry>
+      <material name="rail_gray"/>
+    </visual>
+  </link>
+
+  <!-- Fixed joint from X carriage to Y rail -->
+  <joint name="x_carriage_to_y_rail" type="fixed">
+    <parent link="x_carriage_link"/>
+    <child link="y_rail_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Y Carriage - moves along Y rail -->
+  <link name="y_carriage_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.03 0.04 0.03"/>
+      </geometry>
+      <material name="carriage_green"/>
+    </visual>
+  </link>
+
+  <!-- Prismatic joint for Y movement (0 to 0.2m) -->
+  <joint name="joint_y" type="prismatic">
+    <parent link="y_rail_link"/>
+    <child link="y_carriage_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="0.0" upper="0.2" effort="10" velocity="0.05"/>
+  </joint>
+
+  <!-- ==================== Z-AXIS (DEPTH) ==================== -->
+  <!-- Z Rail - depth beam for DC motor movement -->
+  <link name="z_rail_link">
+    <visual>
+      <origin xyz="0 0 0.08" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.02 0.17"/>
+      </geometry>
+      <material name="rail_gray"/>
+    </visual>
+  </link>
+
+  <!-- Fixed joint from Y carriage to Z rail -->
+  <joint name="y_carriage_to_z_rail" type="fixed">
+    <parent link="y_carriage_link"/>
+    <child link="z_rail_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Z Carriage - moves along Z rail -->
+  <link name="z_carriage_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.025 0.025 0.04"/>
+      </geometry>
+      <material name="carriage_orange"/>
+    </visual>
+  </link>
+
+  <!-- Prismatic joint for Z movement (0 to 0.15m) -->
+  <joint name="joint_z" type="prismatic">
+    <parent link="z_rail_link"/>
+    <child link="z_carriage_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0.0" upper="0.15" effort="10" velocity="0.01"/>
+  </joint>
+
+  <!-- ==================== SERVO/HOOK ==================== -->
+  <!-- Servo mount link -->
+  <link name="servo_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.02 0.02"/>
+      </geometry>
+      <material name="hook_dark"/>
+    </visual>
+  </link>
+
+  <!-- Revolute joint for servo rotation (pitch axis based on visualizer config) -->
+  <joint name="joint_servo" type="revolute">
+    <parent link="z_carriage_link"/>
+    <child link="servo_link"/>
+    <origin xyz="0 0 0.02" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>  <!-- Pitch axis (Y) as per servo_axis='pitch' in launch -->
+    <limit lower="-0.5" upper="0.5" effort="1" velocity="1.0"/>
+  </joint>
+
+  <!-- Hook link with mesh visualization -->
+  <!-- Offset and orientation from side_arm_visualizer parameters -->
+  <link name="hook_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/>
+      <geometry>
+        <mesh filename="package://side_arm_control/meshes/hook.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="hook_dark"/>
+    </visual>
+  </link>
+
+  <!-- Fixed joint from servo to hook (with offset from visualizer config) -->
+  <joint name="servo_to_hook" type="fixed">
+    <parent link="servo_link"/>
+    <child link="hook_link"/>
+    <!-- Offset: x=-0.01, y=0.009, z=0.07 from launch parameters -->
+    <origin xyz="-0.01 0.009 0.07" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ==================== CAMERA FRAME ==================== -->
+  <!-- Camera link - fixed offset from hook -->
+  <link name="camera_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.015 0.015"/>
+      </geometry>
+      <material name="carriage_blue"/>
+    </visual>
+  </link>
+
+  <!-- Fixed joint from hook to camera -->
+  <!-- Offset: x=0, y=0, z=0.05 with pitch=180° from launch parameters -->
+  <joint name="hook_to_camera" type="fixed">
+    <parent link="hook_link"/>
+    <child link="camera_link"/>
+    <origin xyz="0 0 0.05" rpy="0 3.1416 0"/>
+  </joint>
+
+</robot>

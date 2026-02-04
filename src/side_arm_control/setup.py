@@ -16,6 +16,8 @@ setup(
             glob('launch/*.py')),
         (os.path.join('share', package_name, 'meshes'),
             glob('meshes/*')),
+        (os.path.join('share', package_name, 'urdf'),
+            glob('urdf/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -34,6 +36,7 @@ setup(
             'coordinate_node = side_arm_control.coordinate_node:main',
             'manual_jog = side_arm_control.manual_jog:main',
             'side_arm_visualizer = side_arm_control.side_arm_visualizer:main',
+            'side_arm_joint_state_publisher = side_arm_control.side_arm_joint_state_publisher:main',
         ],
     },
 )
