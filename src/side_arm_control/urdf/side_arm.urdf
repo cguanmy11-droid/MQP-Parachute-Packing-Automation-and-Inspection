@@ -199,10 +199,10 @@
   </joint>
 
   <!-- Hook link with mesh visualization -->
-  <!-- Offset and orientation from side_arm_visualizer parameters -->
+  <!-- Rotated to point toward y=0 in world frame -->
   <link name="hook_link">
     <visual>
-      <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/>
+      <origin xyz="0 0 0" rpy="-1.5708 0 1.5708"/>
       <geometry>
         <mesh filename="package://side_arm_control/meshes/hook.stl" scale="0.001 0.001 0.001"/>
       </geometry>
@@ -210,12 +210,11 @@
     </visual>
   </link>
 
-  <!-- Fixed joint from servo to hook (with offset from visualizer config) -->
+  <!-- Fixed joint from servo to hook (flipped offset to put link on other side) -->
   <joint name="servo_to_hook" type="fixed">
     <parent link="servo_link"/>
     <child link="hook_link"/>
-    <!-- Offset: x=-0.01, y=0.009, z=0.07 from launch parameters -->
-    <origin xyz="-0.01 0.009 0.07" rpy="0 0 0"/>
+    <origin xyz="0.01 -0.009 0.07" rpy="0 0 0"/>
   </joint>
 
   <!-- ==================== CAMERA FRAME ==================== -->

@@ -114,20 +114,12 @@ class LoopVisualizerNode(Node):
         input_frame = self.get_parameter('input_frame_id').value
         stamp = self.get_clock().now().to_msg()
 
-        # Add grid marker in camera_frame (shows camera's view area)
-        # Note: Grid will only display if camera_frame TF is available
+        # Add grid marker in world frame (X-Z plane)
+        # Grid is now in world frame so no TF lookup needed
         if self.get_parameter('grid_enabled').value:
-            # Check if camera_frame transform exists before adding grid
-            try:
-                self.tf_buffer.lookup_transform(
-                    'world', input_frame, rclpy.time.Time(),
-                    timeout=rclpy.duration.Duration(seconds=0.05))
-                grid_marker = self.create_grid_marker(input_frame, stamp)
-                if grid_marker:
-                    marker_array.markers.append(grid_marker)
-            except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
-                    tf2_ros.ExtrapolationException):
-                pass  # Skip grid if TF not available
+            grid_marker = self.create_grid_marker(input_frame, stamp)
+            if grid_marker:
+                marker_array.markers.append(grid_marker)
 
         # Get marker parameters
         scale = self.get_parameter('marker_scale').value
@@ -260,9 +252,9 @@ class LoopVisualizerNode(Node):
         self.marker_pub.publish(marker_array)
 
     def create_grid_marker(self, frame_id: str, stamp) -> Marker:
-        """Create a reference grid marker in camera_frame to show camera's view."""
+        """Create a reference grid marker in world frame aligned with X-Z plane."""
         marker = Marker()
-        marker.header.frame_id = frame_id
+        marker.header.frame_id = 'world'  # Always in world frame for stability
         marker.header.stamp = stamp
         marker.ns = 'camera_grid'
         marker.id = 0
@@ -271,30 +263,29 @@ class LoopVisualizerNode(Node):
 
         # Grid parameters
         size_x = self.get_parameter('grid_size_x').value
-        size_y = self.get_parameter('grid_size_y').value
+        size_z = self.get_parameter('grid_size_y').value  # Use Y param for Z size
         cells_x = self.get_parameter('grid_cells_x').value
-        cells_y = self.get_parameter('grid_cells_y').value
-        offset_z = self.get_parameter('grid_offset_z').value
+        cells_z = self.get_parameter('grid_cells_y').value
+        offset_y = self.get_parameter('grid_offset_z').value  # Y offset in world
 
-        # Grid spans from -size/2 to +size/2 in camera X-Y plane
-        # Z offset puts it in front of camera
-        x_min, x_max = -size_x / 2, size_x / 2
-        y_min, y_max = -size_y / 2, size_y / 2
+        # Grid spans X-Z plane at a fixed Y position
+        x_min, x_max = 0.2, 0.2 + size_x  # Position grid in front of robot
+        z_min, z_max = -size_z / 2, size_z / 2
 
         cell_width = size_x / cells_x
-        cell_height = size_y / cells_y
+        cell_height = size_z / cells_z
 
-        # Vertical lines
+        # Vertical lines (along Z)
         for i in range(cells_x + 1):
             x = x_min + i * cell_width
-            marker.points.append(Point(x=x, y=y_min, z=offset_z))
-            marker.points.append(Point(x=x, y=y_max, z=offset_z))
+            marker.points.append(Point(x=x, y=offset_y, z=z_min))
+            marker.points.append(Point(x=x, y=offset_y, z=z_max))
 
-        # Horizontal lines
-        for i in range(cells_y + 1):
-            y = y_min + i * cell_height
-            marker.points.append(Point(x=x_min, y=y, z=offset_z))
-            marker.points.append(Point(x=x_max, y=y, z=offset_z))
+        # Horizontal lines (along X)
+        for i in range(cells_z + 1):
+            z = z_min + i * cell_height
+            marker.points.append(Point(x=x_min, y=offset_y, z=z))
+            marker.points.append(Point(x=x_max, y=offset_y, z=z))
 
         marker.pose.orientation.w = 1.0
         marker.scale.x = 0.002  # Line width
