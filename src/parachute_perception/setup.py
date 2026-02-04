@@ -27,6 +27,8 @@ setup(
             'loop_detector_node = parachute_perception.loop_detector_node:main',
             'target_selector_node = parachute_perception.target_selector_node:main',
             'hook_verification_node = parachute_perception.hook_verification_node:main',
+            'loop_visualizer_node = parachute_perception.loop_visualizer_node:main',
+            'test_loop_publisher_node = parachute_perception.test_loop_publisher_node:main',
         ],
     },
 )

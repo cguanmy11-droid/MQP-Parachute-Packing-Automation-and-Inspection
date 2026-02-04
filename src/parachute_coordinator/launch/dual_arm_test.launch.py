@@ -109,6 +109,19 @@ def generate_launch_description():
         description='Launch RViz for main arm visualization'
     )
 
+    # Vision/perception arguments
+    vision_test_mode_arg = DeclareLaunchArgument(
+        'vision_test_mode',
+        default_value='false',
+        description='Use simulated loop detections instead of camera'
+    )
+
+    enable_loop_visualization_arg = DeclareLaunchArgument(
+        'enable_loop_visualization',
+        default_value='true',
+        description='Enable loop detection visualization in RViz'
+    )
+
     # ==================== MAIN ARM NODES ====================
 
     # Interbotix arm control (hardware or sim)
@@ -301,6 +314,59 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
 
+    # Camera frame TF (for loop detection visualization)
+    camera_frame_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='camera_frame_static_tf',
+        arguments=[
+            '--x', '0.3', '--y', '0.0', '--z', '0.2',
+            '--roll', '0', '--pitch', '1.5708', '--yaw', '0',
+            '--frame-id', 'wx200/base_link',
+            '--child-frame-id', 'camera_frame'
+        ],
+        condition=IfCondition(LaunchConfiguration('enable_loop_visualization'))
+    )
+
+    # ==================== PERCEPTION VISUALIZATION NODES ====================
+
+    # Loop visualizer (subscribes to /detected_loops, publishes /loop_markers)
+    loop_visualizer = Node(
+        package='parachute_perception',
+        executable='loop_visualizer_node',
+        name='loop_visualizer_node',
+        output='screen',
+        parameters=[{
+            'marker_scale': 0.015,
+            'grid_enabled': True,
+            'grid_size_x': 0.4,
+            'grid_size_y': 0.3,
+            'frame_id': 'camera_frame',
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_loop_visualization'))
+    )
+
+    # Test loop publisher (publishes simulated /detected_loops when camera not available)
+    test_loop_publisher = Node(
+        package='parachute_perception',
+        executable='test_loop_publisher_node',
+        name='test_loop_publisher_node',
+        output='screen',
+        parameters=[{
+            'publish_rate': 2.0,
+            'num_loops': 5,
+            'pattern': 'random',
+            'x_min': 0.05,
+            'x_max': 0.35,
+            'y_fixed': -0.11,
+            'z_min': 0.02,
+            'z_max': 0.15,
+            'movement': False,
+            'frame_id': 'camera_frame',
+        }],
+        condition=IfCondition(LaunchConfiguration('vision_test_mode'))
+    )
+
     # ==================== LAUNCH DESCRIPTION ====================
 
     return LaunchDescription([
@@ -315,6 +381,8 @@ def generate_launch_description():
         serial_port_arg,
         enable_visualization_arg,
         use_rviz_arg,
+        vision_test_mode_arg,
+        enable_loop_visualization_arg,
         joy_node,
 
         # Main arm nodes
@@ -332,4 +400,9 @@ def generate_launch_description():
         frame_state_publisher,
         frame_tf,
         side_arm_tf,
+        camera_frame_tf,
+
+        # Perception visualization
+        loop_visualizer,
+        test_loop_publisher,
     ])
