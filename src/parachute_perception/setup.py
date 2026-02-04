@@ -30,6 +30,7 @@ setup(
             'loop_visualizer_node = parachute_perception.loop_visualizer_node:main',
             'test_loop_publisher_node = parachute_perception.test_loop_publisher_node:main',
             'loop_ground_truth_node = parachute_perception.loop_ground_truth_node:main',
+            'detection_simulator_node = parachute_perception.detection_simulator_node:main',
         ],
     },
 )

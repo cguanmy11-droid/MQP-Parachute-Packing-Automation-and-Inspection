@@ -387,24 +387,27 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_loop_visualization'))
     )
 
-    # Test loop publisher (publishes simulated /detected_loops when camera not available)
-    # NOTE: This will be replaced by detection_simulator_node in Phase 3
-    test_loop_publisher = Node(
+    # Detection simulator (simulates YOLO detection based on ground truth and camera pose)
+    # Transforms ground truth loops from world to camera_frame, checks FOV visibility
+    detection_simulator = Node(
         package='parachute_perception',
-        executable='test_loop_publisher_node',
-        name='test_loop_publisher_node',
+        executable='detection_simulator_node',
+        name='detection_simulator_node',
         output='screen',
         parameters=[{
-            'publish_rate': 2.0,
-            'num_loops': 5,
-            'pattern': 'random',
-            'x_min': 0.05,
-            'x_max': 0.35,
-            'y_fixed': -0.11,
-            'z_min': 0.02,
-            'z_max': 0.15,
-            'movement': False,
-            'frame_id': 'camera_frame',
+            'camera_frame_id': 'camera_frame',
+            'world_frame_id': 'world',
+            # Camera FOV (adjust to match real camera)
+            'camera_fov_horizontal': 60.0,  # degrees
+            'camera_fov_vertical': 45.0,    # degrees
+            'max_detection_range': 0.5,     # meters
+            'min_detection_range': 0.02,    # meters
+            # Detection simulation
+            'detection_noise_stddev': 0.003,  # meters
+            'confidence_base': 0.90,
+            'confidence_noise': 0.05,
+            'false_negative_rate': 0.0,
+            'publish_rate': 5.0,
         }],
         condition=IfCondition(LaunchConfiguration('vision_test_mode'))
     )
@@ -447,5 +450,5 @@ def generate_launch_description():
         # Perception visualization
         loop_ground_truth,
         loop_visualizer,
-        test_loop_publisher,
+        detection_simulator,
     ])
