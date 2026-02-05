@@ -36,8 +36,8 @@ def generate_launch_description():
             'test_mode': False,
             'robot_model': 'wx200',
             'robot_name': 'wx200',
-            'moving_time': '1',
-            'accel_time': '1',
+            'moving_time': 1.0,
+            'accel_time': 1.0,
         }]
     )
     

@@ -1,8 +1,10 @@
 build/
 install/
 log/
+__pycache__/
+*.pyc
 
-
+# Vendor dependencies (pulled with vcs import)
 src/interbotix_ros_core/
 src/interbotix_ros_manipulators/
 src/interbotix_ros_toolboxes/
