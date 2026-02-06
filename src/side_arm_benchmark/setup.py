@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'system_benchmark = side_arm_benchmark.system_benchmark:main',
             'vis_servo_benchmark = side_arm_benchmark.vis_servo_benchmark:main',
+            'coord_collect = side_arm_benchmark.coord_collect.py',
         ],
     },
 )

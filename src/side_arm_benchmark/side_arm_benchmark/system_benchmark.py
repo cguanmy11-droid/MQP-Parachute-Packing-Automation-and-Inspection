@@ -235,8 +235,8 @@ class SystemBenchmark(Node):
         self._send("STEPPER_ENABLE,1")
         self._wait(0.5)
 
-        # self.benchmark_latency()
-        # self.benchmark_throughput(duration_s=5.0)
+        self.benchmark_latency()
+        self.benchmark_throughput(duration_s=5.0)
         self.benchmark_stepper_repeatability(motor_id=1, delta=100, repeats=5)
         self.benchmark_stepper_repeatability(motor_id=2, delta=500, repeats=5)
 

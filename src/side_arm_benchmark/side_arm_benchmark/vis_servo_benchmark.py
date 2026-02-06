@@ -95,7 +95,7 @@ class VisionCenteringNode(Node):
                 self._stop_if_needed(self.stepper_y)
             else:
                 velocity_y = int(max(self.min_speed_y, min(self.max_speed_y, abs(self.kp_y * error_y))) * (1 if error_y > 0 else -1))
-                self._send_velocity(self.stepper_y, velocity_y)
+                # self._send_velocity(self.stepper_y, velocity_y)
 
 
     def _send_velocity(self, stepper_id: int, velocity: int):
