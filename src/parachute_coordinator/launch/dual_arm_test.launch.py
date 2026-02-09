@@ -20,6 +20,30 @@ Usage:
 
     # Main arm only (no side arm)
     ros2 launch parachute_coordinator dual_arm_test.launch.py enable_side_arm:=false
+
+    # Side arm simulation mode (URDF moves without hardware):
+    ros2 launch parachute_coordinator dual_arm_test.launch.py \\
+        side_arm_test_mode:=true enable_main_arm:=false
+
+    # Side arm hardware + simulation (URDF mirrors AND simulates motion)
+    # Useful for seeing what the system sees during real tests
+    ros2 launch parachute_coordinator dual_arm_test.launch.py \\
+        side_arm_test_mode:=true
+
+Side Arm Motion Modes:
+    - side_arm_test_mode=false: Hardware only. Serial bridge required.
+    - side_arm_test_mode=true + no serial: Simulation only. URDF moves.
+    - side_arm_test_mode=true + serial: Both hardware AND simulation run.
+      This allows RViz to show real-time visualization during tests.
+
+Test with simulated vision (loops in RViz):
+    ros2 launch parachute_coordinator dual_arm_test.launch.py \\
+        side_arm_test_mode:=true vision_test_mode:=true enable_main_arm:=false
+
+Move side arm in simulation:
+    ros2 service call /side_arm/move_to_position \\
+        parachute_interfaces/srv/MoveToPosition \\
+        \"{x_mm: 100.0, y_mm: 50.0, z_mm: 20.0, speed_scale: 0.5}\"
 """
 
 import os
@@ -228,11 +252,14 @@ def generate_launch_description():
     )
 
     # Coordinate node (converts mm to motor commands)
+    # In test mode, runs simulation. Hardware commands are also sent if serial bridge is running.
     side_arm_coordinate = Node(
         package='side_arm_control',
         executable='coordinate_node',
         name='side_arm_coordinate_node',
         parameters=[{
+            'simulation_mode': LaunchConfiguration('side_arm_test_mode'),  # Enable simulation in test mode
+            'sim_speed_mm_per_sec': 50.0,  # Simulation motion speed
             'steps_per_mm_horizontal': 300.0,
             'steps_per_mm_vertical': 100.0,
             'dc_mm_per_second': 4.0,
