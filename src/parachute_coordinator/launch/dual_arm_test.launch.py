@@ -230,6 +230,8 @@ def generate_launch_description():
     # ==================== SIDE ARM NODES ====================
 
     # Serial bridge node (communicates with ESP32)
+    # Now launches in BOTH hardware and test modes for hybrid operation
+    # (test_mode enables simulation, but hardware commands still go through if connected)
     side_arm_serial_bridge = Node(
         package='side_arm_motor_control_bridge',
         executable='serial_bridge',
@@ -243,12 +245,7 @@ def generate_launch_description():
             'auto_request_state': True,
         }],
         output='screen',
-        condition=IfCondition(
-            PythonExpression([
-                "'", LaunchConfiguration('enable_side_arm'), "' == 'true' and '",
-                LaunchConfiguration('side_arm_test_mode'), "' == 'false'"
-            ])
-        )
+        condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
 
     # Coordinate node (converts mm to motor commands)

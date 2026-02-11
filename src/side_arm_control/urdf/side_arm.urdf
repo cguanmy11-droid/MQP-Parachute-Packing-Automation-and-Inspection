@@ -230,11 +230,12 @@
   </link>
 
   <!-- Fixed joint from hook to camera -->
-  <!-- Offset: x=0, y=0, z=0.05 with pitch=180° from launch parameters -->
+  <!-- Offset positions camera on hook, orientation makes +Z point toward work area -->
+  <!-- Camera looks "forward" along its +Z axis toward where loops should be detected -->
   <joint name="hook_to_camera" type="fixed">
     <parent link="hook_link"/>
     <child link="camera_link"/>
-    <origin xyz="0 0 0.05" rpy="0 3.1416 0"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>
   </joint>
 
 </robot>
