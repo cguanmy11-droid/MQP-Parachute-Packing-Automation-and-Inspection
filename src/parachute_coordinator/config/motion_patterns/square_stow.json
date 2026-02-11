@@ -1,0 +1,38 @@
+{
+  "name": "square_stow",
+  "description": "Square path: center -> outward -> toward base -> back to center. Reference point is the starting center position.",
+  "reference_point": "start",
+  "speed_factor": 0.4,
+  "waypoints": [
+    {
+      "dx": 0.0,
+      "dy": 0.0,
+      "dz": 0.0,
+      "comment": "Start at center (target position)"
+    },
+    {
+      "dx": 0.08,
+      "dy": 0.0,
+      "dz": 0.0,
+      "comment": "Move outward (+X, away from robot)"
+    },
+    {
+      "dx": 0.08,
+      "dy": -0.08,
+      "dz": 0.0,
+      "comment": "Move toward base (right side)"
+    },
+    {
+      "dx": 0.0,
+      "dy": -0.08,
+      "dz": 0.0,
+      "comment": "Move back inward toward robot"
+    },
+    {
+      "dx": 0.0,
+      "dy": 0.0,
+      "dz": 0.0,
+      "comment": "Return to center"
+    }
+  ]
+}
