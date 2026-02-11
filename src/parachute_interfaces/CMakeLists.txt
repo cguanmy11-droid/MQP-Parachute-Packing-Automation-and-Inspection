@@ -25,6 +25,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/PlanToHook.srv"
   "srv/RotateHook.srv"
   "srv/MoveToPosition.srv"
+  "srv/MoveToWorldPose.srv"
   "action/InsertHook.action"
   "action/ExecuteTrajectory.action"
   "action/MoveToCoordinate.action"

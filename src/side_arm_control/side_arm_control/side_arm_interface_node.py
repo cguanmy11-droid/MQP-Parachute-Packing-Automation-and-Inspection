@@ -2,7 +2,11 @@
 """
 Side Arm Interface Node
 
-Provides high-level action server for hook insertion and service for hook rotation.
+Provides high-level action server for hook insertion and services for:
+- Hook rotation
+- Direct position moves (MoveToPosition)
+- World-frame moves with TF transform (MoveToWorldPose)
+
 Integrates with the coordinate node for real motor control when not in test mode.
 """
 
@@ -11,11 +15,15 @@ from rclpy.node import Node
 from rclpy.action import ActionServer, ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from parachute_interfaces.action import InsertHook, MoveToCoordinate
-from parachute_interfaces.srv import RotateHook
+from parachute_interfaces.srv import RotateHook, MoveToPosition, MoveToWorldPose
 from parachute_interfaces.msg import HookStatus, SideArmState
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, PoseStamped
 from std_msgs.msg import String
 import time
+
+# TF2 for coordinate transforms
+from tf2_ros import Buffer, TransformListener, TransformException
+import tf2_geometry_msgs
 
 
 class SideArmInterfaceNode(Node):
@@ -26,10 +34,16 @@ class SideArmInterfaceNode(Node):
         self.declare_parameter('test_mode', True)
         self.declare_parameter('approach_offset_z', 50.0)  # mm before loop
         self.declare_parameter('insert_depth_z', 30.0)      # mm through loop
+        self.declare_parameter('side_arm_frame', 'side_arm_origin')  # TF frame for transforms
 
         self.test_mode = self.get_parameter('test_mode').value
         self.approach_offset_z = self.get_parameter('approach_offset_z').value
         self.insert_depth_z = self.get_parameter('insert_depth_z').value
+        self.side_arm_frame = self.get_parameter('side_arm_frame').value
+
+        # TF2 buffer and listener for coordinate transforms
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Callback group for concurrent operations
         self._cb_group = ReentrantCallbackGroup()
@@ -63,6 +77,16 @@ class SideArmInterfaceNode(Node):
         self.rotate_service = self.create_service(
             RotateHook, '/side_arm/rotate_hook',
             self.rotate_hook_callback)
+
+        # Service for direct position move (in side arm frame, mm)
+        self.move_service = self.create_service(
+            MoveToPosition, '/side_arm/move_to_position',
+            self.move_to_position_callback)
+
+        # Service for world-frame move with TF transform
+        self.world_move_service = self.create_service(
+            MoveToWorldPose, '/side_arm/move_to_world_pose',
+            self.move_to_world_pose_callback)
 
         # Publisher for hook status
         self.status_publisher = self.create_publisher(HookStatus, '/side_arm/status', 10)
@@ -172,6 +196,97 @@ class SideArmInterfaceNode(Node):
         response.message = f"Rotated to {self.current_angle} degrees"
 
         self.get_logger().info(f'Hook rotated to {self.current_angle} degrees')
+
+        return response
+
+    def move_to_position_callback(self, request, response):
+        """
+        Service callback - move to position in side arm frame (mm).
+        This is a simple direct move without TF transforms.
+        """
+        x_mm = request.x_mm
+        y_mm = request.y_mm
+        z_mm = request.z_mm
+        speed = request.speed_scale if request.speed_scale > 0 else 0.5
+
+        self.get_logger().info(
+            f'MoveToPosition: ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) mm, speed={speed:.2f}'
+        )
+
+        success = self._move_to(x_mm, y_mm, z_mm, speed_scale=speed)
+
+        response.success = success
+        if success:
+            response.message = f"Moved to ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) mm"
+            response.estimated_time_sec = 0.0  # Already completed
+        else:
+            response.message = "Move failed"
+            response.estimated_time_sec = 0.0
+
+        return response
+
+    def move_to_world_pose_callback(self, request, response):
+        """
+        Service callback - move to world-frame position using TF2 transform.
+        Transforms the input pose from its frame to side_arm_origin, then moves.
+        """
+        target_pose = request.target_pose
+        speed = request.speed_scale if request.speed_scale > 0 else 0.5
+
+        source_frame = target_pose.header.frame_id or 'world'
+        self.get_logger().info(
+            f'MoveToWorldPose: frame={source_frame} -> {self.side_arm_frame}'
+        )
+        self.get_logger().info(
+            f'  Input: ({target_pose.pose.position.x:.4f}, '
+            f'{target_pose.pose.position.y:.4f}, {target_pose.pose.position.z:.4f}) m'
+        )
+
+        # Transform pose to side arm frame
+        try:
+            # Get transform from source frame to side arm frame
+            transform = self.tf_buffer.lookup_transform(
+                self.side_arm_frame,
+                source_frame,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=2.0)
+            )
+
+            # Transform the pose
+            transformed_pose = tf2_geometry_msgs.do_transform_pose_stamped(
+                target_pose, transform
+            )
+
+            # Extract position in side arm frame (convert m to mm)
+            x_mm = transformed_pose.pose.position.x * 1000.0
+            y_mm = transformed_pose.pose.position.y * 1000.0
+            z_mm = transformed_pose.pose.position.z * 1000.0
+
+            self.get_logger().info(
+                f'  Transformed to side arm frame: ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) mm'
+            )
+
+        except TransformException as e:
+            self.get_logger().error(f'TF transform failed: {e}')
+            response.success = False
+            response.message = f"TF transform failed: {e}"
+            response.final_x_mm = 0.0
+            response.final_y_mm = 0.0
+            response.final_z_mm = 0.0
+            return response
+
+        # Execute the move
+        success = self._move_to(x_mm, y_mm, z_mm, speed_scale=speed)
+
+        response.success = success
+        response.final_x_mm = x_mm
+        response.final_y_mm = y_mm
+        response.final_z_mm = z_mm
+
+        if success:
+            response.message = f"Moved to ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) mm in {self.side_arm_frame}"
+        else:
+            response.message = "Move failed after transform"
 
         return response
 
