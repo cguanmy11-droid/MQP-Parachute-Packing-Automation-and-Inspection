@@ -189,12 +189,12 @@
     </visual>
   </link>
 
-  <!-- Revolute joint for servo rotation (pitch axis based on visualizer config) -->
+  <!-- Revolute joint for servo rotation (yaw axis for hook rotation) -->
   <joint name="joint_servo" type="revolute">
     <parent link="z_carriage_link"/>
     <child link="servo_link"/>
     <origin xyz="0 0 0.02" rpy="0 0 0"/>
-    <axis xyz="0 1 0"/>  <!-- Pitch axis (Y) as per servo_axis='pitch' in launch -->
+    <axis xyz="0 0 1"/>  <!-- Yaw axis (Z) for hook rotation -->
     <limit lower="-0.5" upper="0.5" effort="1" velocity="1.0"/>
   </joint>
 

@@ -252,49 +252,65 @@ class LoopVisualizerNode(Node):
         self.marker_pub.publish(marker_array)
 
     def create_grid_marker(self, frame_id: str, stamp) -> Marker:
-        """Create a reference grid marker in world frame aligned with X-Z plane."""
+        """Create a reference grid marker in camera_frame to show camera field of view.
+
+        The grid is placed in camera_frame so it moves with the camera/hook,
+        representing what the camera can see. Loops appearing within this grid
+        are visible to the camera.
+        """
         marker = Marker()
-        marker.header.frame_id = 'world'  # Always in world frame for stability
+        marker.header.frame_id = 'camera_frame'  # Moves with the camera!
         marker.header.stamp = stamp
-        marker.ns = 'camera_grid'
+        marker.ns = 'camera_fov_grid'
         marker.id = 0
         marker.type = Marker.LINE_LIST
         marker.action = Marker.ADD
 
-        # Grid parameters
-        size_x = self.get_parameter('grid_size_x').value
-        size_z = self.get_parameter('grid_size_y').value  # Use Y param for Z size
+        # Grid parameters - represents camera FOV area
+        size_x = self.get_parameter('grid_size_x').value  # Width of FOV
+        size_y = self.get_parameter('grid_size_y').value  # Height of FOV
         cells_x = self.get_parameter('grid_cells_x').value
-        cells_z = self.get_parameter('grid_cells_y').value
-        offset_y = self.get_parameter('grid_offset_z').value  # Y offset in world
+        cells_y = self.get_parameter('grid_cells_y').value
+        offset_z = self.get_parameter('grid_offset_z').value  # Distance from camera
 
-        # Grid spans X-Z plane at a fixed Y position
-        x_min, x_max = 0.2, 0.2 + size_x  # Position grid in front of robot
-        z_min, z_max = -size_z / 2, size_z / 2
+        # Grid in camera_frame: X-Y plane at Z offset (looking forward)
+        # Camera typically looks along +Z or -Z axis
+        x_min, x_max = -size_x / 2, size_x / 2
+        y_min, y_max = -size_y / 2, size_y / 2
 
         cell_width = size_x / cells_x
-        cell_height = size_z / cells_z
+        cell_height = size_y / cells_y
 
-        # Vertical lines (along Z)
+        # Vertical lines (along Y in camera frame)
         for i in range(cells_x + 1):
             x = x_min + i * cell_width
-            marker.points.append(Point(x=x, y=offset_y, z=z_min))
-            marker.points.append(Point(x=x, y=offset_y, z=z_max))
+            marker.points.append(Point(x=x, y=y_min, z=offset_z))
+            marker.points.append(Point(x=x, y=y_max, z=offset_z))
 
-        # Horizontal lines (along X)
-        for i in range(cells_z + 1):
-            z = z_min + i * cell_height
-            marker.points.append(Point(x=x_min, y=offset_y, z=z))
-            marker.points.append(Point(x=x_max, y=offset_y, z=z))
+        # Horizontal lines (along X in camera frame)
+        for i in range(cells_y + 1):
+            y = y_min + i * cell_height
+            marker.points.append(Point(x=x_min, y=y, z=offset_z))
+            marker.points.append(Point(x=x_max, y=y, z=offset_z))
+
+        # Add corner lines to show frustum (optional depth visualization)
+        # Lines from camera origin to grid corners
+        corners = [
+            (x_min, y_min), (x_max, y_min),
+            (x_max, y_max), (x_min, y_max)
+        ]
+        for cx, cy in corners:
+            marker.points.append(Point(x=0.0, y=0.0, z=0.0))  # Camera origin
+            marker.points.append(Point(x=cx, y=cy, z=offset_z))
 
         marker.pose.orientation.w = 1.0
         marker.scale.x = 0.002  # Line width
 
-        # Grid color (light blue)
-        marker.color.r = 0.3
-        marker.color.g = 0.5
-        marker.color.b = 0.8
-        marker.color.a = 0.6
+        # Grid color (cyan for camera FOV)
+        marker.color.r = 0.0
+        marker.color.g = 0.8
+        marker.color.b = 1.0
+        marker.color.a = 0.7
 
         return marker
 
