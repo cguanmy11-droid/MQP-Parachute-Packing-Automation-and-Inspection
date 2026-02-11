@@ -229,13 +229,12 @@
     </visual>
   </link>
 
-  <!-- Fixed joint from hook to camera -->
-  <!-- Offset positions camera on hook, orientation makes +Z point toward work area -->
+  <!-- Fixed joint from Y carriage to camera -->
   <!-- Camera looks "forward" along its +Z axis toward where loops should be detected -->
-  <joint name="hook_to_camera" type="fixed">
-    <parent link="hook_link"/>
+  <joint name="y_carriage_to_camera" type="fixed">
+    <parent link="y_carriage_link"/>
     <child link="camera_link"/>
-    <origin xyz="0 0 0.05" rpy="0 0 0"/>
+    <origin xyz="0 0 0.05" rpy="0 3.1416 0"/>
   </joint>
 
 </robot>

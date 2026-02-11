@@ -83,10 +83,10 @@ class DetectionSimulatorNode(Node):
         publish_rate = self.get_parameter('publish_rate').value
         self.timer = self.create_timer(1.0 / publish_rate, self.simulate_detection)
 
-        self.get_logger().info('Detection Simulator Node initialized')
-        self.get_logger().info(f'  Camera frame: {self.get_parameter("camera_frame_id").value}')
-        self.get_logger().info(f'  FOV: {self.get_parameter("camera_fov_horizontal").value}° x {self.get_parameter("camera_fov_vertical").value}°')
-        self.get_logger().info(f'  Range: {self.get_parameter("min_detection_range").value}m - {self.get_parameter("max_detection_range").value}m')
+        # self.get_logger().info('Detection Simulator Node initialized')
+        # self.get_logger().info(f'  Camera frame: {self.get_parameter("camera_frame_id").value}')
+        # self.get_logger().info(f'  FOV: {self.get_parameter("camera_fov_horizontal").value}° x {self.get_parameter("camera_fov_vertical").value}°')
+        # self.get_logger().info(f'  Range: {self.get_parameter("min_detection_range").value}m - {self.get_parameter("max_detection_range").value}m')
 
     def ground_truth_callback(self, msg: LoopGroundTruth):
         """Store latest ground truth positions."""
