@@ -6,12 +6,15 @@ End-to-end demonstration of the packing sequence using a predefined loop positio
 No perception required - uses hardcoded or parameter-specified target.
 
 Sequence:
-1. Move side arm to target loop position
-2. Insert hook (simulated or real)
-3. Rotate hook 90 degrees
-4. Execute main arm stowing trajectory (using motion pattern)
-5. Rotate hook back
-6. Retract side arm
+1. Initialize
+2. Home main arm
+3. Home side arm (wait for completion)
+4. Move side arm to target position (wait for completion)
+5. Rotate hook 90 degrees
+6. Execute main arm stowing trajectory
+7. Rotate hook back to 0
+8. Retract side arm (wait for completion)
+9. Complete
 
 Usage:
     ros2 run parachute_coordinator full_stow_demo_node
@@ -29,7 +32,6 @@ from geometry_msgs.msg import Pose, Point
 from parachute_interfaces.srv import MoveToPosition, RotateHook
 from parachute_interfaces.action import MoveToCoordinate, ExecuteTrajectory
 from parachute_interfaces.msg import DetectedLoop
-import time
 
 from .motion_pattern_manager import MotionPatternManager, BUILTIN_PATTERNS
 
@@ -49,9 +51,9 @@ class FullStowDemoNode(Node):
         self.declare_parameter('target_z', 0.0)   # meters
 
         # Side arm approach position (in side arm frame, mm)
-        self.declare_parameter('side_arm_x_mm', 150.0)
-        self.declare_parameter('side_arm_y_mm', 100.0)
-        self.declare_parameter('side_arm_z_mm', 50.0)
+        self.declare_parameter('side_arm_x_mm', 82.0)
+        self.declare_parameter('side_arm_y_mm', 27.0)
+        self.declare_parameter('side_arm_z_mm', 140.0)
 
         # Motion pattern for main arm
         self.declare_parameter('stow_pattern', 'stow_arc')
@@ -113,7 +115,9 @@ class FullStowDemoNode(Node):
         self.steps = [
             ('init', self.step_init),
             ('home_main_arm', self.step_home_main_arm),
+            # ('home_side_arm', self.step_home_side_arm),
             ('move_side_arm', self.step_move_side_arm),
+            ('insert_side_arm', self.step_insert_side_arm),
             ('rotate_hook_pre', self.step_rotate_hook_pre),
             ('execute_trajectory', self.step_execute_trajectory),
             ('rotate_hook_post', self.step_rotate_hook_post),
@@ -122,13 +126,13 @@ class FullStowDemoNode(Node):
         ]
 
         # Wait for services
-        self.get_logger().info('='*60)
+        self.get_logger().info('=' * 60)
         self.get_logger().info('FULL STOW DEMO')
-        self.get_logger().info('='*60)
+        self.get_logger().info('=' * 60)
         self.get_logger().info(f'Target position: ({self.target.x:.3f}, {self.target.y:.3f}, {self.target.z:.3f})')
         self.get_logger().info(f'Side arm position: X={self.side_arm_pos["x"]:.0f}, Y={self.side_arm_pos["y"]:.0f}, Z={self.side_arm_pos["z"]:.0f} mm')
         self.get_logger().info(f'Motion pattern: {self.stow_pattern}')
-        self.get_logger().info('='*60)
+        self.get_logger().info('=' * 60)
 
         self._check_services()
 
@@ -142,6 +146,8 @@ class FullStowDemoNode(Node):
             self.cmd_sub = self.create_subscription(
                 String, '/demo/command', self._command_callback, 10
             )
+
+    # ==================== SETUP ====================
 
     def _check_services(self):
         """Check which services/actions are available."""
@@ -165,6 +171,8 @@ class FullStowDemoNode(Node):
         elif cmd == 'stop':
             self.demo_running = False
             self.get_logger().info('Demo stopped')
+
+    # ==================== STEP SEQUENCING ====================
 
     def _start_demo(self):
         """Start the demo sequence."""
@@ -202,57 +210,84 @@ class FullStowDemoNode(Node):
             self.demo_running = False
 
     def _step_complete(self, success: bool = True):
-        """Called when a step completes."""
+        """Called when a step completes. Advances to next step after delay."""
+        if not self.demo_running:
+            return
+
         if success:
             self.current_step += 1
-            # Delay before next step
-            self.create_timer(self.step_delay, self._run_next_step_once)
+            timer = self.create_timer(self.step_delay, lambda: self._delayed_next_step(timer))
         else:
             self.get_logger().error('Step failed, stopping demo')
             self.demo_running = False
 
-    def _run_next_step_once(self):
-        """Timer callback to run next step (one-shot)."""
-        # This is a hack to make a one-shot timer
+    def _delayed_next_step(self, timer):
+        """One-shot timer callback for step delay."""
+        timer.cancel()
         self._run_next_step()
 
-    # ==================== DEMO STEPS ====================
-
-    def step_init(self):
-        """Initialize the demo."""
-        self.get_logger().info('Initializing demo sequence...')
+    def _sim_complete(self, timer):
+        """One-shot timer callback for simulated steps."""
+        timer.cancel()
         self._step_complete(True)
 
-    def step_home_main_arm(self):
-        """Send main arm to home position."""
-        self.get_logger().info('Sending main arm to home position...')
+    # ==================== SIDE ARM MOVEMENT (SHARED) ====================
 
-        msg = String()
-        msg.data = 'home'
-        self.main_arm_pose_pub.publish(msg)
+    def _move_side_arm_to(self, x_mm: float, y_mm: float, z_mm: float, speed: float = 1.5):
+        """Move side arm to a position using action client, with service fallback."""
+        self.get_logger().info(f'Moving side arm to ({x_mm:.0f}, {y_mm:.0f}, {z_mm:.0f}) mm')
 
-        # Give it time to move
-        self.create_timer(3.0, lambda: self._step_complete(True))
+        if self.side_arm_action_available:
+            goal = MoveToCoordinate.Goal()
+            goal.x_mm = x_mm
+            goal.y_mm = y_mm
+            goal.z_mm = z_mm
+            goal.speed_scale = speed
 
-    def step_move_side_arm(self):
-        """Move side arm to target position."""
-        self.get_logger().info(f'Moving side arm to X={self.side_arm_pos["x"]:.0f}, Y={self.side_arm_pos["y"]:.0f}, Z={self.side_arm_pos["z"]:.0f} mm')
-
-        if self.side_arm_move_available:
+            send_future = self.side_arm_action_client.send_goal_async(
+                goal, feedback_callback=self._side_arm_feedback
+            )
+            send_future.add_done_callback(self._side_arm_goal_callback)
+        elif self.side_arm_move_available:
             request = MoveToPosition.Request()
-            request.x_mm = self.side_arm_pos['x']
-            request.y_mm = self.side_arm_pos['y']
-            request.z_mm = self.side_arm_pos['z']
-            request.speed_scale = 0.5
-
+            request.x_mm = x_mm
+            request.y_mm = y_mm
+            request.z_mm = z_mm
+            request.speed_scale = speed
             future = self.side_arm_move_client.call_async(request)
-            future.add_done_callback(self._side_arm_move_callback)
+            future.add_done_callback(self._side_arm_service_callback)
         else:
-            self.get_logger().warn('Side arm move service not available, simulating...')
-            self.create_timer(2.0, lambda: self._step_complete(True))
+            self.get_logger().warn('No side arm interface available, simulating...')
+            timer = self.create_timer(2.0, lambda: self._sim_complete(timer))
 
-    def _side_arm_move_callback(self, future):
-        """Callback when side arm move completes."""
+    def _side_arm_feedback(self, feedback_msg):
+        """Handle side arm action feedback."""
+        feedback = feedback_msg.feedback
+        # self.get_logger().info(f'  Side arm progress: {int(feedback.progress * 100)}%')
+
+    def _side_arm_goal_callback(self, future):
+        """Callback when side arm action goal is accepted/rejected."""
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error('Side arm goal rejected')
+            self._step_complete(False)
+            return
+        self.get_logger().info('Side arm goal accepted, moving...')
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self._side_arm_result_callback)
+
+    def _side_arm_result_callback(self, future):
+        """Callback when side arm action completes."""
+        result = future.result().result
+        if result.success:
+            self.get_logger().info('Side arm move complete')
+            self._step_complete(True)
+        else:
+            self.get_logger().error(f'Side arm move failed: {result.message}')
+            self._step_complete(False)
+
+    def _side_arm_service_callback(self, future):
+        """Callback when side arm service call completes (fallback)."""
         try:
             response = future.result()
             if response.success:
@@ -262,22 +297,24 @@ class FullStowDemoNode(Node):
                 self.get_logger().error(f'Side arm move failed: {response.message}')
                 self._step_complete(False)
         except Exception as e:
-            self.get_logger().error(f'Side arm move error: {e}')
+            self.get_logger().error(f'Side arm service error: {e}')
             self._step_complete(False)
 
-    def step_rotate_hook_pre(self):
-        """Rotate hook before stowing."""
-        self.get_logger().info('Rotating hook 90 degrees...')
+    # ==================== HOOK ROTATION (SHARED) ====================
+
+    def _rotate_hook(self, angle_degrees: float):
+        """Rotate hook to a given angle."""
+        self.get_logger().info(f'Rotating hook to {angle_degrees:.0f} degrees...')
 
         if self.side_arm_rotate_available:
             request = RotateHook.Request()
-            request.angle_degrees = 90.0
+            request.angle_degrees = angle_degrees
 
             future = self.side_arm_rotate_client.call_async(request)
             future.add_done_callback(self._rotate_callback)
         else:
             self.get_logger().warn('Rotate hook service not available, simulating...')
-            self.create_timer(1.0, lambda: self._step_complete(True))
+            timer = self.create_timer(1.0, lambda: self._sim_complete(timer))
 
     def _rotate_callback(self, future):
         """Callback when hook rotation completes."""
@@ -292,6 +329,46 @@ class FullStowDemoNode(Node):
         except Exception as e:
             self.get_logger().error(f'Rotation error: {e}')
             self._step_complete(False)
+
+    # ==================== DEMO STEPS ====================
+
+    def step_init(self):
+        """Initialize the demo."""
+        self.get_logger().info('Initializing demo sequence...')
+        self._step_complete(True)
+
+    def step_home_main_arm(self):
+        """Send main arm to home position."""
+        self.get_logger().info('Sending main arm to home position...')
+        msg = String()
+        msg.data = 'home'
+        self.main_arm_pose_pub.publish(msg)
+        # Main arm home is fire-and-forget via topic, wait a fixed time
+        timer = self.create_timer(3.0, lambda: self._sim_complete(timer))
+
+    def step_home_side_arm(self):
+        """Send side arm to home position."""
+        self._move_side_arm_to(0.0, 0.0, 0.0)
+
+    def step_move_side_arm(self):
+        """Move side arm to ready position."""
+        self._move_side_arm_to(
+            self.side_arm_pos['x'],
+            self.side_arm_pos['y'],
+            0.0
+        )
+    
+    def step_insert_side_arm(self):
+        """Move side arm to loop position."""
+        self._move_side_arm_to(
+            self.side_arm_pos['x'],
+            self.side_arm_pos['y'],
+            self.side_arm_pos['z']
+        )
+
+    def step_rotate_hook_pre(self):
+        """Rotate hook before stowing."""
+        self._rotate_hook(90.0)
 
     def step_execute_trajectory(self):
         """Execute main arm stowing trajectory."""
@@ -314,7 +391,7 @@ class FullStowDemoNode(Node):
         if self.main_arm_action_available:
             goal = ExecuteTrajectory.Goal()
             goal.waypoints = waypoints
-            goal.speed_factor = 0.5
+            goal.speed_factor = 1.0
 
             send_future = self.main_arm_action_client.send_goal_async(
                 goal, feedback_callback=self._trajectory_feedback
@@ -322,7 +399,30 @@ class FullStowDemoNode(Node):
             send_future.add_done_callback(self._trajectory_goal_callback)
         else:
             self.get_logger().warn('Main arm action not available, simulating...')
-            self.create_timer(3.0, lambda: self._step_complete(True))
+            timer = self.create_timer(3.0, lambda: self._sim_complete(timer))
+
+    def step_rotate_hook_post(self):
+        """Rotate hook back after stowing."""
+        self._rotate_hook(0.0)
+
+    def step_retract_side_arm(self):
+        """Retract side arm to outside of loop position."""
+        self._move_side_arm_to(
+            self.side_arm_pos['x'],
+            self.side_arm_pos['y'],
+            0.0
+        )
+
+    def step_complete(self):
+        """Demo complete."""
+        self.get_logger().info('')
+        self.get_logger().info('=' * 60)
+        self.get_logger().info('DEMO COMPLETE!')
+        self.get_logger().info('=' * 60)
+        self._publish_status('complete')
+        self.demo_running = False
+
+    # ==================== TRAJECTORY HELPERS ====================
 
     def _make_pose(self, x: float, y: float, z: float) -> Pose:
         """Create a Pose message."""
@@ -359,46 +459,6 @@ class FullStowDemoNode(Node):
         else:
             self.get_logger().error(f'Trajectory failed: {result.message}')
             self._step_complete(False)
-
-    def step_rotate_hook_post(self):
-        """Rotate hook back after stowing."""
-        self.get_logger().info('Rotating hook back to 0 degrees...')
-
-        if self.side_arm_rotate_available:
-            request = RotateHook.Request()
-            request.angle_degrees = 0.0
-
-            future = self.side_arm_rotate_client.call_async(request)
-            future.add_done_callback(self._rotate_callback)
-        else:
-            self.get_logger().warn('Rotate hook service not available, simulating...')
-            self.create_timer(1.0, lambda: self._step_complete(True))
-
-    def step_retract_side_arm(self):
-        """Retract side arm to home position."""
-        self.get_logger().info('Retracting side arm to home...')
-
-        if self.side_arm_move_available:
-            request = MoveToPosition.Request()
-            request.x_mm = 0.0
-            request.y_mm = 0.0
-            request.z_mm = 0.0
-            request.speed_scale = 0.5
-
-            future = self.side_arm_move_client.call_async(request)
-            future.add_done_callback(self._side_arm_move_callback)
-        else:
-            self.get_logger().warn('Side arm move service not available, simulating...')
-            self.create_timer(2.0, lambda: self._step_complete(True))
-
-    def step_complete(self):
-        """Demo complete."""
-        self.get_logger().info('')
-        self.get_logger().info('='*60)
-        self.get_logger().info('DEMO COMPLETE!')
-        self.get_logger().info('='*60)
-        self._publish_status('complete')
-        self.demo_running = False
 
 
 def main(args=None):

@@ -48,15 +48,15 @@ def generate_launch_description():
 
     # Side arm position (in side arm frame, mm)
     side_arm_x_arg = DeclareLaunchArgument(
-        'side_arm_x_mm', default_value='150.0',
+        'side_arm_x_mm', default_value='82.0',
         description='Side arm X position (mm)'
     )
     side_arm_y_arg = DeclareLaunchArgument(
-        'side_arm_y_mm', default_value='100.0',
+        'side_arm_y_mm', default_value='27.0',
         description='Side arm Y position (mm)'
     )
     side_arm_z_arg = DeclareLaunchArgument(
-        'side_arm_z_mm', default_value='50.0',
+        'side_arm_z_mm', default_value='140.0',
         description='Side arm Z position (mm)'
     )
 
@@ -82,7 +82,7 @@ def generate_launch_description():
         description='Start demo automatically'
     )
     start_delay_arg = DeclareLaunchArgument(
-        'start_delay', default_value='5.0',
+        'start_delay', default_value='3.0',
         description='Delay before starting demo (seconds)'
     )
 

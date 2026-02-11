@@ -749,7 +749,7 @@ class SideArmCoordinateNode(Node):
 
             feedback.current_x_mm = current_x
             feedback.current_y_mm = current_y
-            feedback.current_z_mm = current_z
+            feedback.current_z_mm = float(current_z)
             feedback.progress = progress
             goal_handle.publish_feedback(feedback)
 
