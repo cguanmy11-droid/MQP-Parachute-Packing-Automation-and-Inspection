@@ -195,6 +195,19 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_main_arm'))
     )
 
+    # Main arm planner node (motion planning with IK solving)
+    main_arm_planner = Node(
+        package='main_arm_control',
+        executable='main_arm_planner_node',
+        name='main_arm_planner_node',
+        output='screen',
+        parameters=[{
+            'robot_model': LaunchConfiguration('robot_model'),
+            'robot_name': LaunchConfiguration('robot_model'),
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_main_arm'))
+    )
+
     # Main arm teleop node (optional)
     main_arm_teleop = Node(
         package='main_arm_control',
@@ -552,6 +565,7 @@ def generate_launch_description():
         # Main arm nodes
         main_arm_control_launch,
         main_arm_interface,
+        main_arm_planner,
         main_arm_teleop,
 
         # Side arm nodes
