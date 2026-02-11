@@ -313,10 +313,104 @@ class SideArmCoordinateNode(Node):
                     )
 
     def _command_callback(self, msg: String):
-        """Track DC motor commands from any source (including manual_jog)."""
-        cmd = msg.data.strip().upper()
-        
-        if cmd.startswith('DC_SPEED,'):
+        """Track motor commands from any source (including manual_jog) for simulation."""
+        cmd = msg.data.strip()
+        cmd_upper = cmd.upper()
+
+        # Handle STEPPER_MOVE commands in simulation mode
+        if cmd_upper.startswith('STEPPER_MOVE,') and self.simulation_mode:
+            try:
+                parts = cmd.split(',')
+                if len(parts) >= 4:
+                    motor = int(parts[1])
+                    steps = int(parts[2])
+                    speed = int(parts[3])
+
+                    with self._state_lock:
+                        if motor == 1:  # Vertical (Y axis)
+                            delta_mm = steps / self.steps_per_mm_vertical
+                            new_y = self._position_y_mm + delta_mm
+                            new_y = max(0, min(new_y, self.max_y_mm))
+
+                            # Set up simulated motion
+                            self._sim_start_x_mm = self._position_x_mm
+                            self._sim_start_y_mm = self._position_y_mm
+                            self._sim_start_z_mm = self._position_z_mm
+                            self._sim_target_x_mm = self._position_x_mm
+                            self._sim_target_y_mm = new_y
+                            self._sim_target_z_mm = self._position_z_mm
+                            self._sim_move_start = time.time()
+
+                            self.get_logger().info(
+                                f'[SIM] Stepper1 (Y): {self._position_y_mm:.1f} -> {new_y:.1f} mm'
+                            )
+
+                        elif motor == 2:  # Horizontal (X axis)
+                            delta_mm = steps / self.steps_per_mm_horizontal
+                            new_x = self._position_x_mm + delta_mm
+                            new_x = max(0, min(new_x, self.max_x_mm))
+
+                            # Set up simulated motion
+                            self._sim_start_x_mm = self._position_x_mm
+                            self._sim_start_y_mm = self._position_y_mm
+                            self._sim_start_z_mm = self._position_z_mm
+                            self._sim_target_x_mm = new_x
+                            self._sim_target_y_mm = self._position_y_mm
+                            self._sim_target_z_mm = self._position_z_mm
+                            self._sim_move_start = time.time()
+
+                            self.get_logger().info(
+                                f'[SIM] Stepper2 (X): {self._position_x_mm:.1f} -> {new_x:.1f} mm'
+                            )
+
+            except (ValueError, IndexError) as e:
+                self.get_logger().warn(f'Failed to parse STEPPER_MOVE: {e}')
+            return
+
+        # Handle HOME commands in simulation mode
+        if cmd_upper.startswith('HOME') and self.simulation_mode:
+            with self._state_lock:
+                if cmd_upper == 'HOME_ALL':
+                    self._sim_start_x_mm = self._position_x_mm
+                    self._sim_start_y_mm = self._position_y_mm
+                    self._sim_start_z_mm = self._position_z_mm
+                    self._sim_target_x_mm = 0.0
+                    self._sim_target_y_mm = 0.0
+                    self._sim_target_z_mm = 0.0
+                    self._sim_move_start = time.time()
+                    self._is_homed = True
+                    self.get_logger().info('[SIM] Homing all axes to (0, 0, 0)')
+                elif cmd_upper == 'HOME,0':  # DC motor (Z)
+                    self._sim_start_x_mm = self._position_x_mm
+                    self._sim_start_y_mm = self._position_y_mm
+                    self._sim_start_z_mm = self._position_z_mm
+                    self._sim_target_x_mm = self._position_x_mm
+                    self._sim_target_y_mm = self._position_y_mm
+                    self._sim_target_z_mm = 0.0
+                    self._sim_move_start = time.time()
+                    self.get_logger().info('[SIM] Homing Z axis')
+                elif cmd_upper == 'HOME,1':  # Stepper1 (Y)
+                    self._sim_start_x_mm = self._position_x_mm
+                    self._sim_start_y_mm = self._position_y_mm
+                    self._sim_start_z_mm = self._position_z_mm
+                    self._sim_target_x_mm = self._position_x_mm
+                    self._sim_target_y_mm = 0.0
+                    self._sim_target_z_mm = self._position_z_mm
+                    self._sim_move_start = time.time()
+                    self.get_logger().info('[SIM] Homing Y axis')
+                elif cmd_upper == 'HOME,2':  # Stepper2 (X)
+                    self._sim_start_x_mm = self._position_x_mm
+                    self._sim_start_y_mm = self._position_y_mm
+                    self._sim_start_z_mm = self._position_z_mm
+                    self._sim_target_x_mm = 0.0
+                    self._sim_target_y_mm = self._position_y_mm
+                    self._sim_target_z_mm = self._position_z_mm
+                    self._sim_move_start = time.time()
+                    self.get_logger().info('[SIM] Homing X axis')
+            return
+
+        # Handle DC_SPEED commands (works in both modes for Z tracking)
+        if cmd_upper.startswith('DC_SPEED,'):
             try:
                 # Parse the speed percent
                 parts = cmd.split(',')
