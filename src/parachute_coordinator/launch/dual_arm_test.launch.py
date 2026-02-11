@@ -191,6 +191,7 @@ def generate_launch_description():
             'robot_model': LaunchConfiguration('robot_model'),
             'robot_name': LaunchConfiguration('robot_model'),
             'use_sim': LaunchConfiguration('main_arm_sim'),
+            'test_mode': LaunchConfiguration('main_arm_sim'),  # Only test mode when simulating
         }],
         condition=IfCondition(LaunchConfiguration('enable_main_arm'))
     )
