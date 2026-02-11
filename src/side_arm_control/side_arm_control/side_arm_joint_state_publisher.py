@@ -9,10 +9,10 @@ for the robot_state_publisher to move the URDF.
 This node is agnostic to whether the state comes from real hardware
 or simulation - it just converts whatever state it receives.
 
-Joint mapping:
-  - joint_x: x_mm / 1000.0 (horizontal, prismatic)
+Joint mapping (with axis corrections for URDF):
+  - joint_x: -x_mm / 1000.0 (horizontal, prismatic, negated for URDF axis)
   - joint_y: y_mm / 1000.0 (vertical, prismatic)
-  - joint_z: z_mm / 1000.0 (depth, prismatic)
+  - joint_z: -z_mm / 1000.0 (depth, prismatic, negated for URDF orientation)
   - joint_servo: servo_angle (rotation, revolute)
 """
 
@@ -37,6 +37,7 @@ class SideArmJointStatePublisher(Node):
         self.y_m = 0.0
         self.z_m = 0.0
         self.servo_rad = 0.0
+        self.servo_offset_us = 0  # Track servo offset in microseconds for simulation
         self.last_state_time = self.get_clock().now()
         self.state_received = False
 
@@ -63,12 +64,21 @@ class SideArmJointStatePublisher(Node):
             10
         )
 
+        # Subscriber for commands (to track servo in simulation mode)
+        self.cmd_sub = self.create_subscription(
+            String,
+            '/side_arm/command',
+            self.command_callback,
+            10
+        )
+
         # Timer for publishing joint states
         publish_rate = self.get_parameter('publish_rate').value
         self.timer = self.create_timer(1.0 / publish_rate, self.publish_joint_states)
 
         self.get_logger().info('Side Arm Joint State Publisher initialized')
         self.get_logger().info('  Subscribing to /side_arm/parsed_state')
+        self.get_logger().info('  Subscribing to /side_arm/command (for servo simulation)')
         self.get_logger().info(f'  Publishing at {publish_rate} Hz')
 
     def state_callback(self, msg: SideArmState):
@@ -80,7 +90,7 @@ class SideArmJointStatePublisher(Node):
         self.state_received = True
 
     def raw_state_callback(self, msg: String):
-        """Handle raw state message to extract servo angle."""
+        """Handle raw state message to extract servo angle (hardware mode)."""
         try:
             # Parse: "STATE {"l1":0,"l2":0,"l3":0,"s1":123,"s2":456,"dc":0,"servo":50}"
             data = msg.data
@@ -88,11 +98,24 @@ class SideArmJointStatePublisher(Node):
                 json_str = data[6:]  # Remove "STATE " prefix
                 state = json.loads(json_str)
                 if 'servo' in state:
-                    servo_offset_us = state['servo']
+                    self.servo_offset_us = state['servo']
                     servo_scale = self.get_parameter('servo_scale').value
-                    self.servo_rad = servo_offset_us * servo_scale
+                    self.servo_rad = self.servo_offset_us * servo_scale
         except (json.JSONDecodeError, KeyError, ValueError):
             pass  # Ignore parse errors
+
+    def command_callback(self, msg: String):
+        """Track SERVO commands for simulation mode."""
+        cmd = msg.data.strip().upper()
+        if cmd.startswith('SERVO,'):
+            try:
+                parts = msg.data.strip().split(',')
+                if len(parts) >= 2:
+                    self.servo_offset_us = int(parts[1])
+                    servo_scale = self.get_parameter('servo_scale').value
+                    self.servo_rad = self.servo_offset_us * servo_scale
+            except (ValueError, IndexError):
+                pass
 
     def publish_joint_states(self):
         """Publish joint states for URDF."""
@@ -100,7 +123,10 @@ class SideArmJointStatePublisher(Node):
         js = JointState()
         js.header.stamp = self.get_clock().now().to_msg()
         js.name = ['joint_x', 'joint_y', 'joint_z', 'joint_servo']
-        js.position = [self.x_m, self.y_m, self.z_m, self.servo_rad]
+        # Apply axis corrections for URDF orientation:
+        # - X is negated because URDF joint_x has axis="-1 0 0"
+        # - Z is negated to match the side_arm_origin frame orientation
+        js.position = [-self.x_m, self.y_m, -self.z_m, self.servo_rad]
         js.velocity = []
         js.effort = []
 
