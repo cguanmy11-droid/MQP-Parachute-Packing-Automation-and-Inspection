@@ -218,8 +218,9 @@
   </joint>
 
   <!-- ==================== CAMERA FRAME ==================== -->
-  <!-- Camera link - fixed offset from hook -->
-  <link name="camera_link">
+  <!-- Camera frame - used by detection_simulator and loop_visualizer -->
+  <!-- Named 'camera_frame' to match expected TF frame name -->
+  <link name="camera_frame">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
@@ -230,11 +231,12 @@
   </link>
 
   <!-- Fixed joint from Y carriage to camera -->
-  <!-- Camera looks "forward" along its +Z axis toward where loops should be detected -->
+  <!-- Camera +Z axis should point toward loops (toward -Y in side_arm_origin frame) -->
+  <!-- Rotation: roll=90° to align camera Z with the direction toward loops -->
   <joint name="y_carriage_to_camera" type="fixed">
     <parent link="y_carriage_link"/>
-    <child link="camera_link"/>
-    <origin xyz="0 0 0.05" rpy="0 3.1416 0"/>
+    <child link="camera_frame"/>
+    <origin xyz="0 -0.05 0" rpy="1.5708 0 0"/>
   </joint>
 
 </robot>

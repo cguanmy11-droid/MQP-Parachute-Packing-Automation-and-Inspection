@@ -312,13 +312,13 @@ def generate_launch_description():
             # TF publishing
             'publish_hook_tf': True,
             'hook_frame_id': 'side_arm_hook',
-            # Camera frame (child of hook) - adjust these to calibrate camera position
-            # Camera convention: +Z is forward (looking direction), +X right, +Y down
-            'publish_camera_tf': True,
+            # Camera frame is now published by URDF robot_state_publisher (attached to y_carriage)
+            # Set to False to avoid TF conflict with URDF's camera_frame
+            'publish_camera_tf': False,
             'camera_frame_id': 'camera_frame',
-            'camera_offset_x': 0.0,    # Forward from hook
-            'camera_offset_y': 0.0,    # Left/right from hook
-            'camera_offset_z': 0.05,   # Distance from hook tip
+            'camera_offset_x': 0.0,    # Not used when publish_camera_tf is False
+            'camera_offset_y': 0.0,
+            'camera_offset_z': 0.05,
             # Rotate camera to look toward the ground truth loops
             # These values need tuning based on actual setup
             'camera_roll': 0.0,
@@ -442,8 +442,8 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
 
-    # NOTE: camera_frame TF is now published dynamically by side_arm_visualizer
-    # as a child of side_arm_hook, so it moves with the side arm
+    # NOTE: camera_frame TF is now published by URDF robot_state_publisher
+    # (attached to y_carriage_link, so it moves with X/Y but not Z)
 
     # ==================== PERCEPTION VISUALIZATION NODES ====================
 
@@ -570,7 +570,7 @@ def generate_launch_description():
         frame_tf,
         world_to_base_fallback_tf,
         side_arm_tf,
-        # camera_frame is now published by side_arm_visualizer
+        # camera_frame is published by URDF robot_state_publisher (side_arm)
 
         # Perception visualization
         loop_ground_truth,
