@@ -15,6 +15,7 @@ from std_msgs.msg import ColorRGBA
 from parachute_interfaces.msg import DetectedLoops
 import tf2_ros
 from tf2_geometry_msgs import do_transform_point
+from builtin_interfaces.msg import Time
 
 
 class LoopVisualizerNode(Node):
@@ -49,6 +50,7 @@ class LoopVisualizerNode(Node):
 
         # Publisher for RViz markers
         self.marker_pub = self.create_publisher(MarkerArray, '/detected_loop_markers', 10)
+        self.grid_pub = self.create_publisher(MarkerArray, '/camera_fov_grid', 10)
 
         # Subscriber for detected loops
         self.loops_sub = self.create_subscription(
@@ -62,9 +64,11 @@ class LoopVisualizerNode(Node):
         self.current_loops = []
         self.current_loops_frame = ''
         self.last_msg_time = self.get_clock().now()
+        self._had_detections = False
 
         # Publish markers at steady rate
         self.timer = self.create_timer(0.1, self.publish_markers)  # 10 Hz
+        self.grid_timer = self.create_timer(0.5, self.publish_grid)  # slower rate is fine
 
         self.get_logger().info('Loop Visualizer Node initialized')
         self.get_logger().info(f'  Input frame: {self.get_parameter("input_frame_id").value}')
@@ -113,13 +117,6 @@ class LoopVisualizerNode(Node):
         output_frame = self.get_parameter('output_frame_id').value
         input_frame = self.get_parameter('input_frame_id').value
         stamp = self.get_clock().now().to_msg()
-
-        # Add grid marker in world frame (X-Z plane)
-        # Grid is now in world frame so no TF lookup needed
-        if self.get_parameter('grid_enabled').value:
-            grid_marker = self.create_grid_marker(input_frame, stamp)
-            if grid_marker:
-                marker_array.markers.append(grid_marker)
 
         # Get marker parameters
         scale = self.get_parameter('marker_scale').value
@@ -250,6 +247,53 @@ class LoopVisualizerNode(Node):
             marker_array.markers.append(text_marker)
 
         self.marker_pub.publish(marker_array)
+
+    def publish_grid(self):
+        if not self.get_parameter('grid_enabled').value:
+            return
+        marker_array = MarkerArray()
+        grid_marker = self.create_grid_marker('camera_frame', Time())
+        if grid_marker:
+            grid_marker.lifetime.sec = 0  # persistent
+            marker_array.markers.append(grid_marker)
+
+        stamp = Time()
+        grid_z = self.get_parameter('grid_offset_z').value
+
+        if len(self.current_loops) > 0:
+            self._had_detections = True
+            for i, loop in enumerate(self.current_loops):
+                pos = loop.pose.pose.position
+
+                if pos.z <= 0.001:
+                    continue
+
+                dot = Marker()
+                dot.header.frame_id = 'camera_frame'
+                dot.header.stamp = stamp
+                dot.ns = 'grid_detections'
+                dot.id = i
+                dot.type = Marker.SPHERE
+                dot.action = Marker.ADD
+                dot.pose.position = Point(x=pos.x, y=pos.y, z=grid_z)
+                dot.pose.orientation.w = 1.0
+                dot.scale.x = 0.008
+                dot.scale.y = 0.008
+                dot.scale.z = 0.002
+                dot.color = ColorRGBA(r=1.0, g=0.3, b=0.3, a=0.9)
+                dot.lifetime.sec = 0  # persistent until cleared
+                marker_array.markers.append(dot)
+        elif getattr(self, '_had_detections', False):
+            # Only clear once when detections disappear
+            clear = Marker()
+            clear.header.frame_id = 'camera_frame'
+            clear.header.stamp = stamp
+            clear.ns = 'grid_detections'
+            clear.action = Marker.DELETEALL
+            marker_array.markers.append(clear)
+            self._had_detections = False
+
+        self.grid_pub.publish(marker_array)
 
     def create_grid_marker(self, frame_id: str, stamp) -> Marker:
         """Create a reference grid marker in camera_frame to show camera field of view.
