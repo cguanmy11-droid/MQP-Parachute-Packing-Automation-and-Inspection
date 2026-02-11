@@ -9,10 +9,13 @@ from rclpy.node import Node
 from rclpy.action import ActionServer
 from parachute_interfaces.action import ExecuteTrajectory
 from parachute_interfaces.msg import ArmStatus
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, Twist
+import numpy as np
+import modern_robotics as mr
 from std_msgs.msg import String, Float32
 from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
 import time
+from interbotix_xs_msgs.msg import JointSingleCommand
 
 class MainArmInterfaceNode(Node):
     def __init__(self):
@@ -26,12 +29,24 @@ class MainArmInterfaceNode(Node):
         self.declare_parameter('moving_time', 2.0)  # Time for each movement
         self.declare_parameter('accel_time', 0.5)   # Acceleration time
 
+        # Joystick control timing - must be fast for responsive feel
+        self.declare_parameter('joy_moving_time', 0.08)
+        self.declare_parameter('joy_accel_time', 0.04)
+        self.joy_moving_time = self.get_parameter('joy_moving_time').value
+        self.joy_accel_time = self.get_parameter('joy_accel_time').value
+
+        # Latest joystick command (non-blocking storage)
+        self.latest_ee_increment = None
+        self.joy_active = False
+
         self.test_mode = self.get_parameter('test_mode').value
         self.use_sim = self.get_parameter('use_sim').value
         robot_model = self.get_parameter('robot_model').value
         robot_name = self.get_parameter('robot_name').value
         moving_time = self.get_parameter('moving_time').value
         accel_time = self.get_parameter('accel_time').value
+        self.joy_moving_time = self.get_parameter('joy_moving_time').value
+        self.joy_accel_time = self.get_parameter('joy_accel_time').value
         
         self.bot = None
 
@@ -57,6 +72,15 @@ class MainArmInterfaceNode(Node):
                 
                 # Go to home pose on startup
                 self.bot.arm.go_to_home_pose()
+                # Gripper position control
+                self.declare_parameter('gripper_step', 0.003)    # increment per X/Y press
+                self.declare_parameter('gripper_open', 0.037)    # fully open position
+                self.declare_parameter('gripper_closed', 0.015)  # fully closed position
+
+                self.gripper_pwm = 0          # current PWM (0 = stopped)
+                self.gripper_pwm_max = 350    # max close force
+                self.gripper_pwm_step = 50    # step per X/Y press
+
                 self.current_pose_name = 'home'
             except Exception as e:
                 self.get_logger().error(f'Failed to initialize robot: {e}')
@@ -72,10 +96,14 @@ class MainArmInterfaceNode(Node):
         # Subscribers for simple pose and gripper commands
         self.pose_cmd_sub = self.create_subscription(String, '/main_arm/pose_command', self.pose_command_callback, 10)
         self.pose_cmd_sub = self.create_subscription(String, '/main_arm/gripper_command', self.gripper_command_callback, 10)
-        self.gripper_effort_sub = self.create_subscription(Float32, '/main_arm/gripper_effort', self.gripper_effort_callback, 10)
+        # self.gripper_effort_sub = self.create_subscription(Float32, '/main_arm/gripper_effort', self.gripper_effort_callback, 10)
+        self.ee_increment_sub = self.create_subscription(Twist, '/main_arm/ee_increment', self.ee_increment_callback, 10)
         # Add this subscriber for testing positions
         self.test_position_sub = self.create_subscription(Pose, '/main_arm/test_position', self.test_position_callback, 10)
-        
+        # Timer to process joystick commands - runs faster than the Xbox publishes
+        # so we never miss a command. Only processes if a new command is waiting.
+        self.joy_timer = self.create_timer(0.05, self.process_joy_increment)
+
         # Publisher for arm and pose status
         self.status_publisher = self.create_publisher(ArmStatus, '/main_arm/status', 10)
         self.simple_status_publisher = self.create_publisher(String, '/main_arm/simple_status', 10)
@@ -83,6 +111,7 @@ class MainArmInterfaceNode(Node):
         
         # Timer to publish status
         self.timer = self.create_timer(1.0, self.publish_status)
+        self.gripper_pwm_pub = self.create_publisher(JointSingleCommand, '/wx200/commands/joint_single', 10)
 
         # State tracking
         self.current_state = ArmStatus.STATE_IDLE
@@ -113,7 +142,7 @@ class MainArmInterfaceNode(Node):
                 msg.current_pose = pose_msg
                 
                 # Also publish to separate topic
-                self.pose_pub.publish(pose_msg)
+                self.pose_publisher.publish(pose_msg)
             except:
                 msg.current_pose = Pose()
         else:
@@ -249,37 +278,185 @@ class MainArmInterfaceNode(Node):
             self.get_logger().error(f'Failed to move to {command}: {e}')
     
     def gripper_command_callback(self, msg):
-        """Handle gripper open/close commands"""
+        """Gripper control via PWM: open/close snap, inc/dec step"""
         command = msg.data.lower().strip()
         self.get_logger().info(f'Received gripper command: {command}')
-        
-        if self.bot is None and not self.use_sim:
-            self.get_logger().warn('No robot available')
+
+        if self.bot is None:
+            if self.test_mode:
+                self.get_logger().info(f'TEST: gripper {command}')
             return
-        
-        if self.use_sim:
-            self.get_logger().warn('Gripper commands not yet implemented for simulation')
-            return
-        
+
         try:
             if command == 'open':
-                self.bot.gripper.open()
-                self.get_logger().info('Gripper opened')
-                
+                self.bot.gripper.release()
+                self.gripper_pwm = 0
+                self.get_logger().info('Gripper OPEN (release)')
+
             elif command == 'close':
-                self.bot.gripper.close(effort=self.gripper_effort)
-                self.get_logger().info(f'Gripper closed with effort {self.gripper_effort:.2f}')
-                
+                self.bot.gripper.grasp()
+                self.gripper_pwm = self.gripper_pwm_max
+                self.get_logger().info('Gripper CLOSE (full grasp)')
+
+            elif command == 'inc':
+                self.gripper_pwm = max(0, self.gripper_pwm - self.gripper_pwm_step)
+                cmd = JointSingleCommand()
+                cmd.name = 'gripper'
+                cmd.cmd = float(self.gripper_pwm)
+                self.gripper_pwm_pub.publish(cmd)
+                self.get_logger().info(f'Gripper PWM: {self.gripper_pwm}')
+
+            elif command == 'dec':
+                self.gripper_pwm = min(
+                    self.gripper_pwm_max,
+                    self.gripper_pwm + self.gripper_pwm_step)
+                cmd = JointSingleCommand()
+                cmd.name = 'gripper'
+                cmd.cmd = float(self.gripper_pwm)
+                self.gripper_pwm_pub.publish(cmd)
+                self.get_logger().info(f'Gripper PWM: {self.gripper_pwm}')
+
             else:
                 self.get_logger().warn(f'Unknown gripper command: {command}')
-                
+
         except Exception as e:
             self.get_logger().error(f'Gripper command failed: {e}')
     
-    def gripper_effort_callback(self, msg):
-        """Update gripper effort setting"""
-        self.gripper_effort = max(0.0, min(1.0, msg.data))
-        self.get_logger().info(f'Gripper effort set to: {self.gripper_effort:.2f}')
+    def ee_increment_callback(self, msg):
+        """
+        NON-BLOCKING: Just store the latest command.
+        The joy_timer will process it.
+        """
+        self.latest_ee_increment = msg
+
+        # Switch to fast timing on first joystick input
+        if not self.joy_active and self.bot is not None:
+            self.joy_active = True
+            self.bot.arm.set_trajectory_time(
+                moving_time=self.joy_moving_time,
+                accel_time=self.joy_accel_time
+            )
+            self.get_logger().info(
+                f'Joystick control active (moving_time={self.joy_moving_time}s)')
+
+
+    def process_joy_increment(self):
+        """
+        ALL movement via direct joint control = all smooth.
+
+        Twist mapping:
+            linear.x/y/z    = EE translation (Jacobian → joint increments)
+            angular.x        = wrist_rotate joint (direct)
+            angular.y        = wrist_angle joint (direct)
+            angular.z        = waist joint (direct)
+
+        WX200 joint indices: 0=waist, 1=shoulder, 2=elbow, 3=wrist_angle, 4=wrist_rotate
+        """
+        import numpy as np
+        import modern_robotics as mr
+
+        msg = self.latest_ee_increment
+        if msg is None:
+            if self.joy_active:
+                self._joy_idle_count = getattr(self, '_joy_idle_count', 0) + 1
+                if self._joy_idle_count > 20:
+                    self.joy_active = False
+                    self._joy_idle_count = 0
+                    if self.bot is not None:
+                        moving_time = self.get_parameter('moving_time').value
+                        accel_time = self.get_parameter('accel_time').value
+                        self.bot.arm.set_trajectory_time(
+                            moving_time=moving_time,
+                            accel_time=accel_time
+                        )
+                        self.get_logger().info('Joystick idle - restored normal timing')
+            return
+
+        self.latest_ee_increment = None
+        self._joy_idle_count = 0
+
+        if self.bot is None:
+            if self.test_mode:
+                self.get_logger().info(
+                    f'TEST: dx={msg.linear.x:.4f} dz={msg.linear.z:.4f}',
+                    throttle_duration_sec=0.5)
+            return
+
+        try:
+            dx = msg.linear.x
+            dy = msg.linear.y
+            dz = msg.linear.z
+            d_wrist_rotate = msg.angular.x   # Right Stick X
+            d_wrist_angle = msg.angular.y    # Right Stick Y
+            dwaist = msg.angular.z           # Triggers
+
+            # Nothing to do?
+            if not any(v != 0.0 for v in [dx, dy, dz, d_wrist_rotate, d_wrist_angle, dwaist]):
+                return
+
+            # Get current joint positions
+            # WX200: [waist, shoulder, elbow, wrist_angle, wrist_rotate]
+            current_joints = list(self.bot.arm.get_joint_commands())
+
+            # ── Direct joint control: waist, wrist_angle, wrist_rotate ──
+            if dwaist != 0.0:
+                current_joints[0] += dwaist          # waist
+            if d_wrist_angle != 0.0:
+                current_joints[3] += d_wrist_angle   # wrist_angle
+            if d_wrist_rotate != 0.0:
+                current_joints[4] += d_wrist_rotate  # wrist_rotate
+
+            # ── Translation: Jacobian → joint increments ──
+            if any(v != 0.0 for v in [dx, dy, dz]):
+                joint_cmds = self.bot.arm.get_joint_commands()
+                jacobian = mr.JacobianSpace(
+                    self.bot.arm.robot_des.Slist,
+                    joint_cmds
+                )
+
+                # modern_robotics twist: [wx, wy, wz, vx, vy, vz]
+                # Only translation, no rotation in the twist
+                ee_twist = np.array([0.0, 0.0, 0.0, dx, dy, dz])
+
+                # Damped least squares for stability near singularities
+                damping = 0.01
+                J_JT = jacobian @ jacobian.T
+                J_pinv = jacobian.T @ np.linalg.inv(J_JT + damping**2 * np.eye(6))
+
+                joint_deltas = J_pinv @ ee_twist
+
+                for i in range(len(joint_deltas)):
+                    # Skip joints we already set directly
+                    if i == 0 and dwaist != 0.0:
+                        continue
+                    if i == 3 and d_wrist_angle != 0.0:
+                        continue
+                    if i == 4 and d_wrist_rotate != 0.0:
+                        continue
+                    if i < len(current_joints):
+                        current_joints[i] += joint_deltas[i]
+
+            # ── One single call, all joints at once, smooth ──
+            self.bot.arm.set_joint_positions(current_joints)
+
+        except Exception as e:
+            self.get_logger().warn(
+                f'Joy increment failed: {e}',
+                throttle_duration_sec=1.0)
+    
+    # def gripper_effort_callback(self, msg):
+    #     """Update gripper effort setting"""
+    #     self.gripper_effort = max(0.0, min(1.0, msg.data))
+    #     self.get_logger().info(f'Gripper effort set to: {self.gripper_effort:.2f}')
+
+    #     if self.bot is None and not self.use_sim:
+    #         self.get_logger().warn('No robot available')
+    #         return
+        
+    #     try:
+    #         self.bot.gripper.set_pressure(self.gripper_effort)
+    #     except Exception as e:
+    #         self.get_logger().error(f'Gripper command failed: {e}')
     
     # Make sure shut down is clean exit
     def shutdown(self):
@@ -447,7 +624,10 @@ def main(args=None):
     finally:
         node.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     main()

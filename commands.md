@@ -101,3 +101,5 @@ For running using the dual arm launch and in simulation
 
   # Terminal 2: Run manual jog for side arm
   ros2 run side_arm_control manual_jog
+
+  # Send Coordinate
