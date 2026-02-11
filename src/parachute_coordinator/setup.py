@@ -30,8 +30,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-		'packing_coordinator_node = parachute_coordinator.packing_coordinator_node:main',
-        'packing_demo_node = parachute_coordinator.packing_demo_node:main',
+            'packing_coordinator_node = parachute_coordinator.packing_coordinator_node:main',
+            'packing_demo_node = parachute_coordinator.packing_demo_node:main',
+            'full_stow_demo_node = parachute_coordinator.full_stow_demo_node:main',
         ],
     },
 )
