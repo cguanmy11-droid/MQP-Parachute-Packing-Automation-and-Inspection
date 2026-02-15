@@ -39,8 +39,18 @@ class MainArmInterfaceNode(Node):
         self.latest_ee_increment = None
         self.joy_active = False
 
-        self.test_mode = self.get_parameter('test_mode').value
-        self.use_sim = self.get_parameter('use_sim').value
+        # Handle parameters as either bool or string (from LaunchConfiguration)
+        test_mode_val = self.get_parameter('test_mode').value
+        if isinstance(test_mode_val, bool):
+            self.test_mode = test_mode_val
+        else:
+            self.test_mode = str(test_mode_val).lower() == 'true'
+
+        use_sim_val = self.get_parameter('use_sim').value
+        if isinstance(use_sim_val, bool):
+            self.use_sim = use_sim_val
+        else:
+            self.use_sim = str(use_sim_val).lower() == 'true'
         robot_model = self.get_parameter('robot_model').value
         robot_name = self.get_parameter('robot_name').value
         moving_time = self.get_parameter('moving_time').value

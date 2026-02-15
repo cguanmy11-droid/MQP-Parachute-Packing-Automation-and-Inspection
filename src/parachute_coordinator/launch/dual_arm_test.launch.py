@@ -187,6 +187,8 @@ def generate_launch_description():
     )
 
     # Main arm interface node
+    # NOTE: test_mode=true means robot is NOT initialized (just logs commands)
+    #       use_sim=true means robot IS initialized but controls simulation
     main_arm_interface = Node(
         package='main_arm_control',
         executable='main_arm_interface_node',
@@ -196,7 +198,7 @@ def generate_launch_description():
             'robot_model': LaunchConfiguration('robot_model'),
             'robot_name': LaunchConfiguration('robot_model'),
             'use_sim': LaunchConfiguration('main_arm_sim'),
-            'test_mode': LaunchConfiguration('main_arm_sim'),  # Only test mode when simulating
+            'test_mode': False,  # Always false so robot is initialized (sim or hardware)
         }],
         condition=IfCondition(LaunchConfiguration('enable_main_arm'))
     )
