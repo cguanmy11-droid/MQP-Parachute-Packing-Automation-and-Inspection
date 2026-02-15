@@ -42,7 +42,7 @@ Visualization Manager:
         Durability Policy: Volatile
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: robot_description
+        Value: /wx200/robot_description
       Enabled: true
       Links:
         All Links Enabled: true
@@ -318,14 +318,14 @@ Visualization Manager:
         Value: /main_arm/trajectory_waypoints
       Shape:
         Alpha: 1
-        Axes Length: 0.05
-        Axes Radius: 0.01
+        Axes Length: 0.01
+        Axes Radius: 0.005
         Color: 0; 255; 0
-        Head Length: 0.03
-        Head Radius: 0.015
-        Shaft Length: 0.05
+        Head Length: 0.015
+        Head Radius: 0.01
+        Shaft Length: 0.005
         Shaft Radius: 0.008
-        Value: Axes
+        Value: Arrow
       Value: true
   Enabled: true
   Global Options:
