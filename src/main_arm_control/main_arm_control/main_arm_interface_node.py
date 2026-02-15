@@ -9,7 +9,7 @@ from rclpy.node import Node
 from rclpy.action import ActionServer
 from parachute_interfaces.action import ExecuteTrajectory
 from parachute_interfaces.msg import ArmStatus
-from geometry_msgs.msg import Pose, Twist
+from geometry_msgs.msg import Pose, Twist, PoseArray
 import numpy as np
 import modern_robotics as mr
 from std_msgs.msg import String, Float32
@@ -118,6 +118,9 @@ class MainArmInterfaceNode(Node):
         self.status_publisher = self.create_publisher(ArmStatus, '/main_arm/status', 10)
         self.simple_status_publisher = self.create_publisher(String, '/main_arm/simple_status', 10)
         self.pose_publisher = self.create_publisher(Pose, '/main_arm/current_pose', 10)
+
+        # Publisher for trajectory waypoints visualization (PoseArray for RViz)
+        self.waypoints_pub = self.create_publisher(PoseArray, '/main_arm/trajectory_waypoints', 10)
         
         # Timer to publish status
         self.timer = self.create_timer(1.0, self.publish_status)
@@ -172,10 +175,18 @@ class MainArmInterfaceNode(Node):
         """Action callback - simulate trajectory execution"""
         num_waypoints = len(goal_handle.request.waypoints)
         self.get_logger().info(f'Executing trajectory with {num_waypoints} waypoints')
-        
+
+        # Publish waypoints as PoseArray for RViz visualization
+        pose_array = PoseArray()
+        pose_array.header.stamp = self.get_clock().now().to_msg()
+        pose_array.header.frame_id = 'world'
+        pose_array.poses = list(goal_handle.request.waypoints)
+        self.waypoints_pub.publish(pose_array)
+        self.get_logger().info(f'Published {num_waypoints} waypoints to /main_arm/trajectory_waypoints')
+
         self.current_state = ArmStatus.STATE_EXECUTING
         feedback_msg = ExecuteTrajectory.Feedback()
-        
+
         try:
             # For each waypoint
             for i, waypoint in enumerate(goal_handle.request.waypoints):

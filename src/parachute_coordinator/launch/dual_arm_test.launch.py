@@ -57,6 +57,13 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    # Load custom RViz config
+    rviz_config_path = os.path.join(
+        get_package_share_directory('parachute_coordinator'),
+        'config',
+        'dual_arm.rviz'
+    )
+
     # Load frame URDF
     frame_urdf_path = os.path.join(
         get_package_share_directory('main_arm_control'),
@@ -170,6 +177,7 @@ def generate_launch_description():
     # ==================== MAIN ARM NODES ====================
 
     # Interbotix arm control (hardware or sim)
+    # NOTE: use_rviz is set to false here - we launch our own RViz with custom config
     main_arm_control_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -181,9 +189,19 @@ def generate_launch_description():
         launch_arguments={
             'robot_model': LaunchConfiguration('robot_model'),
             'use_sim': LaunchConfiguration('main_arm_sim'),
-            'use_rviz': LaunchConfiguration('use_rviz'),
+            'use_rviz': 'false',  # We launch our own RViz with custom config
         }.items(),
         condition=IfCondition(LaunchConfiguration('enable_main_arm'))
+    )
+
+    # Custom RViz with dual arm config (includes trajectory waypoints visualization)
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        arguments=['-d', rviz_config_path],
+        output='screen',
+        condition=IfCondition(LaunchConfiguration('use_rviz'))
     )
 
     # Main arm interface node
@@ -587,6 +605,9 @@ def generate_launch_description():
         main_arm_interface,
         main_arm_planner,
         main_arm_teleop,
+
+        # RViz with custom config
+        rviz_node,
 
         # Side arm nodes
         side_arm_serial_bridge,
