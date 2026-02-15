@@ -482,6 +482,7 @@ class XboxArmController(Node):
                 self.record_timer = None
             self.is_recording = False
             self._write_waypoints_to_file()
+            self._print_motion_pattern_code()
             self.get_logger().info(
                 f'⏹ Recording stopped. {len(self.waypoints)} waypoints saved.')
         else:
@@ -495,6 +496,71 @@ class XboxArmController(Node):
     def _record_tick(self):
         """Timer callback for continuous recording."""
         self.save_waypoint()
+
+    def _convert_to_motion_pattern(self):
+        """Convert recorded waypoints to relative motion pattern format."""
+        if len(self.waypoints) < 2:
+            return None
+
+        # Use first waypoint as reference (reference_point="start")
+        ref = self.waypoints[0]['ee_pose']
+        if ref is None:
+            self.get_logger().warn('First waypoint has no EE pose')
+            return None
+
+        relative_waypoints = []
+        for wp in self.waypoints:
+            ee = wp.get('ee_pose')
+            if ee is None:
+                continue
+
+            rel_wp = {
+                'dx': round(ee['x'] - ref['x'], 4),
+                'dy': round(ee['y'] - ref['y'], 4),
+                'dz': round(ee['z'] - ref['z'], 4),
+            }
+
+            # Include orientation (convert quaternion to pitch for simplicity)
+            # For gripper pointing down: pitch ≈ -π/2
+            qw = ee.get('qw', 1.0)
+            qy = ee.get('qy', 0.0)
+            # Simple pitch extraction for Y-axis rotation
+            pitch = -2.0 * math.atan2(qy, qw)
+            rel_wp['pitch'] = round(pitch, 4)
+
+            relative_waypoints.append(rel_wp)
+
+        return relative_waypoints
+
+    def _print_motion_pattern_code(self):
+        """Print Python code for adding pattern to BUILTIN_PATTERNS."""
+        relative = self._convert_to_motion_pattern()
+        if not relative:
+            return
+
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        name = f'recorded_{timestamp}'
+
+        self.get_logger().info('')
+        self.get_logger().info('=' * 60)
+        self.get_logger().info('MOTION PATTERN CODE - Copy to motion_pattern_manager.py')
+        self.get_logger().info('=' * 60)
+        print(f'\n    "{name}": MotionPattern(')
+        print(f'        name="{name}",')
+        print(f'        description="Recorded motion pattern",')
+        print(f'        reference_point="start",')
+        print(f'        waypoints=[')
+
+        for i, wp in enumerate(relative):
+            parts = [f"dx={wp['dx']}", f"dy={wp['dy']}", f"dz={wp['dz']}"]
+            if 'pitch' in wp:
+                parts.append(f"pitch={wp['pitch']}")
+            print(f'            PatternWaypoint({", ".join(parts)}),  # Waypoint {i+1}')
+
+        print(f'        ],')
+        print(f'        speed_factor=0.4')
+        print(f'    ),\n')
+        self.get_logger().info('=' * 60)
 
     def _write_waypoints_to_file(self):
         """Write current waypoints list to a JSON file."""
@@ -530,6 +596,21 @@ class XboxArmController(Node):
             json.dump(data, f, indent=2)
 
         self.get_logger().info(f'💾 Saved to {filename}')
+
+        # Also save as motion pattern JSON
+        relative = self._convert_to_motion_pattern()
+        if relative:
+            pattern_data = {
+                'name': f'recorded_{timestamp}',
+                'description': 'Recorded motion pattern',
+                'reference_point': 'start',
+                'speed_factor': 0.4,
+                'waypoints': relative
+            }
+            pattern_filename = os.path.join(self.waypoint_dir, f'pattern_{timestamp}.json')
+            with open(pattern_filename, 'w') as f:
+                json.dump(pattern_data, f, indent=2)
+            self.get_logger().info(f'💾 Motion pattern saved to {pattern_filename}')
 
     def clear_waypoints(self):
         """Clear all recorded waypoints."""
