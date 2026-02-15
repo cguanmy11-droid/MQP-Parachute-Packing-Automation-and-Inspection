@@ -369,14 +369,30 @@ BUILTIN_PATTERNS = {
         ],
         speed_factor=0.3
     ),
+    # "stow_arc": MotionPattern(
+    #     name="stow_arc",
+    #     description="Arc motion for stowing - approach, sweep, place",
+    #     reference_point="end",
+    #     waypoints=[
+    #         PatternWaypoint(dx=-0.10, dy=0.0, dz=0.10, gripper="open"),  # Approach from side/above
+    #         PatternWaypoint(dx=-0.05, dy=0.0, dz=0.05),  # Arc midpoint
+    #         PatternWaypoint(dx=0.0, dy=0.0, dz=0.0, gripper="close"),  # Target
+    #     ],
+    #     speed_factor=0.4
+    # ),
     "stow_arc": MotionPattern(
-        name="stow_arc",
-        description="Arc motion for stowing - approach, sweep, place",
-        reference_point="end",
+        name="recorded_stow",
+        description="Recorded sweeping stow motion with wider approach",
+        reference_point="start",
         waypoints=[
-            PatternWaypoint(dx=-0.10, dy=0.0, dz=0.10, gripper="open"),  # Approach from side/above
-            PatternWaypoint(dx=-0.05, dy=0.0, dz=0.05),  # Arc midpoint
-            PatternWaypoint(dx=0.0, dy=0.0, dz=0.0, gripper="close"),  # Target
+            PatternWaypoint(dx=0.0, dy=0.0, dz=0.0),        # Start - extended position
+            PatternWaypoint(dx=-0.124, dy=0.0, dz=-0.247),  # Down to surface
+            PatternWaypoint(dx=-0.146, dy=0.0, dz=-0.229),  # Slightly back
+            PatternWaypoint(dx=-0.247, dy=0.084, dz=-0.230),  # Sweep to right
+            PatternWaypoint(dx=-0.244, dy=-0.072, dz=-0.190),  # Sweep to left
+            PatternWaypoint(dx=-0.244, dy=-0.12, dz=-0.190),  # Go wider left
+            PatternWaypoint(dx=-0.15, dy=-0.08, dz=-0.170),   # Further in
+            PatternWaypoint(dx=-0.098, dy=0.001, dz=-0.171),  # Final position
         ],
         speed_factor=0.4
     ),

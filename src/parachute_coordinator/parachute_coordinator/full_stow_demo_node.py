@@ -56,7 +56,7 @@ class FullStowDemoNode(Node):
         self.declare_parameter('side_arm_z_mm', 140.0)
 
         # Motion pattern for main arm
-        self.declare_parameter('stow_pattern', 'stow_arc')
+        self.declare_parameter('stow_pattern', 'recorded_stow')
 
         # Timing
         self.declare_parameter('step_delay', 2.0)  # Delay between steps (seconds)
@@ -114,15 +114,15 @@ class FullStowDemoNode(Node):
         self.current_step = 0
         self.steps = [
             ('init', self.step_init),
-            ('home_main_arm', self.step_home_main_arm),
-            # ('home_side_arm', self.step_home_side_arm),
-            ('move_side_arm', self.step_move_side_arm),
-            ('insert_side_arm', self.step_insert_side_arm),
-            ('rotate_hook_pre', self.step_rotate_hook_pre),
+            # ('home_main_arm', self.step_home_main_arm),
+            # # ('home_side_arm', self.step_home_side_arm),
+            # ('move_side_arm', self.step_move_side_arm),
+            # ('insert_side_arm', self.step_insert_side_arm),
+            # ('rotate_hook_pre', self.step_rotate_hook_pre),
             ('execute_trajectory', self.step_execute_trajectory),
-            ('rotate_hook_post', self.step_rotate_hook_post),
-            ('retract_side_arm', self.step_retract_side_arm),
-            ('complete', self.step_complete),
+            # ('rotate_hook_post', self.step_rotate_hook_post),
+            # ('retract_side_arm', self.step_retract_side_arm),
+            # ('complete', self.step_complete),
         ]
 
         # Wait for services

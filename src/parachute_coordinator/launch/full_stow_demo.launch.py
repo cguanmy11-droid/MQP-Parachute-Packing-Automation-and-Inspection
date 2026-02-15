@@ -62,7 +62,7 @@ def generate_launch_description():
 
     # Motion pattern
     stow_pattern_arg = DeclareLaunchArgument(
-        'stow_pattern', default_value='stow_arc',
+        'stow_pattern', default_value='recorded_stow',
         description='Motion pattern for stowing (stow_arc, approach_vertical, etc.)'
     )
 
