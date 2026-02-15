@@ -21,9 +21,9 @@ Usage:
     # Main arm only (no side arm)
     ros2 launch parachute_coordinator dual_arm_test.launch.py enable_side_arm:=false
 
-    # Side arm simulation mode (URDF moves without hardware):
+    # Side arm pure simulation mode (no serial bridge, URDF moves):
     ros2 launch parachute_coordinator dual_arm_test.launch.py \\
-        side_arm_test_mode:=true enable_main_arm:=false
+        side_arm_sim:=true enable_main_arm:=false
 
     # Side arm hardware + simulation (URDF mirrors AND simulates motion)
     # Useful for seeing what the system sees during real tests
@@ -31,10 +31,9 @@ Usage:
         side_arm_test_mode:=true
 
 Side Arm Motion Modes:
-    - side_arm_test_mode=false: Hardware only. Serial bridge required.
-    - side_arm_test_mode=true + no serial: Simulation only. URDF moves.
-    - side_arm_test_mode=true + serial: Both hardware AND simulation run.
-      This allows RViz to show real-time visualization during tests.
+    - side_arm_sim=false, side_arm_test_mode=false: Hardware only. Serial bridge required.
+    - side_arm_sim=true: Pure simulation. No serial bridge, URDF moves via simulated commands.
+    - side_arm_sim=false, side_arm_test_mode=true: Hybrid. Hardware + simulation run together.
 
 Test with simulated vision (loops in RViz):
     ros2 launch parachute_coordinator dual_arm_test.launch.py \\
@@ -118,10 +117,16 @@ def generate_launch_description():
         description='Enable side arm control'
     )
 
+    side_arm_sim_arg = DeclareLaunchArgument(
+        'side_arm_sim',
+        default_value='false',
+        description='Run side arm in pure simulation mode (no serial bridge)'
+    )
+
     side_arm_test_mode_arg = DeclareLaunchArgument(
         'side_arm_test_mode',
         default_value='false',
-        description='Run side arm in test mode (simulated movements)'
+        description='Run side arm in test mode (simulated movements alongside hardware)'
     )
 
     serial_port_arg = DeclareLaunchArgument(
@@ -244,8 +249,8 @@ def generate_launch_description():
     # ==================== SIDE ARM NODES ====================
 
     # Serial bridge node (communicates with ESP32)
-    # Now launches in BOTH hardware and test modes for hybrid operation
-    # (test_mode enables simulation, but hardware commands still go through if connected)
+    # Only launches when NOT in simulation mode (side_arm_sim=false)
+    # In hybrid mode (side_arm_test_mode=true), both hardware and simulation run
     side_arm_serial_bridge = Node(
         package='side_arm_motor_control_bridge',
         executable='serial_bridge',
@@ -259,17 +264,28 @@ def generate_launch_description():
             'auto_request_state': True,
         }],
         output='screen',
-        condition=IfCondition(LaunchConfiguration('enable_side_arm'))
+        condition=IfCondition(
+            PythonExpression([
+                "'", LaunchConfiguration('enable_side_arm'), "' == 'true' and '",
+                LaunchConfiguration('side_arm_sim'), "' == 'false'"
+            ])
+        )
     )
 
+    # Determine if simulation mode should be enabled (either side_arm_sim or side_arm_test_mode)
+    side_arm_simulation_enabled = PythonExpression([
+        "'", LaunchConfiguration('side_arm_sim'), "' == 'true' or '",
+        LaunchConfiguration('side_arm_test_mode'), "' == 'true'"
+    ])
+
     # Coordinate node (converts mm to motor commands)
-    # In test mode, runs simulation. Hardware commands are also sent if serial bridge is running.
+    # In simulation/test mode, runs simulation. Hardware commands are also sent if serial bridge is running.
     side_arm_coordinate = Node(
         package='side_arm_control',
         executable='coordinate_node',
         name='side_arm_coordinate_node',
         parameters=[{
-            'simulation_mode': LaunchConfiguration('side_arm_test_mode'),  # Enable simulation in test mode
+            'simulation_mode': side_arm_simulation_enabled,  # Enable simulation when sim or test mode
             'sim_speed_mm_per_sec': 50.0,  # Simulation motion speed
             'steps_per_mm_horizontal': 300.0,
             'steps_per_mm_vertical': 100.0,
@@ -291,7 +307,7 @@ def generate_launch_description():
         executable='side_arm_interface_node',
         name='side_arm_interface_node',
         parameters=[{
-            'test_mode': LaunchConfiguration('side_arm_test_mode'),
+            'test_mode': side_arm_simulation_enabled,
             'approach_offset_z': 50.0,
             'insert_depth_z': 30.0,
         }],
@@ -318,8 +334,8 @@ def generate_launch_description():
             # Servo rotation
             'servo_axis': 'pitch',
             'servo_scale': 0.001,
-            # Test mode
-            'test_mode': LaunchConfiguration('side_arm_test_mode'),
+            # Test mode (enabled in sim or test mode)
+            'test_mode': side_arm_simulation_enabled,
             'test_x': 0.0,
             'test_y': 0.0,
             'test_z': 0.0,
@@ -382,7 +398,7 @@ def generate_launch_description():
         parameters=[{
             'servo_scale': 0.001,
             'publish_rate': 50.0,
-            'test_mode': LaunchConfiguration('side_arm_test_mode'),
+            'test_mode': side_arm_simulation_enabled,
             'test_x': 0.15,
             'test_y': 0.10,
             'test_z': 0.05,
@@ -554,6 +570,7 @@ def generate_launch_description():
         controller_type_arg,
         robot_model_arg,
         enable_side_arm_arg,
+        side_arm_sim_arg,
         side_arm_test_mode_arg,
         serial_port_arg,
         use_joint_sliders_arg,
