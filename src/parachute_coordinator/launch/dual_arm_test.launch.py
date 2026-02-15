@@ -195,13 +195,13 @@ def generate_launch_description():
     )
 
     # Custom RViz with dual arm config (includes trajectory waypoints visualization)
+    # Always launch RViz (previously had condition that wasn't working with IncludeLaunchDescription)
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
         name='rviz2',
         arguments=['-d', rviz_config_path],
         output='screen',
-        condition=IfCondition(LaunchConfiguration('use_rviz'))
     )
 
     # Main arm interface node
