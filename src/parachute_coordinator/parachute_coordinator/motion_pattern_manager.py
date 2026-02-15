@@ -11,6 +11,7 @@ Pattern JSON format:
     "name": "stow_arc",
     "description": "Arc motion for stowing lines",
     "reference_point": "end",  # "start", "end", or "center"
+    "anchor_offset": {"x": 0.0, "y": 0.0, "z": 0.05},  # Optional: offset from target to reference waypoint
     "waypoints": [
         {"dx": 0.0, "dy": 0.0, "dz": 0.10, "gripper": "open"},
         {"dx": 0.0, "dy": -0.05, "dz": 0.05},
@@ -18,6 +19,10 @@ Pattern JSON format:
     ],
     "speed_factor": 0.5
 }
+
+anchor_offset: When the pattern is applied to a target (e.g., hook position),
+the reference waypoint will be placed at target + anchor_offset.
+Example: anchor_offset.z = 0.05 means the reference waypoint is 5cm above the hook.
 """
 
 import os
@@ -49,6 +54,14 @@ class PatternWaypoint:
 
 
 @dataclass
+class AnchorOffset:
+    """Offset from target position to the reference waypoint."""
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+
+
+@dataclass
 class MotionPattern:
     """A complete motion pattern with metadata."""
     name: str
@@ -56,6 +69,7 @@ class MotionPattern:
     waypoints: List[PatternWaypoint]
     reference_point: str = "end"  # Which waypoint is the "target"
     speed_factor: float = 0.5
+    anchor_offset: Optional[AnchorOffset] = None  # Offset from target to reference waypoint
     source_file: Optional[str] = None
 
 
@@ -172,12 +186,23 @@ class MotionPatternManager:
         if not waypoints:
             return None
 
+        # Parse anchor_offset if present
+        anchor_offset = None
+        if 'anchor_offset' in data:
+            ao = data['anchor_offset']
+            anchor_offset = AnchorOffset(
+                x=ao.get('x', 0.0),
+                y=ao.get('y', 0.0),
+                z=ao.get('z', 0.0)
+            )
+
         return MotionPattern(
             name=data.get('name', os.path.splitext(os.path.basename(filepath))[0]),
             description=data.get('description', ''),
             waypoints=waypoints,
             reference_point=data.get('reference_point', 'end'),
             speed_factor=data.get('speed_factor', 0.5),
+            anchor_offset=anchor_offset,
             source_file=filepath
         )
 
@@ -215,6 +240,9 @@ class MotionPatternManager:
         - "end": Last waypoint is at target (approach motion)
         - "start": First waypoint is at target (departure motion)
         - "center": Middle waypoint is at target
+
+        If anchor_offset is set, the reference waypoint is placed at
+        target + anchor_offset instead of directly at target.
         """
         waypoints = []
 
@@ -229,10 +257,15 @@ class MotionPatternManager:
         # Get the reference waypoint's offset
         ref_wp = pattern.waypoints[ref_idx]
 
-        # Calculate base position (target minus reference offset)
-        base_x = target.x - ref_wp.dx
-        base_y = target.y - ref_wp.dy
-        base_z = target.z - ref_wp.dz
+        # Apply anchor_offset if present (offset from target to reference waypoint)
+        anchor_x = pattern.anchor_offset.x if pattern.anchor_offset else 0.0
+        anchor_y = pattern.anchor_offset.y if pattern.anchor_offset else 0.0
+        anchor_z = pattern.anchor_offset.z if pattern.anchor_offset else 0.0
+
+        # Calculate base position (target + anchor_offset - reference waypoint offset)
+        base_x = target.x + anchor_x - ref_wp.dx
+        base_y = target.y + anchor_y - ref_wp.dy
+        base_z = target.z + anchor_z - ref_wp.dz
 
         # Generate absolute waypoints
         for wp in pattern.waypoints:
@@ -317,6 +350,14 @@ class MotionPatternManager:
                 for wp in pattern.waypoints
             ]
         }
+
+        # Include anchor_offset if present
+        if pattern.anchor_offset is not None:
+            data["anchor_offset"] = {
+                "x": pattern.anchor_offset.x,
+                "y": pattern.anchor_offset.y,
+                "z": pattern.anchor_offset.z
+            }
 
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         with open(filename, 'w') as f:
