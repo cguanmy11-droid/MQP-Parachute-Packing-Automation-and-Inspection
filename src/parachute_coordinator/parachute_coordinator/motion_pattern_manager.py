@@ -23,9 +23,16 @@ Pattern JSON format:
 import os
 import json
 import glob
+import math
 from typing import List, Dict, Optional, Tuple
 from geometry_msgs.msg import Pose, Point, Quaternion
 from dataclasses import dataclass
+
+try:
+    import tf_transformations
+    HAS_TF_TRANSFORMS = True
+except ImportError:
+    HAS_TF_TRANSFORMS = False
 
 
 @dataclass
@@ -234,11 +241,33 @@ class MotionPatternManager:
             pose.position.y = base_y + wp.dy
             pose.position.z = base_z + wp.dz
 
-            # Default orientation (pointing down for grasping)
-            pose.orientation.x = 0.0
-            pose.orientation.y = 0.707  # 90 degrees pitch
-            pose.orientation.z = 0.0
-            pose.orientation.w = 0.707
+            # Check if waypoint has custom orientation
+            if wp.roll is not None or wp.pitch is not None or wp.yaw is not None:
+                # Use specified orientation (default to 0 for unspecified axes)
+                roll = wp.roll if wp.roll is not None else 0.0
+                pitch = wp.pitch if wp.pitch is not None else -math.pi / 2  # Default to pointing down
+                yaw = wp.yaw if wp.yaw is not None else 0.0
+
+                if HAS_TF_TRANSFORMS:
+                    quat = tf_transformations.quaternion_from_euler(roll, pitch, yaw)
+                    pose.orientation.x = quat[0]
+                    pose.orientation.y = quat[1]
+                    pose.orientation.z = quat[2]
+                    pose.orientation.w = quat[3]
+                else:
+                    # Fallback: simple pitch-only quaternion calculation
+                    pose.orientation.x = 0.0
+                    pose.orientation.y = math.sin(pitch / 2)
+                    pose.orientation.z = 0.0
+                    pose.orientation.w = math.cos(pitch / 2)
+            else:
+                # Default orientation: gripper pointing straight down
+                # For WX200: pitch = -π/2 (-90°) makes gripper point down
+                # Quaternion for -90° pitch rotation: (0, -0.707, 0, 0.707)
+                pose.orientation.x = 0.0
+                pose.orientation.y = -0.7071068  # -sin(45°) for -90° pitch
+                pose.orientation.z = 0.0
+                pose.orientation.w = 0.7071068   # cos(45°) for -90° pitch
 
             waypoints.append(pose)
 
@@ -385,14 +414,15 @@ BUILTIN_PATTERNS = {
         description="Recorded sweeping stow motion with wider approach",
         reference_point="start",
         waypoints=[
-            PatternWaypoint(dx=0.0, dy=0.0, dz=0.0),        # Start - extended position
-            PatternWaypoint(dx=-0.124, dy=0.0, dz=-0.247),  # Down to surface
-            PatternWaypoint(dx=-0.146, dy=0.0, dz=-0.229),  # Slightly back
-            PatternWaypoint(dx=-0.247, dy=0.084, dz=-0.230),  # Sweep to right
-            PatternWaypoint(dx=-0.244, dy=-0.072, dz=-0.190),  # Sweep to left
-            PatternWaypoint(dx=-0.244, dy=-0.12, dz=-0.190),  # Go wider left
-            PatternWaypoint(dx=-0.15, dy=-0.08, dz=-0.170),   # Further in
-            PatternWaypoint(dx=-0.098, dy=0.001, dz=-0.171),  # Final position
+            # pitch=-π/2 = pointing down, yaw controls rotation around vertical axis
+            PatternWaypoint(dx=0.0, dy=0.0, dz=0.0, pitch=-math.pi/2),        # Start - extended, pointing down
+            PatternWaypoint(dx=-0.124, dy=0.0, dz=-0.247, pitch=-math.pi/2),  # Down to surface
+            PatternWaypoint(dx=-0.146, dy=0.0, dz=-0.229, pitch=-math.pi/2),  # Slightly back
+            PatternWaypoint(dx=-0.247, dy=0.084, dz=-0.230, pitch=-math.pi/2, yaw=0.3),  # Sweep to right, angled
+            PatternWaypoint(dx=-0.244, dy=-0.072, dz=-0.190, pitch=-math.pi/2, yaw=-0.3),  # Sweep to left, angled
+            PatternWaypoint(dx=-0.244, dy=-0.12, dz=-0.190, pitch=-math.pi/2, yaw=-0.4),  # Go wider left
+            PatternWaypoint(dx=-0.15, dy=-0.08, dz=-0.170, pitch=-math.pi/2, yaw=-0.2),   # Further in
+            PatternWaypoint(dx=-0.098, dy=0.001, dz=-0.171, pitch=-math.pi/2),  # Final position, straight down
         ],
         speed_factor=0.4
     ),
@@ -424,14 +454,15 @@ BUILTIN_PATTERNS = {
         description="Recorded sweeping stow motion with wider approach",
         reference_point="start",
         waypoints=[
-            PatternWaypoint(dx=0.0, dy=0.0, dz=0.0),        # Start - extended position
-            PatternWaypoint(dx=-0.124, dy=0.0, dz=-0.247),  # Down to surface
-            PatternWaypoint(dx=-0.146, dy=0.0, dz=-0.229),  # Slightly back
-            PatternWaypoint(dx=-0.247, dy=0.084, dz=-0.230),  # Sweep to right
-            PatternWaypoint(dx=-0.244, dy=-0.072, dz=-0.190),  # Sweep to left
-            PatternWaypoint(dx=-0.244, dy=-0.12, dz=-0.190),  # Go wider left
-            PatternWaypoint(dx=-0.15, dy=-0.08, dz=-0.170),   # Further in
-            PatternWaypoint(dx=-0.098, dy=0.001, dz=-0.171),  # Final position
+            # pitch=-π/2 = pointing down, yaw controls rotation around vertical axis
+            PatternWaypoint(dx=0.0, dy=0.0, dz=0.0, pitch=-math.pi/2),        # Start - extended, pointing down
+            PatternWaypoint(dx=-0.124, dy=0.0, dz=-0.247, pitch=-math.pi/2),  # Down to surface
+            PatternWaypoint(dx=-0.146, dy=0.0, dz=-0.229, pitch=-math.pi/2),  # Slightly back
+            PatternWaypoint(dx=-0.247, dy=0.084, dz=-0.230, pitch=-math.pi/2, yaw=0.3),  # Sweep to right, angled
+            PatternWaypoint(dx=-0.244, dy=-0.072, dz=-0.190, pitch=-math.pi/2, yaw=-0.3),  # Sweep to left, angled
+            PatternWaypoint(dx=-0.244, dy=-0.12, dz=-0.190, pitch=-math.pi/2, yaw=-0.4),  # Go wider left
+            PatternWaypoint(dx=-0.15, dy=-0.08, dz=-0.170, pitch=-math.pi/2, yaw=-0.2),   # Further in
+            PatternWaypoint(dx=-0.098, dy=0.001, dz=-0.171, pitch=-math.pi/2),  # Final position, straight down
         ],
         speed_factor=0.4
     ),

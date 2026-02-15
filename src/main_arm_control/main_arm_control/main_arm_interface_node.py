@@ -241,11 +241,31 @@ class MainArmInterfaceNode(Node):
                 
                 # Execute waypoint on real robot
                 if self.bot is not None:
-                    success = self.bot.arm.set_ee_pose_components(
-                        x=waypoint.position.x,
-                        y=waypoint.position.y,
-                        z=waypoint.position.z
-                    )
+                    # Convert quaternion to roll, pitch, yaw for Interbotix
+                    import tf_transformations
+                    quat = [
+                        waypoint.orientation.x,
+                        waypoint.orientation.y,
+                        waypoint.orientation.z,
+                        waypoint.orientation.w
+                    ]
+                    # Check if orientation is specified (non-identity quaternion)
+                    if quat[3] != 0 or any(q != 0 for q in quat[:3]):
+                        roll, pitch, yaw = tf_transformations.euler_from_quaternion(quat)
+                        success = self.bot.arm.set_ee_pose_components(
+                            x=waypoint.position.x,
+                            y=waypoint.position.y,
+                            z=waypoint.position.z,
+                            roll=roll,
+                            pitch=pitch,
+                            yaw=yaw
+                        )
+                    else:
+                        success = self.bot.arm.set_ee_pose_components(
+                            x=waypoint.position.x,
+                            y=waypoint.position.y,
+                            z=waypoint.position.z
+                        )
                     if not success:
                         self.get_logger().warn(f'Waypoint {i+1} unreachable, skipping')
                 else:
