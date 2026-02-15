@@ -138,7 +138,12 @@ class SideArmCoordinateNode(Node):
 
     def _load_parameters(self):
         """Load ROS parameters into instance variables."""
-        self.simulation_mode = self.get_parameter('simulation_mode').value
+        # Handle simulation_mode as either bool or string (from PythonExpression)
+        sim_mode_val = self.get_parameter('simulation_mode').value
+        if isinstance(sim_mode_val, bool):
+            self.simulation_mode = sim_mode_val
+        else:
+            self.simulation_mode = str(sim_mode_val).lower() == 'true'
         self.sim_speed_mm_per_sec = self.get_parameter('sim_speed_mm_per_sec').value
         self.steps_per_mm_horizontal = self.get_parameter('steps_per_mm_horizontal').value
         self.steps_per_mm_vertical = self.get_parameter('steps_per_mm_vertical').value

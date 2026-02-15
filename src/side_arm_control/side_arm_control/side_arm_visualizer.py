@@ -139,7 +139,12 @@ class SideArmVisualizer(Node):
 
     def publish_marker_and_tf(self):
         # Use test position if in test mode or no recent messages
-        test_mode = self.get_parameter('test_mode').value
+        # Handle test_mode as either bool or string (from PythonExpression)
+        test_mode_val = self.get_parameter('test_mode').value
+        if isinstance(test_mode_val, bool):
+            test_mode = test_mode_val
+        else:
+            test_mode = str(test_mode_val).lower() == 'true'
         time_since_msg = (self.get_clock().now() - self.last_msg_time).nanoseconds / 1e9
 
         if test_mode or time_since_msg > 2.0:

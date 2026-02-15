@@ -36,7 +36,12 @@ class SideArmInterfaceNode(Node):
         self.declare_parameter('insert_depth_z', 30.0)      # mm through loop
         self.declare_parameter('side_arm_frame', 'side_arm_origin')  # TF frame for transforms
 
-        self.test_mode = self.get_parameter('test_mode').value
+        # Handle test_mode as either bool or string (from PythonExpression)
+        test_mode_val = self.get_parameter('test_mode').value
+        if isinstance(test_mode_val, bool):
+            self.test_mode = test_mode_val
+        else:
+            self.test_mode = str(test_mode_val).lower() == 'true'
         self.approach_offset_z = self.get_parameter('approach_offset_z').value
         self.insert_depth_z = self.get_parameter('insert_depth_z').value
         self.side_arm_frame = self.get_parameter('side_arm_frame').value

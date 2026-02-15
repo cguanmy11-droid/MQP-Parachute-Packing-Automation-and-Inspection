@@ -11,7 +11,7 @@ Usage:
 
     # Demo with simulation (no hardware)
     ros2 launch parachute_coordinator full_stow_demo.launch.py \
-        main_arm_sim:=true side_arm_test_mode:=true
+        main_arm_sim:=true side_arm_sim:=true
 
     # Custom target position
     ros2 launch parachute_coordinator full_stow_demo.launch.py \
@@ -71,9 +71,13 @@ def generate_launch_description():
         'main_arm_sim', default_value='false',
         description='Run main arm in simulation mode'
     )
+    side_arm_sim_arg = DeclareLaunchArgument(
+        'side_arm_sim', default_value='false',
+        description='Run side arm in pure simulation mode (no serial bridge)'
+    )
     side_arm_test_mode_arg = DeclareLaunchArgument(
         'side_arm_test_mode', default_value='false',
-        description='Run side arm in test/simulation mode'
+        description='Run side arm in test/simulation mode (with hardware)'
     )
 
     # Demo control
@@ -100,6 +104,7 @@ def generate_launch_description():
             'enable_main_arm': 'true',
             'main_arm_sim': LaunchConfiguration('main_arm_sim'),
             'enable_side_arm': 'true',
+            'side_arm_sim': LaunchConfiguration('side_arm_sim'),
             'side_arm_test_mode': LaunchConfiguration('side_arm_test_mode'),
             'enable_teleop': 'false',
             'use_rviz': 'true',
@@ -140,6 +145,7 @@ def generate_launch_description():
         side_arm_z_arg,
         stow_pattern_arg,
         main_arm_sim_arg,
+        side_arm_sim_arg,
         side_arm_test_mode_arg,
         auto_start_arg,
         start_delay_arg,
