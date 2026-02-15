@@ -42,8 +42,8 @@ def generate_launch_description():
         description='Target Y position (meters, world frame)'
     )
     target_z_arg = DeclareLaunchArgument(
-        'target_z', default_value='0.0',
-        description='Target Z position (meters, world frame)'
+        'target_z', default_value='0.35',
+        description='Target Z position (meters, world frame) - must be high enough for pattern offsets'
     )
 
     # Side arm position (in side arm frame, mm)
