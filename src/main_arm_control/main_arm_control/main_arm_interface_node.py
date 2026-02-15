@@ -9,7 +9,9 @@ from rclpy.node import Node
 from rclpy.action import ActionServer
 from parachute_interfaces.action import ExecuteTrajectory
 from parachute_interfaces.msg import ArmStatus
-from geometry_msgs.msg import Pose, Twist, PoseArray
+from geometry_msgs.msg import Pose, Twist, PoseArray, Point
+from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import ColorRGBA
 import numpy as np
 import modern_robotics as mr
 from std_msgs.msg import String, Float32
@@ -119,8 +121,8 @@ class MainArmInterfaceNode(Node):
         self.simple_status_publisher = self.create_publisher(String, '/main_arm/simple_status', 10)
         self.pose_publisher = self.create_publisher(Pose, '/main_arm/current_pose', 10)
 
-        # Publisher for trajectory waypoints visualization (PoseArray for RViz)
-        self.waypoints_pub = self.create_publisher(PoseArray, '/main_arm/trajectory_waypoints', 10)
+        # Publisher for trajectory waypoints visualization (MarkerArray with LINE_STRIP + spheres)
+        self.waypoints_marker_pub = self.create_publisher(MarkerArray, '/main_arm/trajectory_markers', 10)
         
         # Timer to publish status
         self.timer = self.create_timer(1.0, self.publish_status)
@@ -176,13 +178,52 @@ class MainArmInterfaceNode(Node):
         num_waypoints = len(goal_handle.request.waypoints)
         self.get_logger().info(f'Executing trajectory with {num_waypoints} waypoints')
 
-        # Publish waypoints as PoseArray for RViz visualization
-        pose_array = PoseArray()
-        pose_array.header.stamp = self.get_clock().now().to_msg()
-        pose_array.header.frame_id = 'world'
-        pose_array.poses = list(goal_handle.request.waypoints)
-        self.waypoints_pub.publish(pose_array)
-        self.get_logger().info(f'Published {num_waypoints} waypoints to /main_arm/trajectory_waypoints')
+        # Publish waypoints as MarkerArray for RViz visualization (LINE_STRIP + spheres)
+        marker_array = MarkerArray()
+        stamp = self.get_clock().now().to_msg()
+
+        # LINE_STRIP connecting all waypoints
+        line_marker = Marker()
+        line_marker.header.stamp = stamp
+        line_marker.header.frame_id = 'world'
+        line_marker.ns = 'trajectory_path'
+        line_marker.id = 0
+        line_marker.type = Marker.LINE_STRIP
+        line_marker.action = Marker.ADD
+        line_marker.scale.x = 0.005  # Line width
+        line_marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)  # Green
+        line_marker.pose.orientation.w = 1.0
+
+        for waypoint in goal_handle.request.waypoints:
+            p = Point()
+            p.x = waypoint.position.x
+            p.y = waypoint.position.y
+            p.z = waypoint.position.z
+            line_marker.points.append(p)
+
+        marker_array.markers.append(line_marker)
+
+        # Spheres at each waypoint
+        for i, waypoint in enumerate(goal_handle.request.waypoints):
+            sphere = Marker()
+            sphere.header.stamp = stamp
+            sphere.header.frame_id = 'world'
+            sphere.ns = 'trajectory_points'
+            sphere.id = i
+            sphere.type = Marker.SPHERE
+            sphere.action = Marker.ADD
+            sphere.pose.position = waypoint.position
+            sphere.pose.orientation.w = 1.0
+            sphere.scale.x = 0.015  # Sphere diameter
+            sphere.scale.y = 0.015
+            sphere.scale.z = 0.015
+            # Color gradient: start=green, end=red
+            t = i / max(1, num_waypoints - 1)
+            sphere.color = ColorRGBA(r=t, g=1.0 - t, b=0.0, a=1.0)
+            marker_array.markers.append(sphere)
+
+        self.waypoints_marker_pub.publish(marker_array)
+        self.get_logger().info(f'Published {num_waypoints} waypoints to /main_arm/trajectory_markers')
 
         self.current_state = ArmStatus.STATE_EXECUTING
         feedback_msg = ExecuteTrajectory.Feedback()

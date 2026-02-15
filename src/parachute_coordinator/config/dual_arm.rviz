@@ -306,26 +306,17 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /loop_ground_truth_markers
       Value: true
-    - Class: rviz_default_plugins/PoseArray
+    - Class: rviz_default_plugins/MarkerArray
       Enabled: true
       Name: TrajectoryWaypoints
+      Namespaces:
+        {}
       Topic:
         Depth: 5
         Durability Policy: Volatile
-        Filter size: 10
         History Policy: Keep Last
         Reliability Policy: Reliable
-        Value: /main_arm/trajectory_waypoints
-      Shape:
-        Alpha: 1
-        Axes Length: 0.01
-        Axes Radius: 0.005
-        Color: 0; 255; 0
-        Head Length: 0.015
-        Head Radius: 0.01
-        Shaft Length: 0.005
-        Shaft Radius: 0.008
-        Value: Arrow
+        Value: /main_arm/trajectory_markers
       Value: true
   Enabled: true
   Global Options:
