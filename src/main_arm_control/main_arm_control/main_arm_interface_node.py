@@ -249,8 +249,11 @@ class MainArmInterfaceNode(Node):
                         waypoint.orientation.z,
                         waypoint.orientation.w
                     ]
-                    # Check if orientation is specified (non-identity quaternion)
-                    if quat[3] != 0 or any(q != 0 for q in quat[:3]):
+                    # Check if orientation is specified (non-zero quaternion)
+                    has_orientation = quat[3] != 0 or any(q != 0 for q in quat[:3])
+
+                    if has_orientation:
+                        # Try with orientation first
                         roll, pitch, yaw = tf_transformations.euler_from_quaternion(quat)
                         success = self.bot.arm.set_ee_pose_components(
                             x=waypoint.position.x,
@@ -260,14 +263,24 @@ class MainArmInterfaceNode(Node):
                             pitch=pitch,
                             yaw=yaw
                         )
+                        # If orientation fails, fallback to position-only
+                        if not success:
+                            self.get_logger().info(f'Waypoint {i+1}: orientation failed, trying position-only')
+                            success = self.bot.arm.set_ee_pose_components(
+                                x=waypoint.position.x,
+                                y=waypoint.position.y,
+                                z=waypoint.position.z
+                            )
                     else:
+                        # No orientation specified, use position-only
                         success = self.bot.arm.set_ee_pose_components(
                             x=waypoint.position.x,
                             y=waypoint.position.y,
                             z=waypoint.position.z
                         )
+
                     if not success:
-                        self.get_logger().warn(f'Waypoint {i+1} unreachable, skipping')
+                        self.get_logger().warn(f'Waypoint {i+1} unreachable even with position-only, skipping')
                 else:
                     # Test mode - simulate movement
                     time.sleep(1)
