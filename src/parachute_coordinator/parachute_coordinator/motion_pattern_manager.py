@@ -294,13 +294,12 @@ class MotionPatternManager:
                     pose.orientation.z = 0.0
                     pose.orientation.w = math.cos(pitch / 2)
             else:
-                # Default orientation: gripper pointing straight down
-                # For WX200: pitch = -π/2 (-90°) makes gripper point down
-                # Quaternion for -90° pitch rotation: (0, -0.707, 0, 0.707)
+                # No orientation specified - use (0,0,0,0) to signal "position only"
+                # The trajectory executor will detect this and skip orientation constraints
                 pose.orientation.x = 0.0
-                pose.orientation.y = -0.7071068  # -sin(45°) for -90° pitch
+                pose.orientation.y = 0.0
                 pose.orientation.z = 0.0
-                pose.orientation.w = 0.7071068   # cos(45°) for -90° pitch
+                pose.orientation.w = 0.0  # Invalid quaternion = no orientation constraint
 
             waypoints.append(pose)
 
