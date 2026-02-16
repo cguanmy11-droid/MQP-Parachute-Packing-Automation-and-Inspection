@@ -86,7 +86,7 @@ def generate_launch_description():
         description='Start demo automatically'
     )
     start_delay_arg = DeclareLaunchArgument(
-        'start_delay', default_value='3.0',
+        'start_delay', default_value='0.0',
         description='Delay before starting demo (seconds)'
     )
 

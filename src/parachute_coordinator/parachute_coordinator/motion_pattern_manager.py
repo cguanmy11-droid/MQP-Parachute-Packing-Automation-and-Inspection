@@ -278,7 +278,7 @@ class MotionPatternManager:
             if wp.roll is not None or wp.pitch is not None or wp.yaw is not None:
                 # Use specified orientation (default to 0 for unspecified axes)
                 roll = wp.roll if wp.roll is not None else 0.0
-                pitch = wp.pitch if wp.pitch is not None else -math.pi / 2  # Default to pointing down
+                pitch = wp.pitch if wp.pitch is not None else  0.0 # flat #math.pi / 2  # Default to pointing down
                 yaw = wp.yaw if wp.yaw is not None else 0.0
 
                 if HAS_TF_TRANSFORMS:

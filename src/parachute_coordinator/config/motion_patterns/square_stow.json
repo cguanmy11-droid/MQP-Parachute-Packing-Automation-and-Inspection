@@ -2,6 +2,11 @@
   "name": "square_stow",
   "description": "Square path: center -> outward -> toward base -> back to center. Reference point is the starting center position.",
   "reference_point": "start",
+  "anchor_offset": {
+    "x": -0.04,
+    "y": 0.04,
+    "z": 0.00
+  },
   "speed_factor": 0.4,
   "waypoints": [
     {

@@ -62,7 +62,7 @@ class FullStowDemoNode(Node):
         # Timing
         self.declare_parameter('step_delay', 2.0)  # Delay between steps (seconds)
         self.declare_parameter('auto_start', True)  # Start automatically
-        self.declare_parameter('start_delay', 3.0)  # Delay before starting
+        self.declare_parameter('start_delay', 0.0)  # Delay before starting
 
         # Get parameters
         self.target = Point(
@@ -431,7 +431,11 @@ class FullStowDemoNode(Node):
         pose.position.x = x
         pose.position.y = y
         pose.position.z = z
-        pose.orientation.w = 1.0
+        # Gripper pointing down (pitch -180°)
+        pose.orientation.x = 1.5
+        pose.orientation.y = 0.0
+        pose.orientation.z = 0.0
+        pose.orientation.w = 0.0
         return pose
 
     def _trajectory_feedback(self, feedback_msg):
