@@ -112,6 +112,11 @@ class MainArmInterfaceNode(Node):
         self.ee_increment_sub = self.create_subscription(Twist, '/main_arm/ee_increment', self.ee_increment_callback, 10)
         # Add this subscriber for testing positions
         self.test_position_sub = self.create_subscription(Pose, '/main_arm/test_position', self.test_position_callback, 10)
+        # subscriber for points with a specific pitch
+        self.target_point_sub = self.create_subscription(Point, '/main_arm/target_point', self.target_point_callback, 10)
+        self.target_pitch_sub = self.create_subscription(Float32, '/main_arm/target_pitch', self.target_pitch_callback, 10)
+        self.latest_target_pitch = 0.0
+
         # Timer to process joystick commands - runs faster than the Xbox publishes
         # so we never miss a command. Only processes if a new command is waiting.
         self.joy_timer = self.create_timer(0.05, self.process_joy_increment)
@@ -416,6 +421,32 @@ class MainArmInterfaceNode(Node):
 
         except Exception as e:
             self.get_logger().error(f'Gripper command failed: {e}')
+
+    def target_pitch_callback(self, msg: Float32):
+        self.latest_target_pitch = float(msg.data)
+    
+    def target_point_callback(self, msg: Point):
+        if self.bot is None:
+            self.get_logger().warn('No robot availible')
+            return
+        
+        x, y, z = msg.x, msg.y, msg.Z
+        pitch = float(getattr(self, 'latest_target_pitch', 0.0))
+
+        self.get_logger().info(f'Target point: x={x:.3f} y={y.:3f} z={z:.3f} pitch={pitch:.3f}')
+
+        try:
+            success = self.bot.arm.set_ee_pose_components(
+                x=x, y=y, z=z, 
+                roll=0.0, 
+                pitch=pitch,
+                yaw=None, 
+                execute=True
+            )
+            if not success:
+                self.get_logger().warn('IK failed for target_point and pitch')
+        except Exception as e:
+            self.get_logger().error(f'target_point failed: {e}')
     
     def ee_increment_callback(self, msg):
         """
