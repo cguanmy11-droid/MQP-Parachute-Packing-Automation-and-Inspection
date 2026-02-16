@@ -448,21 +448,30 @@ class MainArmInterfaceNode(Node):
         self.latest_target_pitch = float(msg.data)
 
     def _build_pose_matrix(self, x, y, z, pitch, yaw):
-        """Build a 4x4 pose matrix with global pitch and auto-yaw."""
-        # World Z yaw (face toward target in XY)
+        """
+        Build a 4x4 pose matrix with pitch that follows the arm's pointing direction.
+
+        The rotation is composed as Rz @ Ry (intrinsic Y-Z):
+        - First pitch about Y (tilt gripper forward/back)
+        - Then yaw about Z (rotate to face target)
+
+        This way, pitch always tilts the gripper in the direction it's pointing,
+        regardless of waist rotation.
+        """
+        # Yaw about Z (face toward target in XY)
         cy, sy = np.cos(yaw), np.sin(yaw)
         Rz = np.array([[ cy, -sy, 0.0],
                        [ sy,  cy, 0.0],
                        [0.0, 0.0, 1.0]])
 
-        # World Y pitch (global tilt)
+        # Pitch about Y (tilt gripper forward/back in local frame)
         cp, sp = np.cos(pitch), np.sin(pitch)
         Ry = np.array([[ cp, 0.0,  sp],
                        [0.0, 1.0, 0.0],
                        [-sp, 0.0,  cp]])
 
-        # Pitch about world Y, then yaw about world Z
-        R = Ry @ Rz
+        # Intrinsic rotation: pitch first (local), then yaw (brings pitch with it)
+        R = Rz @ Ry
 
         T_sd = np.eye(4)
         T_sd[:3, :3] = R
