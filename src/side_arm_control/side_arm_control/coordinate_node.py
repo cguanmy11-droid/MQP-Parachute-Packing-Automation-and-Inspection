@@ -230,9 +230,9 @@ class SideArmCoordinateNode(Node):
                 msg.steps_vertical = int(self._position_y_mm * self.steps_per_mm_vertical)
                 msg.dc_percent = 0
 
-            msg.x_mm = self._position_x_mm
-            msg.y_mm = self._position_y_mm
-            msg.z_mm = self._position_z_mm
+            msg.x_mm = float(self._position_x_mm)
+            msg.y_mm = float(self._position_y_mm)
+            msg.z_mm = float(self._position_z_mm)
             msg.is_homed = self._is_homed or self.simulation_mode  # Always homed in sim
 
         self._state_pub.publish(msg)
@@ -542,10 +542,10 @@ class SideArmCoordinateNode(Node):
     def _move_to_position_callback(self, request, response):
         """Service callback: move to absolute position."""
         try:
-            # Validate bounds
-            x = max(0, min(request.x_mm, self.max_x_mm))
-            y = max(0, min(request.y_mm, self.max_y_mm))
-            z = max(0, min(request.z_mm, self.max_z_mm))
+            # Validate bounds (ensure float for ROS message compatibility)
+            x = float(max(0, min(request.x_mm, self.max_x_mm)))
+            y = float(max(0, min(request.y_mm, self.max_y_mm)))
+            z = float(max(0, min(request.z_mm, self.max_z_mm)))
 
             speed_scale = max(0.1, min(1.0, request.speed_scale))
 
@@ -636,10 +636,10 @@ class SideArmCoordinateNode(Node):
         request = goal_handle.request
         feedback = MoveToCoordinate.Feedback()
 
-        # Validate bounds
-        x = max(0, min(request.x_mm, self.max_x_mm))
-        y = max(0, min(request.y_mm, self.max_y_mm))
-        z = max(0, min(request.z_mm, self.max_z_mm))
+        # Validate bounds (ensure float for ROS message compatibility)
+        x = float(max(0, min(request.x_mm, self.max_x_mm)))
+        y = float(max(0, min(request.y_mm, self.max_y_mm)))
+        z = float(max(0, min(request.z_mm, self.max_z_mm)))
         speed_scale = max(0.1, min(1.0, request.speed_scale))
 
         start_time = time.time()
