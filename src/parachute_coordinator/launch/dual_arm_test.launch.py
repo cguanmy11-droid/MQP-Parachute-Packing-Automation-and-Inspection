@@ -136,10 +136,14 @@ def generate_launch_description():
         description='Run side arm in test mode (simulated movements alongside hardware)'
     )
 
+    # Use environment variable if set, otherwise fall back to default
+    # Set SIDE_ARM_PORT in ~/.bashrc for persistent configuration
+    side_arm_port_default = os.environ.get('SIDE_ARM_PORT', '/dev/ttyUSB0')
+
     serial_port_arg = DeclareLaunchArgument(
         'serial_port',
-        default_value='/dev/ttyUSB0',
-        description='Serial port for side arm ESP32 connection'
+        default_value=side_arm_port_default,
+        description='Serial port for side arm ESP32 connection (or set SIDE_ARM_PORT env var)'
     )
 
     use_joint_sliders_arg = DeclareLaunchArgument(
