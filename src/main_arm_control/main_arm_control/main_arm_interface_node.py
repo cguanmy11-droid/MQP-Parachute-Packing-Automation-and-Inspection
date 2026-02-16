@@ -246,7 +246,11 @@ class MainArmInterfaceNode(Node):
                 
                 # Execute waypoint on real robot
                 if self.bot is not None:
-                    # Convert quaternion to roll, pitch, yaw for Interbotix
+                    x = waypoint.position.x
+                    y = waypoint.position.y
+                    z = waypoint.position.z
+
+                    # Convert quaternion to pitch for Interbotix
                     import tf_transformations
                     quat = [
                         waypoint.orientation.x,
@@ -258,34 +262,52 @@ class MainArmInterfaceNode(Node):
                     has_orientation = quat[3] != 0 or any(q != 0 for q in quat[:3])
 
                     if has_orientation:
-                        # Try with orientation first
-                        roll, pitch, yaw = tf_transformations.euler_from_quaternion(quat)
-                        success = self.bot.arm.set_ee_pose_components(
-                            x=waypoint.position.x,
-                            y=waypoint.position.y,
-                            z=waypoint.position.z,
-                            roll=roll,
-                            pitch=pitch,
-                            yaw=yaw
-                        )
-                        # If orientation fails, fallback to position-only
-                        if not success:
-                            self.get_logger().info(f'Waypoint {i+1}: orientation failed, trying position-only')
-                            success = self.bot.arm.set_ee_pose_components(
-                                x=waypoint.position.x,
-                                y=waypoint.position.y,
-                                z=waypoint.position.z
-                            )
-                    else:
-                        # No orientation specified, use position-only
-                        success = self.bot.arm.set_ee_pose_components(
-                            x=waypoint.position.x,
-                            y=waypoint.position.y,
-                            z=waypoint.position.z
+                        # Extract preferred pitch from quaternion
+                        roll, preferred_pitch, yaw = tf_transformations.euler_from_quaternion(quat)
+
+                        # Use pitch-search to find a valid pitch
+                        success, actual_pitch, theta_list = self.find_valid_pitch(
+                            x, y, z, preferred_pitch
                         )
 
+                        if success and theta_list is not None:
+                            if abs(actual_pitch - preferred_pitch) > 0.01:
+                                self.get_logger().info(
+                                    f'Waypoint {i+1}: using pitch={actual_pitch:.2f}rad '
+                                    f'(preferred {preferred_pitch:.2f} not feasible)'
+                                )
+                            # Execute with the valid pose
+                            auto_yaw = float(np.arctan2(y, x))
+                            T_sd = self._build_pose_matrix(x, y, z, actual_pitch, auto_yaw)
+                            result = self.bot.arm.set_ee_pose_matrix(
+                                T_sd,
+                                custom_guess=theta_list,
+                                execute=True
+                            )
+                            success = self._check_ik_result(result)
+                        else:
+                            # No valid pitch found, try position-only
+                            self.get_logger().info(f'Waypoint {i+1}: no valid pitch, trying position-only')
+                            success = self.bot.arm.set_ee_pose_components(x=x, y=y, z=z)
+                    else:
+                        # No orientation specified - search for any valid pitch
+                        success, actual_pitch, theta_list = self.find_valid_pitch(x, y, z, 0.0)
+
+                        if success and theta_list is not None:
+                            auto_yaw = float(np.arctan2(y, x))
+                            T_sd = self._build_pose_matrix(x, y, z, actual_pitch, auto_yaw)
+                            result = self.bot.arm.set_ee_pose_matrix(
+                                T_sd,
+                                custom_guess=theta_list,
+                                execute=True
+                            )
+                            success = self._check_ik_result(result)
+                        else:
+                            # Fallback to position-only
+                            success = self.bot.arm.set_ee_pose_components(x=x, y=y, z=z)
+
                     if not success:
-                        self.get_logger().warn(f'Waypoint {i+1} unreachable even with position-only, skipping')
+                        self.get_logger().warn(f'Waypoint {i+1} unreachable, skipping')
                 else:
                     # Test mode - simulate movement
                     time.sleep(1)
@@ -425,70 +447,142 @@ class MainArmInterfaceNode(Node):
     def target_pitch_callback(self, msg: Float32):
         self.latest_target_pitch = float(msg.data)
 
+    def _build_pose_matrix(self, x, y, z, pitch, yaw):
+        """Build a 4x4 pose matrix with global pitch and auto-yaw."""
+        # World Z yaw (face toward target in XY)
+        cy, sy = np.cos(yaw), np.sin(yaw)
+        Rz = np.array([[ cy, -sy, 0.0],
+                       [ sy,  cy, 0.0],
+                       [0.0, 0.0, 1.0]])
+
+        # World Y pitch (global tilt)
+        cp, sp = np.cos(pitch), np.sin(pitch)
+        Ry = np.array([[ cp, 0.0,  sp],
+                       [0.0, 1.0, 0.0],
+                       [-sp, 0.0,  cp]])
+
+        # Pitch about world Y, then yaw about world Z
+        R = Ry @ Rz
+
+        T_sd = np.eye(4)
+        T_sd[:3, :3] = R
+        T_sd[:3,  3] = [x, y, z]
+        return T_sd
+
+    def _check_ik_result(self, result):
+        """Extract success boolean from set_ee_pose_matrix result."""
+        if isinstance(result, tuple):
+            for item in result:
+                if isinstance(item, bool):
+                    return item
+            # If no bool found, check if we got valid joint angles
+            for item in result:
+                if hasattr(item, '__len__') and len(item) == 5:
+                    return True
+            return False
+        return bool(result)
+
+    def find_valid_pitch(self, x, y, z, preferred_pitch=0.0):
+        """
+        Search for a valid pitch that achieves IK success for the given position.
+
+        Returns: (success, pitch_used, theta_list) tuple
+        - success: True if a valid pose was found
+        - pitch_used: The pitch value that worked (or None)
+        - theta_list: Joint angles for the valid pose (or None)
+        """
+        if self.bot is None:
+            return (False, None, None)
+
+        yaw = float(np.arctan2(y, x))
+        guess = list(self.bot.arm.get_joint_commands())
+
+        # Build list of pitch candidates, ordered by preference
+        # Start with preferred pitch, then search nearby, then common angles
+        pitch_candidates = []
+
+        # 1. Preferred pitch first
+        pitch_candidates.append(preferred_pitch)
+
+        # 2. Search nearby (within ±0.5 rad / ~30° of preferred)
+        for delta in [0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.4, -0.4, 0.5, -0.5]:
+            candidate = preferred_pitch + delta
+            if -np.pi/2 <= candidate <= np.pi/2 and candidate not in pitch_candidates:
+                pitch_candidates.append(candidate)
+
+        # 3. Common angles: 0°, ±30°, ±45°, ±60°, ±90°
+        common = [0.0, np.pi/6, -np.pi/6, np.pi/4, -np.pi/4,
+                  np.pi/3, -np.pi/3, np.pi/2, -np.pi/2]
+        for p in common:
+            if p not in pitch_candidates:
+                pitch_candidates.append(p)
+
+        # Try each pitch (IK only, no execution)
+        for pitch in pitch_candidates:
+            T_sd = self._build_pose_matrix(x, y, z, pitch, yaw)
+
+            try:
+                result = self.bot.arm.set_ee_pose_matrix(
+                    T_sd,
+                    custom_guess=guess,
+                    execute=False  # Just compute IK, don't move
+                )
+
+                if self._check_ik_result(result):
+                    # Extract joint angles
+                    theta_list = None
+                    if isinstance(result, tuple):
+                        for item in result:
+                            if hasattr(item, '__len__') and len(item) == 5:
+                                theta_list = list(item)
+                                break
+                    return (True, pitch, theta_list)
+            except Exception:
+                continue
+
+        return (False, None, None)
+
     def target_point_callback(self, msg: Point):
         if self.bot is None:
             self.get_logger().warn('No robot available')
             return
 
         x, y, z = float(msg.x), float(msg.y), float(msg.z)
-        pitch = float(getattr(self, 'latest_target_pitch', 0.0))
-
-        # Auto-yaw based on target direction (face toward target in XY plane)
+        preferred_pitch = float(getattr(self, 'latest_target_pitch', 0.0))
         yaw = float(np.arctan2(y, x))
 
         self.get_logger().info(
-            f'Target (world): x={x:.3f} y={y:.3f} z={z:.3f} pitch={pitch:.3f}rad yaw(auto)={yaw:.3f}rad'
+            f'Target (world): x={x:.3f} y={y:.3f} z={z:.3f} preferred_pitch={preferred_pitch:.3f}rad'
         )
 
         try:
-            success = False
-            if pitch != 0.0:
-                # Build world-frame rotation explicitly for true global pitch
-                # World Z yaw (face toward target in XY)
-                cy, sy = np.cos(yaw), np.sin(yaw)
-                Rz = np.array([[ cy, -sy, 0.0],
-                               [ sy,  cy, 0.0],
-                               [0.0, 0.0, 1.0]])
+            # Search for a valid pitch
+            success, actual_pitch, theta_list = self.find_valid_pitch(x, y, z, preferred_pitch)
 
-                # World Y pitch (global tilt)
-                cp, sp = np.cos(pitch), np.sin(pitch)
-                Ry = np.array([[ cp, 0.0,  sp],
-                               [0.0, 1.0, 0.0],
-                               [-sp, 0.0,  cp]])
+            if success and theta_list is not None:
+                if abs(actual_pitch - preferred_pitch) > 0.01:
+                    self.get_logger().info(
+                        f'Using pitch={actual_pitch:.3f}rad (preferred {preferred_pitch:.3f} not feasible)'
+                    )
+                else:
+                    self.get_logger().info(f'Using preferred pitch={actual_pitch:.3f}rad')
 
-                # Pitch about world Y, then yaw about world Z
-                R = Ry @ Rz
-
-                T_sd = np.eye(4)
-                T_sd[:3, :3] = R
-                T_sd[:3,  3] = [x, y, z]
-
-                guess = list(self.bot.arm.get_joint_commands())
-
+                # Execute the valid pose
+                T_sd = self._build_pose_matrix(x, y, z, actual_pitch, yaw)
                 result = self.bot.arm.set_ee_pose_matrix(
                     T_sd,
-                    custom_guess=guess,
+                    custom_guess=theta_list,  # Use the known-good solution as guess
                     execute=True
                 )
-                # Handle various return types from set_ee_pose_matrix
-                if isinstance(result, tuple):
-                    # Could be (theta_list, success) or (success, theta_list)
-                    for item in result:
-                        if isinstance(item, bool):
-                            success = item
-                            break
-                else:
-                    success = bool(result)
+                success = self._check_ik_result(result)
 
-                if not success:
-                    self.get_logger().warn('IK failed with global pitch, trying position-only')
-                    success = self.bot.arm.set_ee_pose_components(x=x, y=y, z=z)
-            else:
-                # No pitch constraint - position only
+            if not success:
+                # Last resort: position-only (let IK choose everything)
+                self.get_logger().warn('No valid pitch found, trying position-only')
                 success = self.bot.arm.set_ee_pose_components(x=x, y=y, z=z)
 
             if not success:
-                self.get_logger().warn('IK failed for target_point')
+                self.get_logger().warn('IK failed for target_point (all pitches tried)')
         except Exception as e:
             self.get_logger().error(f'target_point failed: {e}')
     
