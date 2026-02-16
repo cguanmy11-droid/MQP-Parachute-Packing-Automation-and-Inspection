@@ -607,7 +607,7 @@ def generate_launch_description():
         # Main arm nodes
         main_arm_control_launch,
         main_arm_interface,
-        main_arm_planner,
+        # main_arm_planner,  # Disabled - main_arm_interface handles target_point with pitch
         main_arm_teleop,
 
         # RViz with custom config

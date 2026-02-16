@@ -441,6 +441,7 @@ class MainArmInterfaceNode(Node):
         )
 
         try:
+            success = False
             if pitch != 0.0:
                 # Build world-frame rotation explicitly for true global pitch
                 # World Z yaw (face toward target in XY)
@@ -464,11 +465,21 @@ class MainArmInterfaceNode(Node):
 
                 guess = list(self.bot.arm.get_joint_commands())
 
-                success, *_ = self.bot.arm.set_ee_pose_matrix(
+                result = self.bot.arm.set_ee_pose_matrix(
                     T_sd,
                     custom_guess=guess,
                     execute=True
                 )
+                # Handle various return types from set_ee_pose_matrix
+                if isinstance(result, tuple):
+                    # Could be (theta_list, success) or (success, theta_list)
+                    for item in result:
+                        if isinstance(item, bool):
+                            success = item
+                            break
+                else:
+                    success = bool(result)
+
                 if not success:
                     self.get_logger().warn('IK failed with global pitch, trying position-only')
                     success = self.bot.arm.set_ee_pose_components(x=x, y=y, z=z)
