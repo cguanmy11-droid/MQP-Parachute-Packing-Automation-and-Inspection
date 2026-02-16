@@ -424,27 +424,60 @@ class MainArmInterfaceNode(Node):
 
     def target_pitch_callback(self, msg: Float32):
         self.latest_target_pitch = float(msg.data)
-    
+
     def target_point_callback(self, msg: Point):
         if self.bot is None:
-            self.get_logger().warn('No robot availible')
+            self.get_logger().warn('No robot available')
             return
-        
-        x, y, z = msg.x, msg.y, msg.Z
+
+        x, y, z = float(msg.x), float(msg.y), float(msg.z)
         pitch = float(getattr(self, 'latest_target_pitch', 0.0))
 
-        self.get_logger().info(f'Target point: x={x:.3f} y={y.:3f} z={z:.3f} pitch={pitch:.3f}')
+        # Auto-yaw based on target direction (face toward target in XY plane)
+        yaw = float(np.arctan2(y, x))
+
+        self.get_logger().info(
+            f'Target (world): x={x:.3f} y={y:.3f} z={z:.3f} pitch={pitch:.3f}rad yaw(auto)={yaw:.3f}rad'
+        )
 
         try:
-            success = self.bot.arm.set_ee_pose_components(
-                x=x, y=y, z=z, 
-                roll=0.0, 
-                pitch=pitch,
-                yaw=None, 
-                execute=True
-            )
+            if pitch != 0.0:
+                # Build world-frame rotation explicitly for true global pitch
+                # World Z yaw (face toward target in XY)
+                cy, sy = np.cos(yaw), np.sin(yaw)
+                Rz = np.array([[ cy, -sy, 0.0],
+                               [ sy,  cy, 0.0],
+                               [0.0, 0.0, 1.0]])
+
+                # World Y pitch (global tilt)
+                cp, sp = np.cos(pitch), np.sin(pitch)
+                Ry = np.array([[ cp, 0.0,  sp],
+                               [0.0, 1.0, 0.0],
+                               [-sp, 0.0,  cp]])
+
+                # Pitch about world Y, then yaw about world Z
+                R = Ry @ Rz
+
+                T_sd = np.eye(4)
+                T_sd[:3, :3] = R
+                T_sd[:3,  3] = [x, y, z]
+
+                guess = list(self.bot.arm.get_joint_commands())
+
+                success, *_ = self.bot.arm.set_ee_pose_matrix(
+                    T_sd,
+                    custom_guess=guess,
+                    execute=True
+                )
+                if not success:
+                    self.get_logger().warn('IK failed with global pitch, trying position-only')
+                    success = self.bot.arm.set_ee_pose_components(x=x, y=y, z=z)
+            else:
+                # No pitch constraint - position only
+                success = self.bot.arm.set_ee_pose_components(x=x, y=y, z=z)
+
             if not success:
-                self.get_logger().warn('IK failed for target_point and pitch')
+                self.get_logger().warn('IK failed for target_point')
         except Exception as e:
             self.get_logger().error(f'target_point failed: {e}')
     
