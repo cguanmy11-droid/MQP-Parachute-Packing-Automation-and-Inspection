@@ -34,15 +34,15 @@ def generate_launch_description():
 
     # Target/hook position for the demo (anchor point for motion patterns)
     target_x_arg = DeclareLaunchArgument(
-        'target_x', default_value='0.35',
+        'target_x', default_value='0.30',
         description='Target/hook X position (meters, world frame)'
     )
     target_y_arg = DeclareLaunchArgument(
-        'target_y', default_value='0.19',
+        'target_y', default_value='0.04',
         description='Target/hook Y position (meters, world frame)'
     )
     target_z_arg = DeclareLaunchArgument(
-        'target_z', default_value='0.05',
+        'target_z', default_value='0.022',
         description='Target/hook Z position (meters, world frame)'
     )
 

@@ -47,9 +47,9 @@ class FullStowDemoNode(Node):
         # ==================== PARAMETERS ====================
         # Target loop position (in world frame)
         # NOTE: target_z must be high enough for pattern offsets (recorded_stow has dz=-0.25)
-        self.declare_parameter('target_x', 0.35)  # meters
-        self.declare_parameter('target_y', 0.15)  # meters
-        self.declare_parameter('target_z', 0.35)  # meters - start position height
+        self.declare_parameter('target_x', 0.30)  # meters
+        self.declare_parameter('target_y', 0.04)  # meters
+        self.declare_parameter('target_z', 0.022)  # meters - start position height
 
         # Side arm approach position (in side arm frame, mm)
         self.declare_parameter('side_arm_x_mm', 82.0)
