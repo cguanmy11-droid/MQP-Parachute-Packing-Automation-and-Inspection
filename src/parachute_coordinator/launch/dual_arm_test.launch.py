@@ -567,8 +567,8 @@ def generate_launch_description():
             'camera_frame_id': 'camera_frame',
             'world_frame_id': 'world',
             # Camera FOV - set wide for testing, narrow later to match real camera
-            'camera_fov_horizontal': 120.0,  # degrees (wide for testing)
-            'camera_fov_vertical': 120.0,    # degrees (wide for testing)
+            'camera_fov_horizontal': 80.0,  # degrees 
+            'camera_fov_vertical': 80.0,    # degrees 
             'max_detection_range': 1.0,      # meters (extended for testing)
             'min_detection_range': 0.01,     # meters
             # Detection simulation
