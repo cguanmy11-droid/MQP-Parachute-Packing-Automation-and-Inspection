@@ -4,13 +4,13 @@ Loop Calibration Node
 Calibrates loop positions from real camera detections.
 
 This node:
-1. Sends HOME_ALL command to home all 3 axes of side arm
+1. Sends HOME_ALL command to home all 3 axes of side arm (waits for is_homed)
 2. Moves to calibration position (x=180mm) to view loops
 3. Collects detections and transforms them to world frame
-4. Clusters nearby detections using spatial tolerance
-5. Terminates early once all detected loops hit the min_detection_count threshold
+4. Terminates early once all detected loops hit the min_detection_count threshold
+5. Optionally collects more data while returning home
 6. Publishes calibrated positions as ground truth in world frame
-7. Returns side arm to home position
+7. Provides /get_calibrated_loops service for coordinator access
 
 Early Termination:
 - Calibration finishes early when ALL detected loop clusters have >= min_detection_count detections
@@ -18,16 +18,17 @@ Early Termination:
 - Waits stable_time seconds with no new loops appearing before terminating
 - Falls back to max collection_duration if thresholds not reached
 
+Coordinator Access:
+- Subscribe to /loop_ground_truth topic for continuous updates
+- Call /get_calibrated_loops service to get loop positions directly
+- Load from /tmp/loop_calibration/latest.json
+
 Usage:
     # Start calibration via service call
     ros2 service call /calibrate_loops std_srvs/srv/Trigger
 
-    # Or with custom parameters
-    ros2 run parachute_perception loop_calibration_node --ros-args \
-        -p collection_duration:=30.0 \
-        -p spatial_tolerance:=0.01 \
-        -p min_detection_count:=15 \
-        -p min_loops_expected:=5
+    # Get calibrated loops for coordinator
+    ros2 service call /get_calibrated_loops parachute_interfaces/srv/GetCalibratedLoops
 """
 import rclpy
 from rclpy.node import Node
@@ -36,8 +37,8 @@ from std_srvs.srv import Trigger
 from std_msgs.msg import String
 from geometry_msgs.msg import Point, PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
-from parachute_interfaces.msg import DetectedLoops, LoopGroundTruth
-from parachute_interfaces.srv import MoveToPosition
+from parachute_interfaces.msg import DetectedLoops, LoopGroundTruth, SideArmState
+from parachute_interfaces.srv import MoveToPosition, GetCalibratedLoops
 import tf2_ros
 from tf2_geometry_msgs import do_transform_point
 import numpy as np
@@ -61,9 +62,11 @@ class LoopCalibrationNode(Node):
         self.declare_parameter('min_detection_count', 15)   # minimum detections to be valid
         self.declare_parameter('home_before_calibration', True)
         self.declare_parameter('return_home_after', True)
+        self.declare_parameter('collect_on_return', True)   # Also collect while returning home
         self.declare_parameter('early_termination', True)   # finish when all loops hit threshold
         self.declare_parameter('min_loops_expected', 1)     # minimum loops to detect before early termination
         self.declare_parameter('stable_time', 1.0)          # seconds with no new loops before early termination
+        self.declare_parameter('homing_timeout', 60.0)      # max seconds to wait for homing
 
         # Calibration position (where to move for best view of loops)
         self.declare_parameter('calibration_x_mm', 180.0)  # Move to end of X axis
@@ -97,11 +100,23 @@ class LoopCalibrationNode(Node):
         self.last_cluster_count = 0
         self.last_cluster_change_time = None
 
+        # Side arm state tracking
+        self.side_arm_is_homed = False
+        self.side_arm_position = (0.0, 0.0, 0.0)  # x_mm, y_mm, z_mm
+
         # ==================== SUBSCRIBERS ====================
         self.detection_sub = self.create_subscription(
             DetectedLoops,
             '/detected_loops',
             self.detection_callback,
+            10
+        )
+
+        # Subscribe to side arm state for homing status
+        self.state_sub = self.create_subscription(
+            SideArmState,
+            '/side_arm/parsed_state',
+            self.side_arm_state_callback,
             10
         )
 
@@ -150,6 +165,14 @@ class LoopCalibrationNode(Node):
             callback_group=self.callback_group
         )
 
+        # Service for coordinator to get loop positions
+        self.get_loops_srv = self.create_service(
+            GetCalibratedLoops,
+            '/get_calibrated_loops',
+            self.get_loops_callback,
+            callback_group=self.callback_group
+        )
+
         # ==================== SERVICE CLIENTS ====================
         self.move_client = self.create_client(
             MoveToPosition,
@@ -167,9 +190,18 @@ class LoopCalibrationNode(Node):
         self.get_logger().info(f'  Min detection count: {self.get_parameter("min_detection_count").value}')
         self.get_logger().info(f'  Early termination: {self.get_parameter("early_termination").value}')
         self.get_logger().info(f'  Min loops expected: {self.get_parameter("min_loops_expected").value}')
+        self.get_logger().info(f'  Collect on return: {self.get_parameter("collect_on_return").value}')
         self.get_logger().info(f'  Calibration position: x={self.get_parameter("calibration_x_mm").value}mm')
         self.get_logger().info(f'  Output frame: {self.get_parameter("world_frame_id").value}')
-        self.get_logger().info('  Call /calibrate_loops service to start calibration')
+        self.get_logger().info('  Services:')
+        self.get_logger().info('    /calibrate_loops - Start calibration')
+        self.get_logger().info('    /get_calibrated_loops - Get loop positions for coordinator')
+        self.get_logger().info('    /load_calibration - Load from file')
+
+    def side_arm_state_callback(self, msg: SideArmState):
+        """Track side arm state for homing verification."""
+        self.side_arm_is_homed = msg.is_homed
+        self.side_arm_position = (msg.x_mm, msg.y_mm, msg.z_mm)
 
     def transform_to_world(self, point, source_frame: str):
         """Transform a point from source_frame to world frame."""
@@ -292,14 +324,14 @@ class LoopCalibrationNode(Node):
         self.get_logger().info('Starting loop calibration sequence...')
         self.get_logger().info('='*50)
 
-        # Step 1: Home all 3 axes
+        # Step 1: Home all 3 axes (wait for is_homed)
         if self.get_parameter('home_before_calibration').value:
             self.get_logger().info('Step 1: Homing all 3 axes...')
             if not self.home_all_axes():
                 response.success = False
-                response.message = 'Failed to home side arm'
+                response.message = 'Failed to home side arm (timeout waiting for is_homed)'
                 return response
-            self.get_logger().info('  Homing complete')
+            self.get_logger().info('  Homing complete (is_homed=True)')
 
         # Step 2: Move to calibration position
         self.get_logger().info('Step 2: Moving to calibration position...')
@@ -337,10 +369,43 @@ class LoopCalibrationNode(Node):
 
         self.get_logger().info(f'  Collection complete: {len(self.raw_detections)} raw detections')
 
-        # Step 4: Return home
+        # Step 4: Return home (optionally collecting more data)
         if self.get_parameter('return_home_after').value:
-            self.get_logger().info('Step 4: Returning to home position...')
-            self.home_all_axes()
+            collect_on_return = self.get_parameter('collect_on_return').value
+
+            if collect_on_return:
+                self.get_logger().info('Step 4: Returning home while collecting more data...')
+                # Re-enable collection during return
+                self.is_calibrating = True
+                self.calibration_start_time = self.get_clock().now()
+
+            else:
+                self.get_logger().info('Step 4: Returning to home position...')
+
+            # Start moving home (non-blocking if collecting)
+            self.move_to_position_async(0.0, 0.0, 0.0)
+
+            if collect_on_return:
+                # Wait for motion to complete while collecting
+                timeout = 30.0
+                start = time.time()
+                while time.time() - start < timeout:
+                    time.sleep(0.1)
+                    rclpy.spin_once(self, timeout_sec=0.01)
+                    # Check if at home position
+                    x, y, z = self.side_arm_position
+                    if abs(x) < 5.0 and abs(y) < 5.0 and abs(z) < 5.0:
+                        break
+
+                self.is_calibrating = False
+                self.get_logger().info(f'  Additional detections during return: {len(self.raw_detections)} total')
+
+                # Re-process with new detections
+                self.finish_calibration()
+            else:
+                # Just wait for home
+                self.wait_for_home_position()
+
             self.get_logger().info('  Home position reached')
 
         self.get_logger().info('='*50)
@@ -352,24 +417,51 @@ class LoopCalibrationNode(Node):
         return response
 
     def home_all_axes(self) -> bool:
-        """Send HOME_ALL command to home all 3 axes."""
+        """Send HOME_ALL command and wait for is_homed status."""
         self.get_logger().info('  Sending HOME_ALL command...')
+
+        # Reset homed status
+        self.side_arm_is_homed = False
 
         # Send HOME_ALL command
         cmd = String()
         cmd.data = 'HOME_ALL'
         self.command_pub.publish(cmd)
 
-        # Wait for homing to complete
-        # HOME_ALL can take a while - wait up to 60 seconds
-        self.get_logger().info('  Waiting for homing to complete...')
-        time.sleep(15.0)  # Homing typically takes 10-15 seconds
+        # Wait for is_homed to become True
+        timeout = self.get_parameter('homing_timeout').value
+        self.get_logger().info(f'  Waiting for is_homed (timeout: {timeout}s)...')
 
-        # Also move to (0,0,0) to ensure we're at home
-        return self.move_to_position(0.0, 0.0, 0.0)
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
+
+            if self.side_arm_is_homed:
+                self.get_logger().info(f'  Homing completed in {time.time() - start_time:.1f}s')
+                # Additional settle time
+                time.sleep(0.5)
+                return True
+
+            # Log progress every 5 seconds
+            elapsed = time.time() - start_time
+            if int(elapsed) % 5 == 0 and int(elapsed) > 0:
+                self.get_logger().info(f'  Still waiting for homing... ({elapsed:.0f}s)')
+
+        self.get_logger().error(f'Homing timeout after {timeout}s')
+        return False
+
+    def wait_for_home_position(self, timeout: float = 30.0) -> bool:
+        """Wait for side arm to reach home position."""
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            x, y, z = self.side_arm_position
+            if abs(x) < 5.0 and abs(y) < 5.0 and abs(z) < 5.0:
+                return True
+        return False
 
     def move_to_position(self, x_mm: float, y_mm: float, z_mm: float) -> bool:
-        """Move side arm to specified position."""
+        """Move side arm to specified position and wait for completion."""
         if not self.move_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().warn('Side arm move service not available')
             return False
@@ -396,6 +488,20 @@ class LoopCalibrationNode(Node):
         else:
             self.get_logger().error('Move service call failed')
             return False
+
+    def move_to_position_async(self, x_mm: float, y_mm: float, z_mm: float):
+        """Start moving side arm to position (non-blocking)."""
+        if not self.move_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().warn('Side arm move service not available')
+            return
+
+        request = MoveToPosition.Request()
+        request.x_mm = float(x_mm)
+        request.y_mm = float(y_mm)
+        request.z_mm = float(z_mm)
+        request.speed_scale = 0.5
+
+        self.move_client.call_async(request)
 
     def finish_calibration(self):
         """Process collected detections and create calibrated loop positions."""
@@ -446,20 +552,10 @@ class LoopCalibrationNode(Node):
             self.save_calibration()
 
     def cluster_detections(self, detections: list, tolerance: float) -> list:
-        """
-        Cluster detections using simple distance-based grouping.
-
-        Args:
-            detections: List of (x, y, z, confidence) tuples in world frame
-            tolerance: Maximum distance to consider same cluster (meters)
-
-        Returns:
-            List of cluster dicts with 'position', 'count', 'confidence'
-        """
+        """Cluster detections using simple distance-based grouping."""
         if not detections:
             return []
 
-        # Convert to numpy for easier math
         points = np.array([[d[0], d[1], d[2]] for d in detections])
         confidences = np.array([d[3] for d in detections])
 
@@ -470,14 +566,10 @@ class LoopCalibrationNode(Node):
             if used[i]:
                 continue
 
-            # Find all points within tolerance of this point
             distances = np.linalg.norm(points - points[i], axis=1)
             in_cluster = distances < tolerance
-
-            # Mark as used
             used |= in_cluster
 
-            # Compute cluster center (mean of all points in cluster)
             cluster_points = points[in_cluster]
             cluster_confs = confidences[in_cluster]
 
@@ -500,10 +592,9 @@ class LoopCalibrationNode(Node):
 
         world_frame = self.get_parameter('world_frame_id').value
 
-        # Create LoopGroundTruth message
         msg = LoopGroundTruth()
         msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = world_frame  # Always world frame
+        msg.header.frame_id = world_frame
 
         loop_radius = self.get_parameter('loop_radius').value
 
@@ -519,11 +610,10 @@ class LoopCalibrationNode(Node):
         msg.count = len(self.calibrated_loops)
         self.ground_truth_pub.publish(msg)
 
-        # Publish visualization markers
         self.publish_markers()
 
     def publish_markers(self):
-        """Publish RViz markers for calibrated loops in world frame."""
+        """Publish RViz markers for calibrated loops."""
         if not self.has_calibrated_data:
             return
 
@@ -533,7 +623,6 @@ class LoopCalibrationNode(Node):
         loop_radius = self.get_parameter('loop_radius').value
 
         for i, loop in enumerate(self.calibrated_loops):
-            # Sphere marker
             marker = Marker()
             marker.header.stamp = stamp
             marker.header.frame_id = world_frame
@@ -551,16 +640,14 @@ class LoopCalibrationNode(Node):
             marker.scale.y = loop_radius * 2
             marker.scale.z = loop_radius * 2
 
-            # Blue color for ground truth
             marker.color.r = 0.2
             marker.color.g = 0.4
             marker.color.b = 0.9
             marker.color.a = 0.8
 
-            marker.lifetime.sec = 0  # Persistent
+            marker.lifetime.sec = 0
             marker_array.markers.append(marker)
 
-            # Text label
             text = Marker()
             text.header.stamp = stamp
             text.header.frame_id = world_frame
@@ -587,6 +674,32 @@ class LoopCalibrationNode(Node):
 
         self.marker_pub.publish(marker_array)
 
+    def get_loops_callback(self, request, response):
+        """Service callback for coordinator to get calibrated loop positions."""
+        if not self.has_calibrated_data:
+            response.success = False
+            response.message = 'No calibration data available. Run /calibrate_loops or /load_calibration first.'
+            response.count = 0
+            return response
+
+        loop_radius = self.get_parameter('loop_radius').value
+
+        response.success = True
+        response.message = f'{len(self.calibrated_loops)} calibrated loops in world frame'
+        response.count = len(self.calibrated_loops)
+
+        for i, loop in enumerate(self.calibrated_loops):
+            pos = Point()
+            pos.x = loop['position'][0]
+            pos.y = loop['position'][1]
+            pos.z = loop['position'][2]
+            response.positions.append(pos)
+            response.radii.append(loop_radius)
+            response.loop_ids.append(i)
+            response.detection_counts.append(loop['count'])
+
+        return response
+
     def save_calibration(self) -> bool:
         """Save calibrated loop positions to file."""
         if not self.has_calibrated_data:
@@ -596,11 +709,8 @@ class LoopCalibrationNode(Node):
         save_dir = self.get_parameter('save_directory').value
         os.makedirs(save_dir, exist_ok=True)
 
-        # Create filename with timestamp
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filepath = os.path.join(save_dir, f'loop_calibration_{timestamp}.json')
-
-        # Also save as 'latest'
         latest_path = os.path.join(save_dir, 'latest.json')
 
         world_frame = self.get_parameter('world_frame_id').value
@@ -681,7 +791,6 @@ def main(args=None):
     rclpy.init(args=args)
     node = LoopCalibrationNode()
 
-    # Use multi-threaded executor for async service handling
     from rclpy.executors import MultiThreadedExecutor
     executor = MultiThreadedExecutor()
     executor.add_node(node)

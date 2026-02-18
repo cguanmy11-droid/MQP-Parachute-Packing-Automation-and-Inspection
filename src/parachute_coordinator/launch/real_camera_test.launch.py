@@ -191,6 +191,8 @@ def generate_launch_description():
             'early_termination': True,  # Finish early when all loops hit threshold
             'min_loops_expected': LaunchConfiguration('min_loops_expected'),
             'stable_time': 1.0,  # Seconds with stable loop count before early termination
+            'homing_timeout': 60.0,  # Max seconds to wait for is_homed
+            'collect_on_return': True,  # Also collect detections while returning home
             'camera_frame_id': 'camera_frame',
             'world_frame_id': 'world',
             'save_to_file': True,
