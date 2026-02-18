@@ -109,7 +109,7 @@ def generate_launch_description():
         description='Minimum detections required for a valid loop'
     )
     calibration_x_mm_arg = DeclareLaunchArgument(
-        'calibration_x_mm', default_value='180.0',
+        'calibration_x_mm', default_value='50.0',
         description='X position (mm) to move to during calibration for best view of loops'
     )
     min_loops_expected_arg = DeclareLaunchArgument(

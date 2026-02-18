@@ -69,7 +69,7 @@ class LoopCalibrationNode(Node):
         self.declare_parameter('homing_timeout', 60.0)      # max seconds to wait for homing
 
         # Calibration position (where to move for best view of loops)
-        self.declare_parameter('calibration_x_mm', 180.0)  # Move to end of X axis
+        self.declare_parameter('calibration_x_mm', 50.0)  # Move enough to see loops clearly
         self.declare_parameter('calibration_y_mm', 0.0)
         self.declare_parameter('calibration_z_mm', 0.0)
 
@@ -460,8 +460,8 @@ class LoopCalibrationNode(Node):
                 return True
         return False
 
-    def move_to_position(self, x_mm: float, y_mm: float, z_mm: float) -> bool:
-        """Move side arm to specified position and wait for completion."""
+    def move_to_position(self, x_mm: float, y_mm: float, z_mm: float, tolerance_mm: float = 10.0) -> bool:
+        """Move side arm to specified position and wait for actual arrival."""
         if not self.move_client.wait_for_service(timeout_sec=2.0):
             self.get_logger().warn('Side arm move service not available')
             return False
@@ -472,22 +472,47 @@ class LoopCalibrationNode(Node):
         request.z_mm = float(z_mm)
         request.speed_scale = 0.5
 
+        self.get_logger().info(f'  Moving to ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) mm...')
+
         future = self.move_client.call_async(request)
         rclpy.spin_until_future_complete(self, future, timeout_sec=30.0)
 
-        if future.result() is not None:
-            result = future.result()
-            if result.success:
-                # Wait for motion to complete
-                est_time = result.estimated_time_sec if hasattr(result, 'estimated_time_sec') else 5.0
-                time.sleep(max(est_time, 2.0))
-                return True
-            else:
-                self.get_logger().error(f'Move failed: {result.message}')
-                return False
-        else:
+        if future.result() is None:
             self.get_logger().error('Move service call failed')
             return False
+
+        result = future.result()
+        if not result.success:
+            self.get_logger().error(f'Move failed: {result.message}')
+            return False
+
+        # Wait for actual position to be reached (not just estimated time)
+        timeout = 60.0
+        start_time = time.time()
+        last_log = 0
+
+        while time.time() - start_time < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
+
+            current_x, current_y, current_z = self.side_arm_position
+            dx = abs(current_x - x_mm)
+            dy = abs(current_y - y_mm)
+            dz = abs(current_z - z_mm)
+
+            # Check if within tolerance
+            if dx < tolerance_mm and dy < tolerance_mm and dz < tolerance_mm:
+                self.get_logger().info(f'  Reached position: ({current_x:.1f}, {current_y:.1f}, {current_z:.1f}) mm')
+                time.sleep(0.5)  # Brief settle time
+                return True
+
+            # Log progress every 2 seconds
+            elapsed = time.time() - start_time
+            if int(elapsed) >= last_log + 2:
+                last_log = int(elapsed)
+                self.get_logger().info(f'  Position: ({current_x:.1f}, {current_y:.1f}, {current_z:.1f}) -> target ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f})')
+
+        self.get_logger().warn(f'Move timeout - current: ({self.side_arm_position[0]:.1f}, {self.side_arm_position[1]:.1f}, {self.side_arm_position[2]:.1f})')
+        return True  # Continue anyway
 
     def move_to_position_async(self, x_mm: float, y_mm: float, z_mm: float):
         """Start moving side arm to position (non-blocking)."""
