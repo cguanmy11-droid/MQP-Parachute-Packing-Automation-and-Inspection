@@ -31,7 +31,7 @@ def generate_launch_description():
 
     # Camera settings
     camera_index_arg = DeclareLaunchArgument(
-        'camera_index', default_value='0',
+        'camera_index', default_value='4',
         description='USB camera index (0, 1, 2, etc.)'
     )
     display_arg = DeclareLaunchArgument(

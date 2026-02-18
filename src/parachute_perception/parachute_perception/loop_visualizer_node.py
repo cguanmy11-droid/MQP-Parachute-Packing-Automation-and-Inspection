@@ -306,7 +306,7 @@ class LoopVisualizerNode(Node):
         are visible to the camera.
         """
         marker = Marker()
-        marker.header.frame_id = 'camera_frame'  # Moves with the camera!
+        marker.header.frame_id = 'camera_frame'  # Moves with the camera
         marker.header.stamp = stamp
         marker.ns = 'camera_fov_grid'
         marker.id = 0

@@ -457,7 +457,7 @@ def generate_launch_description():
         arguments=[
             '--x', '0', '--y', '-0.15', '--z', '-0.22',
             '--roll', '1.5708', '--pitch', '0', '--yaw', '-1.5708',
-            '--frame-id', 'wx200/base_link',
+            '--frame-id', 'world',
             '--child-frame-id', 'framemodel_root'
         ],
         condition=IfCondition(LaunchConfiguration('enable_main_arm'))
@@ -490,7 +490,7 @@ def generate_launch_description():
         arguments=[
             '--x', '0.4', '--y', '0.19', '--z', '-0.03',
             '--roll', '1.5708', '--pitch', '0', '--yaw', '3.1416',
-            '--frame-id', 'wx200/base_link',
+            '--frame-id', 'world', # wx200/base_link
             '--child-frame-id', 'side_arm_origin'
         ],
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
