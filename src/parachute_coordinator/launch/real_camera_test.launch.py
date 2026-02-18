@@ -23,15 +23,27 @@ Usage:
     ros2 launch parachute_coordinator dual_arm_test.launch.py vision_test_mode:=false &
     ros2 launch parachute_coordinator real_camera_test.launch.py enable_calibration:=true
 
-    # Then trigger calibration:
+    # Then trigger calibration (homes arm, moves to x=180mm, collects, returns home):
     ros2 service call /calibrate_loops std_srvs/srv/Trigger
+
+    # Calibration sequence:
+    #   1. HOME_ALL - homes all 3 axes via limit switches
+    #   2. Move to calibration position (x=180mm by default)
+    #   3. Collect detections for N seconds, transform to world frame
+    #   4. Cluster and filter detections
+    #   5. Return to home position
+    #   6. Save results to /tmp/loop_calibration/latest.json
 
     # Calibration parameters can be adjusted:
     ros2 launch parachute_coordinator real_camera_test.launch.py \\
         enable_calibration:=true \\
         calibration_duration:=10.0 \\
         spatial_tolerance:=0.01 \\
-        min_detection_count:=20
+        min_detection_count:=20 \\
+        calibration_x_mm:=200.0
+
+    # Load previously saved calibration:
+    ros2 service call /load_calibration std_srvs/srv/Trigger
 """
 
 from launch import LaunchDescription
@@ -95,6 +107,10 @@ def generate_launch_description():
     min_detection_count_arg = DeclareLaunchArgument(
         'min_detection_count', default_value='15',
         description='Minimum detections required for a valid loop'
+    )
+    calibration_x_mm_arg = DeclareLaunchArgument(
+        'calibration_x_mm', default_value='180.0',
+        description='X position (mm) to move to during calibration for best view of loops'
     )
 
     # ==================== YOLO DETECTOR ====================
@@ -163,8 +179,13 @@ def generate_launch_description():
             'collection_duration': LaunchConfiguration('calibration_duration'),
             'spatial_tolerance': LaunchConfiguration('spatial_tolerance'),
             'min_detection_count': LaunchConfiguration('min_detection_count'),
+            'calibration_x_mm': LaunchConfiguration('calibration_x_mm'),
+            'calibration_y_mm': 0.0,
+            'calibration_z_mm': 0.0,
             'home_before_calibration': True,
+            'return_home_after': True,
             'camera_frame_id': 'camera_frame',
+            'world_frame_id': 'world',
             'save_to_file': True,
             'save_directory': '/tmp/loop_calibration',
             'loop_radius': 0.015,
@@ -215,6 +236,7 @@ def generate_launch_description():
         calibration_duration_arg,
         spatial_tolerance_arg,
         min_detection_count_arg,
+        calibration_x_mm_arg,
 
         # Nodes
         yolo_detector,
