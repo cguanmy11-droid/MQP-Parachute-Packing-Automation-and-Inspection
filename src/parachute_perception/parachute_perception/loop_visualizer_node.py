@@ -251,13 +251,16 @@ class LoopVisualizerNode(Node):
     def publish_grid(self):
         if not self.get_parameter('grid_enabled').value:
             return
+
+        # Use actual current time (not Time() which is zero and causes jitter)
+        stamp = self.get_clock().now().to_msg()
+
         marker_array = MarkerArray()
-        grid_marker = self.create_grid_marker('camera_frame', Time())
+        grid_marker = self.create_grid_marker('camera_frame', stamp)
         if grid_marker:
-            grid_marker.lifetime.sec = 0  # persistent
+            grid_marker.lifetime.sec = 1  # Refresh every second
             marker_array.markers.append(grid_marker)
 
-        stamp = Time()
         grid_z = self.get_parameter('grid_offset_z').value
 
         if len(self.current_loops) > 0:
@@ -281,7 +284,7 @@ class LoopVisualizerNode(Node):
                 dot.scale.y = 0.008
                 dot.scale.z = 0.002
                 dot.color = ColorRGBA(r=1.0, g=0.3, b=0.3, a=0.9)
-                dot.lifetime.sec = 0  # persistent until cleared
+                dot.lifetime.sec = 1  # Refresh rate
                 marker_array.markers.append(dot)
         elif getattr(self, '_had_detections', False):
             # Only clear once when detections disappear
