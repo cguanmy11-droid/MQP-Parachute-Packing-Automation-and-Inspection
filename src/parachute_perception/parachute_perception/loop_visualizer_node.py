@@ -208,8 +208,9 @@ class LoopVisualizerNode(Node):
                 else:
                     marker.color = color
 
-            marker.lifetime.sec = 0
-            marker.lifetime.nanosec = 500000000  # 0.5 seconds
+            # Longer lifetime to smooth over intermittent detections
+            marker.lifetime.sec = 1
+            marker.lifetime.nanosec = 0
 
             marker_array.markers.append(marker)
 
@@ -241,8 +242,9 @@ class LoopVisualizerNode(Node):
             text_marker.color.b = 1.0
             text_marker.color.a = 1.0
 
-            text_marker.lifetime.sec = 0
-            text_marker.lifetime.nanosec = 500000000
+            # Longer lifetime to smooth over intermittent detections
+            text_marker.lifetime.sec = 1
+            text_marker.lifetime.nanosec = 0
 
             marker_array.markers.append(text_marker)
 
@@ -258,7 +260,10 @@ class LoopVisualizerNode(Node):
         marker_array = MarkerArray()
         grid_marker = self.create_grid_marker('camera_frame', stamp)
         if grid_marker:
-            grid_marker.lifetime.sec = 1  # Refresh every second
+            # Use lifetime of 0 (persistent) - marker stays until explicitly deleted
+            # This prevents blinking from timer jitter
+            grid_marker.lifetime.sec = 0
+            grid_marker.lifetime.nanosec = 0
             marker_array.markers.append(grid_marker)
 
         grid_z = self.get_parameter('grid_offset_z').value
@@ -284,7 +289,9 @@ class LoopVisualizerNode(Node):
                 dot.scale.y = 0.008
                 dot.scale.z = 0.002
                 dot.color = ColorRGBA(r=1.0, g=0.3, b=0.3, a=0.9)
-                dot.lifetime.sec = 1  # Refresh rate
+                # Longer lifetime (2 sec) to smooth over intermittent detections
+                dot.lifetime.sec = 2
+                dot.lifetime.nanosec = 0
                 marker_array.markers.append(dot)
         elif getattr(self, '_had_detections', False):
             # Only clear once when detections disappear
