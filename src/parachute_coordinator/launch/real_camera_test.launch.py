@@ -97,8 +97,8 @@ def generate_launch_description():
         description='Enable loop calibration node (call /calibrate_loops service to start)'
     )
     calibration_duration_arg = DeclareLaunchArgument(
-        'calibration_duration', default_value='5.0',
-        description='Duration to collect detections during calibration (seconds)'
+        'calibration_duration', default_value='30.0',
+        description='Max duration to collect detections (will finish early when all loops verified)'
     )
     spatial_tolerance_arg = DeclareLaunchArgument(
         'spatial_tolerance', default_value='0.008',
@@ -111,6 +111,10 @@ def generate_launch_description():
     calibration_x_mm_arg = DeclareLaunchArgument(
         'calibration_x_mm', default_value='180.0',
         description='X position (mm) to move to during calibration for best view of loops'
+    )
+    min_loops_expected_arg = DeclareLaunchArgument(
+        'min_loops_expected', default_value='1',
+        description='Minimum number of loops to detect before early termination is allowed'
     )
 
     # ==================== YOLO DETECTOR ====================
@@ -184,6 +188,9 @@ def generate_launch_description():
             'calibration_z_mm': 0.0,
             'home_before_calibration': True,
             'return_home_after': True,
+            'early_termination': True,  # Finish early when all loops hit threshold
+            'min_loops_expected': LaunchConfiguration('min_loops_expected'),
+            'stable_time': 1.0,  # Seconds with stable loop count before early termination
             'camera_frame_id': 'camera_frame',
             'world_frame_id': 'world',
             'save_to_file': True,
@@ -237,6 +244,7 @@ def generate_launch_description():
         spatial_tolerance_arg,
         min_detection_count_arg,
         calibration_x_mm_arg,
+        min_loops_expected_arg,
 
         # Nodes
         yolo_detector,

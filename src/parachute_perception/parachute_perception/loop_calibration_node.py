@@ -8,9 +8,15 @@ This node:
 2. Moves to calibration position (x=180mm) to view loops
 3. Collects detections and transforms them to world frame
 4. Clusters nearby detections using spatial tolerance
-5. Filters by detection count threshold
+5. Terminates early once all detected loops hit the min_detection_count threshold
 6. Publishes calibrated positions as ground truth in world frame
 7. Returns side arm to home position
+
+Early Termination:
+- Calibration finishes early when ALL detected loop clusters have >= min_detection_count detections
+- Requires at least min_loops_expected loops to be detected
+- Waits stable_time seconds with no new loops appearing before terminating
+- Falls back to max collection_duration if thresholds not reached
 
 Usage:
     # Start calibration via service call
@@ -18,9 +24,10 @@ Usage:
 
     # Or with custom parameters
     ros2 run parachute_perception loop_calibration_node --ros-args \
-        -p collection_duration:=5.0 \
+        -p collection_duration:=30.0 \
         -p spatial_tolerance:=0.01 \
-        -p min_detection_count:=10
+        -p min_detection_count:=15 \
+        -p min_loops_expected:=5
 """
 import rclpy
 from rclpy.node import Node
@@ -49,11 +56,14 @@ class LoopCalibrationNode(Node):
 
         # ==================== PARAMETERS ====================
         # Calibration settings
-        self.declare_parameter('collection_duration', 5.0)  # seconds
+        self.declare_parameter('collection_duration', 30.0)  # max seconds (can finish early)
         self.declare_parameter('spatial_tolerance', 0.008)  # meters (8mm)
         self.declare_parameter('min_detection_count', 15)   # minimum detections to be valid
         self.declare_parameter('home_before_calibration', True)
         self.declare_parameter('return_home_after', True)
+        self.declare_parameter('early_termination', True)   # finish when all loops hit threshold
+        self.declare_parameter('min_loops_expected', 1)     # minimum loops to detect before early termination
+        self.declare_parameter('stable_time', 1.0)          # seconds with no new loops before early termination
 
         # Calibration position (where to move for best view of loops)
         self.declare_parameter('calibration_x_mm', 180.0)  # Move to end of X axis
@@ -82,6 +92,10 @@ class LoopCalibrationNode(Node):
         self.raw_detections = []  # List of (x, y, z, confidence) tuples IN WORLD FRAME
         self.calibrated_loops = []  # List of {'position': [x,y,z], 'count': n, 'confidence': avg}
         self.has_calibrated_data = False
+
+        # Early termination tracking
+        self.last_cluster_count = 0
+        self.last_cluster_change_time = None
 
         # ==================== SUBSCRIBERS ====================
         self.detection_sub = self.create_subscription(
@@ -148,9 +162,11 @@ class LoopCalibrationNode(Node):
         self.publish_timer = self.create_timer(1.0 / publish_rate, self.publish_ground_truth)
 
         self.get_logger().info('Loop Calibration Node initialized')
-        self.get_logger().info(f'  Collection duration: {self.get_parameter("collection_duration").value}s')
+        self.get_logger().info(f'  Max collection duration: {self.get_parameter("collection_duration").value}s')
         self.get_logger().info(f'  Spatial tolerance: {self.get_parameter("spatial_tolerance").value*1000:.1f}mm')
         self.get_logger().info(f'  Min detection count: {self.get_parameter("min_detection_count").value}')
+        self.get_logger().info(f'  Early termination: {self.get_parameter("early_termination").value}')
+        self.get_logger().info(f'  Min loops expected: {self.get_parameter("min_loops_expected").value}')
         self.get_logger().info(f'  Calibration position: x={self.get_parameter("calibration_x_mm").value}mm')
         self.get_logger().info(f'  Output frame: {self.get_parameter("world_frame_id").value}')
         self.get_logger().info('  Call /calibrate_loops service to start calibration')
@@ -207,12 +223,63 @@ class LoopCalibrationNode(Node):
             if success:
                 self.raw_detections.append((world_pos.x, world_pos.y, world_pos.z, loop.confidence))
 
-        # Publish status
-        count = len(self.raw_detections)
+        # Check for early termination
+        if self.get_parameter('early_termination').value and len(self.raw_detections) > 0:
+            if self.check_early_termination():
+                self.get_logger().info('Early termination: all loops verified!')
+                self.finish_calibration()
+                return
+
+        # Publish status with current cluster info
+        tolerance = self.get_parameter('spatial_tolerance').value
+        min_count = self.get_parameter('min_detection_count').value
+        clusters = self.cluster_detections(self.raw_detections, tolerance)
+        valid_clusters = [c for c in clusters if c['count'] >= min_count]
+
         remaining = duration - elapsed
         status_msg = String()
-        status_msg.data = f'Calibrating: {count} detections (world frame), {remaining:.1f}s remaining'
+        status_msg.data = (f'Calibrating: {len(self.raw_detections)} detections, '
+                          f'{len(valid_clusters)}/{len(clusters)} loops verified, '
+                          f'{remaining:.1f}s remaining')
         self.status_pub.publish(status_msg)
+
+    def check_early_termination(self) -> bool:
+        """Check if calibration can terminate early (all loops verified)."""
+        tolerance = self.get_parameter('spatial_tolerance').value
+        min_count = self.get_parameter('min_detection_count').value
+        min_loops = self.get_parameter('min_loops_expected').value
+        stable_time = self.get_parameter('stable_time').value
+
+        # Cluster current detections
+        clusters = self.cluster_detections(self.raw_detections, tolerance)
+
+        # Check if we have minimum number of loops
+        if len(clusters) < min_loops:
+            return False
+
+        # Check if number of clusters has changed
+        current_time = self.get_clock().now()
+        if len(clusters) != self.last_cluster_count:
+            self.last_cluster_count = len(clusters)
+            self.last_cluster_change_time = current_time
+            return False
+
+        # Check if clusters have been stable for stable_time
+        if self.last_cluster_change_time is None:
+            self.last_cluster_change_time = current_time
+            return False
+
+        time_stable = (current_time - self.last_cluster_change_time).nanoseconds / 1e9
+        if time_stable < stable_time:
+            return False
+
+        # Check if all clusters have reached minimum count
+        all_verified = all(c['count'] >= min_count for c in clusters)
+
+        if all_verified:
+            self.get_logger().info(f'All {len(clusters)} loops have >= {min_count} detections')
+
+        return all_verified
 
     def calibrate_callback(self, request, response):
         """Service callback to start calibration."""
@@ -255,8 +322,13 @@ class LoopCalibrationNode(Node):
         self.calibration_start_time = self.get_clock().now()
         self.raw_detections = []
 
+        # Reset early termination tracking
+        self.last_cluster_count = 0
+        self.last_cluster_change_time = None
+
         duration = self.get_parameter('collection_duration').value
-        self.get_logger().info(f'  Collecting for {duration}s...')
+        min_count = self.get_parameter('min_detection_count').value
+        self.get_logger().info(f'  Collecting for up to {duration}s (or until all loops have {min_count}+ detections)...')
 
         # Wait for collection to complete
         while self.is_calibrating:
