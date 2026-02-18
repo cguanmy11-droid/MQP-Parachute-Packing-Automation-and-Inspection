@@ -107,7 +107,18 @@ def generate_launch_description():
     )
 
     # ==================== VISUALIZATION ====================
+    # NOTE: loop_visualizer is NOT included here because dual_arm_test.launch.py
+    # already starts it. Running this launch file adds only the camera pipeline.
+    # If running standalone (without dual_arm_test), uncomment the visualizer below.
 
+    # Standalone mode flag
+    standalone_arg = DeclareLaunchArgument(
+        'standalone', default_value='false',
+        description='Set true if running without dual_arm_test (starts visualizer)'
+    )
+
+    # Only start visualizer in standalone mode
+    from launch.conditions import IfCondition
     loop_visualizer = Node(
         package='parachute_perception',
         executable='loop_visualizer_node',
@@ -117,12 +128,12 @@ def generate_launch_description():
             'input_frame_id': 'camera_frame',
             'output_frame_id': 'world',
             'marker_scale': 0.015,
-            # Grid visualization (shows camera FOV)
             'grid_enabled': True,
             'grid_size_x': 0.3,
             'grid_size_y': 0.2,
             'grid_offset_z': LaunchConfiguration('assumed_depth'),
-        }]
+        }],
+        condition=IfCondition(LaunchConfiguration('standalone'))
     )
 
     # ==================== RVIZ ====================
@@ -145,9 +156,10 @@ def generate_launch_description():
         camera_fov_arg,
         assumed_depth_arg,
         conf_threshold_arg,
+        standalone_arg,
 
         # Nodes
         yolo_detector,
         camera_to_3d,
-        loop_visualizer,
+        loop_visualizer,  # Only runs if standalone:=true
     ])
