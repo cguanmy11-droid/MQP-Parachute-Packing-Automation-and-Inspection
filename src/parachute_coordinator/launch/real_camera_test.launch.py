@@ -18,6 +18,20 @@ Usage:
     # With full dual arm system
     ros2 launch parachute_coordinator dual_arm_test.launch.py &
     ros2 launch parachute_coordinator real_camera_test.launch.py
+
+    # With calibration enabled (for capturing ground truth loop positions)
+    ros2 launch parachute_coordinator dual_arm_test.launch.py vision_test_mode:=false &
+    ros2 launch parachute_coordinator real_camera_test.launch.py enable_calibration:=true
+
+    # Then trigger calibration:
+    ros2 service call /calibrate_loops std_srvs/srv/Trigger
+
+    # Calibration parameters can be adjusted:
+    ros2 launch parachute_coordinator real_camera_test.launch.py \\
+        enable_calibration:=true \\
+        calibration_duration:=10.0 \\
+        spatial_tolerance:=0.01 \\
+        min_detection_count:=20
 """
 
 from launch import LaunchDescription
@@ -63,6 +77,24 @@ def generate_launch_description():
     conf_threshold_arg = DeclareLaunchArgument(
         'conf_threshold', default_value='0.5',
         description='YOLO confidence threshold'
+    )
+
+    # Calibration settings
+    enable_calibration_arg = DeclareLaunchArgument(
+        'enable_calibration', default_value='false',
+        description='Enable loop calibration node (call /calibrate_loops service to start)'
+    )
+    calibration_duration_arg = DeclareLaunchArgument(
+        'calibration_duration', default_value='5.0',
+        description='Duration to collect detections during calibration (seconds)'
+    )
+    spatial_tolerance_arg = DeclareLaunchArgument(
+        'spatial_tolerance', default_value='0.008',
+        description='Distance threshold to group detections into same loop (meters)'
+    )
+    min_detection_count_arg = DeclareLaunchArgument(
+        'min_detection_count', default_value='15',
+        description='Minimum detections required for a valid loop'
     )
 
     # ==================== YOLO DETECTOR ====================
@@ -119,6 +151,28 @@ def generate_launch_description():
 
     # Only start visualizer in standalone mode
     from launch.conditions import IfCondition
+
+    # ==================== CALIBRATION NODE ====================
+
+    loop_calibration = Node(
+        package='parachute_perception',
+        executable='loop_calibration_node',
+        name='loop_calibration_node',
+        output='screen',
+        parameters=[{
+            'collection_duration': LaunchConfiguration('calibration_duration'),
+            'spatial_tolerance': LaunchConfiguration('spatial_tolerance'),
+            'min_detection_count': LaunchConfiguration('min_detection_count'),
+            'home_before_calibration': True,
+            'camera_frame_id': 'camera_frame',
+            'save_to_file': True,
+            'save_directory': '/tmp/loop_calibration',
+            'loop_radius': 0.015,
+            'publish_rate': 10.0,
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_calibration'))
+    )
+
     loop_visualizer = Node(
         package='parachute_perception',
         executable='loop_visualizer_node',
@@ -157,9 +211,14 @@ def generate_launch_description():
         assumed_depth_arg,
         conf_threshold_arg,
         standalone_arg,
+        enable_calibration_arg,
+        calibration_duration_arg,
+        spatial_tolerance_arg,
+        min_detection_count_arg,
 
         # Nodes
         yolo_detector,
         camera_to_3d,
         loop_visualizer,  # Only runs if standalone:=true
+        loop_calibration,  # Only runs if enable_calibration:=true
     ])

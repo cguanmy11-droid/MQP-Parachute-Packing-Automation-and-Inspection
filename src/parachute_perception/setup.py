@@ -32,6 +32,7 @@ setup(
             'loop_ground_truth_node = parachute_perception.loop_ground_truth_node:main',
             'detection_simulator_node = parachute_perception.detection_simulator_node:main',
             'camera_to_3d_node = parachute_perception.camera_to_3d_node:main',
+            'loop_calibration_node = parachute_perception.loop_calibration_node:main',
         ],
     },
 )
