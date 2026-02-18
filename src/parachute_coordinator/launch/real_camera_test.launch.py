@@ -63,13 +63,13 @@ def generate_launch_description():
         description='Camera image height in pixels'
     )
     camera_fov_arg = DeclareLaunchArgument(
-        'camera_fov', default_value='60.0',
+        'camera_fov', default_value='80.0',
         description='Camera horizontal field of view in degrees'
     )
 
     # Depth assumption for pixel-to-3D conversion
     assumed_depth_arg = DeclareLaunchArgument(
-        'assumed_depth', default_value='0.25',
+        'assumed_depth', default_value='0.22',
         description='Assumed depth from camera to loop plane (meters)'
     )
 

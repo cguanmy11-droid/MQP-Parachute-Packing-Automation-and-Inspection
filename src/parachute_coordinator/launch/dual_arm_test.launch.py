@@ -488,7 +488,7 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='side_arm_static_tf',
         arguments=[
-            '--x', '0.4', '--y', '0.19', '--z', '-0.03',
+            '--x', '0.37', '--y', '0.41', '--z', '-0.26',
             '--roll', '1.5708', '--pitch', '0', '--yaw', '3.1416',
             '--frame-id', 'world', # wx200/base_link
             '--child-frame-id', 'side_arm_origin'

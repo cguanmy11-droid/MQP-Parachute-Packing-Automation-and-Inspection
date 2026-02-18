@@ -43,7 +43,7 @@ class CameraTo3DNode(Node):
         self.declare_parameter('image_height', 480)
 
         # Camera intrinsics - Option 1: Specify FOV (simpler)
-        self.declare_parameter('camera_fov_horizontal', 60.0)  # degrees
+        self.declare_parameter('camera_fov_horizontal', 80.0)  # degrees
 
         # Camera intrinsics - Option 2: Specify focal length directly (more accurate)
         # If fx/fy are 0, they'll be computed from FOV
@@ -55,7 +55,7 @@ class CameraTo3DNode(Node):
         # ==================== DEPTH ASSUMPTION ====================
         # How far loops are from the camera (meters)
         # This is the key assumption for pixel→3D conversion
-        self.declare_parameter('assumed_depth', 0.12)  # meters
+        self.declare_parameter('assumed_depth', 0.22)  # meters
 
         # ==================== OUTPUT CONFIGURATION ====================
         self.declare_parameter('camera_frame_id', 'camera_frame')
