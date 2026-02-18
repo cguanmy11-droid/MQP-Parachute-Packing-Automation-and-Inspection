@@ -69,7 +69,7 @@ def generate_launch_description():
 
     # Depth assumption for pixel-to-3D conversion
     assumed_depth_arg = DeclareLaunchArgument(
-        'assumed_depth', default_value='0.12',
+        'assumed_depth', default_value='0.25',
         description='Assumed depth from camera to loop plane (meters)'
     )
 

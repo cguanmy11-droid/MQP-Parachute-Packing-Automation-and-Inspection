@@ -236,7 +236,7 @@
   <joint name="y_carriage_to_camera" type="fixed">
     <parent link="y_carriage_link"/>
     <child link="camera_frame"/>
-    <origin xyz="0.01 0.03 0.03" rpy="0 3.1416 0"/>
+    <origin xyz="0.01 0.03 0.1" rpy="0 3.0 0"/>
   </joint>
 
 </robot>
