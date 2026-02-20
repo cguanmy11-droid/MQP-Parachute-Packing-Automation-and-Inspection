@@ -11,7 +11,8 @@ from parachute_interfaces.action import ExecuteTrajectory
 from parachute_interfaces.msg import ArmStatus
 from geometry_msgs.msg import Pose
 from std_msgs.msg import String, Float32
-from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
+from interbotix_xs_msgs.msg import JointSingleCommand
+from interbotix_xs_msgs.srv import OperatingModes, TorqueEnable  # kept for potential future use
 import time
 
 class MainArmInterfaceNode(Node):
@@ -25,6 +26,9 @@ class MainArmInterfaceNode(Node):
         self.declare_parameter('robot_name', 'wx200')
         self.declare_parameter('moving_time', 2.0)  # Time for each movement
         self.declare_parameter('accel_time', 0.5)   # Acceleration time
+        # Gripper stroke mapping parameters for joint_single command
+        self.declare_parameter('gripper_open_cmd', 0.037)
+        self.declare_parameter('gripper_close_cmd', -0.015)
 
         self.test_mode = self.get_parameter('test_mode').value
         self.use_sim = self.get_parameter('use_sim').value
@@ -32,50 +36,34 @@ class MainArmInterfaceNode(Node):
         robot_name = self.get_parameter('robot_name').value
         moving_time = self.get_parameter('moving_time').value
         accel_time = self.get_parameter('accel_time').value
+        self.gripper_open_cmd = float(self.get_parameter('gripper_open_cmd').value)
+        self.gripper_close_cmd = float(self.get_parameter('gripper_close_cmd').value)
         
         self.bot = None
-
-        # Initialize robot (only if not in test mode)
-        if not self.test_mode:
-            # Initialize robot for hardware and simulation
-            self.get_logger().info(f'Initializing {robot_model} arm...')
-            try:
-                self.bot = InterbotixManipulatorXS(
-                    robot_model=robot_model,
-                    robot_name=robot_name,
-                    moving_time=moving_time,
-                    accel_time=accel_time,
-                )
-                if self.use_sim:
-                    self.get_logger().info('Running in SIMULATION MODE')
-                    self.get_logger().info('Robot controlled via RViz simulation')
-                else: 
-                    self.get_logger().info('Robot arm initialized successfully')
-                
-                # Now initialize using the Interbotix Node instead
-                # super().__init__('main_arm_interface_node')
-                
-                # Go to home pose on startup
-                self.bot.arm.go_to_home_pose()
-                self.current_pose_name = 'home'
-            except Exception as e:
-                self.get_logger().error(f'Failed to initialize robot: {e}')
-                self.bot = None
-        else:
-            self.get_logger().info('Running in TEST MODE - no robot initialization')
-            # super().__init__('main_arm_interface_node')
-        
+        self.gripper_ready = False
+        self._robot_name = robot_name
 
         # Action server for trajectory execution
         self.action_server = ActionServer(self, ExecuteTrajectory, '/main_arm/execute_trajectory', self.execute_trajectory_callback)
         
         # Subscribers for simple pose and gripper commands
         self.pose_cmd_sub = self.create_subscription(String, '/main_arm/pose_command', self.pose_command_callback, 10)
-        self.pose_cmd_sub = self.create_subscription(String, '/main_arm/gripper_command', self.gripper_command_callback, 10)
+        self.gripper_cmd_sub = self.create_subscription(String, '/main_arm/gripper_command', self.gripper_command_callback, 10)
         self.gripper_effort_sub = self.create_subscription(Float32, '/main_arm/gripper_effort', self.gripper_effort_callback, 10)
-        # Add this subscriber for testing positions
+        self.gripper_position_sub = self.create_subscription(Float32, '/main_arm/gripper_position', self.gripper_position_callback, 10)
         self.test_position_sub = self.create_subscription(Pose, '/main_arm/test_position', self.test_position_callback, 10)
+        self.gripper_joint_pub = self.create_publisher(
+            JointSingleCommand,
+            f'/{robot_name}/commands/joint_single',
+            10
+        )
         
+        # Service clients for direct gripper mode control (bypass InterbotixManipulatorXS)
+        self._set_mode_cli = self.create_client(
+            OperatingModes, f'/{robot_name}/set_operating_modes')
+        self._torque_cli = self.create_client(
+            TorqueEnable, f'/{robot_name}/torque_enable')
+
         # Publisher for arm and pose status
         self.status_publisher = self.create_publisher(ArmStatus, '/main_arm/status', 10)
         self.simple_status_publisher = self.create_publisher(String, '/main_arm/simple_status', 10)
@@ -86,13 +74,33 @@ class MainArmInterfaceNode(Node):
 
         # State tracking
         self.current_state = ArmStatus.STATE_IDLE
-        self.current_pose_name = 'home' if self.bot else 'unknown'
-        self.gripper_effort = 0.5  # Default gripper effort (0.0-1.0)
+        self.current_pose_name = 'unknown'
+        self.gripper_effort = 0.5
+        self.gripper_position = 0.0  # 0.0=open, 1.0=closed
         self.is_moving = False
         self.error_message = ""
         
-        self.get_logger().info('Main Arm Interface Node initialized')
-        
+        self.get_logger().info('Main Arm Interface Node initialized (subscriptions ready)')
+
+        # Set gripper to position mode via a startup timer (runs after spin starts)
+        if not self.test_mode:
+            self._startup_timer = self.create_timer(2.0, self._check_gripper_ready)
+            self.get_logger().info('Waiting for xs_sdk to be ready...')
+        else:
+            self.get_logger().info('Running in TEST MODE - no robot initialization')
+
+    def _check_gripper_ready(self):
+        """Wait for xs_sdk, then mark gripper as ready (mode set via modes.yaml)."""
+        if not self._set_mode_cli.service_is_ready():
+            self.get_logger().warn('Waiting for xs_sdk services...')
+            return
+        self._startup_timer.cancel()
+        self.gripper_ready = True
+        self.get_logger().info(
+            'xs_sdk is up - gripper position mode configured via modes.yaml. '
+            'Stroke control ready!'
+        )
+
     def publish_status(self):
         """Publish current arm status"""
         msg = ArmStatus()
@@ -263,12 +271,14 @@ class MainArmInterfaceNode(Node):
         
         try:
             if command == 'open':
-                self.bot.gripper.open()
-                self.get_logger().info('Gripper opened')
+                self.gripper_position = 0.0
+                self.command_gripper_position(self.gripper_position)
+                self.get_logger().info('Gripper opened (position=0.0)')
                 
             elif command == 'close':
-                self.bot.gripper.close(effort=self.gripper_effort)
-                self.get_logger().info(f'Gripper closed with effort {self.gripper_effort:.2f}')
+                self.gripper_position = 1.0
+                self.command_gripper_position(self.gripper_position)
+                self.get_logger().info('Gripper closed (position=1.0)')
                 
             else:
                 self.get_logger().warn(f'Unknown gripper command: {command}')
@@ -280,6 +290,34 @@ class MainArmInterfaceNode(Node):
         """Update gripper effort setting"""
         self.gripper_effort = max(0.0, min(1.0, msg.data))
         self.get_logger().info(f'Gripper effort set to: {self.gripper_effort:.2f}')
+
+    def gripper_position_callback(self, msg):
+        """Set gripper stroke position using normalized value [0.0, 1.0]."""
+        self.get_logger().info(f'Received gripper position msg: {msg.data}')
+        target = max(0.0, min(1.0, msg.data))
+        self.gripper_position = target
+        self.command_gripper_position(target)
+
+    def command_gripper_position(self, position):
+        """Publish a single-joint command for gripper travel position."""
+        if self.use_sim:
+            self.get_logger().warn('Gripper position commands not yet implemented for simulation')
+            return
+        if not self.gripper_ready:
+            self.get_logger().warn('Gripper not ready yet (position mode not configured)')
+            return
+
+        # Linear map: 0.0 -> open_cmd, 1.0 -> close_cmd
+        cmd = self.gripper_open_cmd + (self.gripper_close_cmd - self.gripper_open_cmd) * position
+
+        joint_msg = JointSingleCommand()
+        joint_msg.name = 'gripper'
+        joint_msg.cmd = float(cmd)
+        self.gripper_joint_pub.publish(joint_msg)
+        self.get_logger().info(
+            f'Gripper position={position:.2f}, joint_cmd={cmd:.4f} '
+            f'(open={self.gripper_open_cmd:.4f}, close={self.gripper_close_cmd:.4f})'
+        )
     
     # Make sure shut down is clean exit
     def shutdown(self):

@@ -11,6 +11,7 @@ from std_msgs.msg import String, Float32
 from geometry_msgs.msg import Pose, Point, Quaternion
 from parachute_interfaces.action import ExecuteTrajectory
 from rclpy.action import ActionClient
+import time
 
 class XboxArmController(Node):
     def __init__(self):
@@ -40,6 +41,11 @@ class XboxArmController(Node):
             '/main_arm/gripper_effort',
             10
         )
+        self.gripper_pos_pub = self.create_publisher(
+            Float32,
+            '/main_arm/gripper_position',
+            10
+        )
         
         # Action client for trajectories
         self.traj_action_client = ActionClient(
@@ -51,6 +57,9 @@ class XboxArmController(Node):
         # State tracking
         self.last_buttons = [0] * 15  # Xbox controller has ~15 buttons
         self.gripper_effort = 0.5
+        self.gripper_position = 0.0  # 0.0=open, 1.0=closed
+        self.gripper_step_per_sec = 0.6
+        self._last_gripper_update_time = time.time()
         
         # Control mode
         self.control_mode = 'pose'  # 'pose' or 'cartesian'
@@ -61,8 +70,8 @@ class XboxArmController(Node):
         self.get_logger().info('  B (1): Sleep pose')
         self.get_logger().info('  X (2): Upright pose')
         self.get_logger().info('  Y (3): Toggle control mode')
-        self.get_logger().info('  LB (4): Open gripper')
-        self.get_logger().info('  RB (5): Close gripper')
+        self.get_logger().info('  RB (5): Hold to close gripper (position mode)')
+        self.get_logger().info('  Back (6): Hold to open gripper (position mode)')
         self.get_logger().info('  Start (7): Emergency sleep')
         
     def joy_callback(self, msg):
@@ -71,12 +80,13 @@ class XboxArmController(Node):
         # Button indices for Xbox controller (may vary)
         # buttons = [A, B, X, Y, LB, RB, Back, Start, ...]
         buttons = msg.buttons
-        axes = msg.axes
-        
         # Detect button presses (rising edge)
         for i in range(min(len(buttons), len(self.last_buttons))):
             if buttons[i] == 1 and self.last_buttons[i] == 0:
                 self.handle_button_press(i)
+
+        # Long-press control for gripper travel.
+        self.update_gripper_position_hold(buttons)
         
         # Handle analog sticks for Cartesian control
         if self.control_mode == 'cartesian':
@@ -86,6 +96,27 @@ class XboxArmController(Node):
             pass  # Implement if needed
         
         self.last_buttons = list(buttons)
+
+    def update_gripper_position_hold(self, buttons):
+        """Use RB/Back long-press to continuously change gripper position."""
+        now = time.time()
+        dt = max(0.0, now - self._last_gripper_update_time)
+        self._last_gripper_update_time = now
+
+        close_pressed = len(buttons) > 5 and buttons[5] == 1  # RB
+        open_pressed = len(buttons) > 6 and buttons[6] == 1   # Back
+
+        if close_pressed and not open_pressed:
+            self.gripper_position = min(1.0, self.gripper_position + self.gripper_step_per_sec * dt)
+            self.publish_gripper_position()
+        elif open_pressed and not close_pressed:
+            self.gripper_position = max(0.0, self.gripper_position - self.gripper_step_per_sec * dt)
+            self.publish_gripper_position()
+
+    def publish_gripper_position(self):
+        msg = Float32()
+        msg.data = float(self.gripper_position)
+        self.gripper_pos_pub.publish(msg)
     
     def handle_button_press(self, button_index):
         """Handle specific button presses"""
@@ -112,17 +143,11 @@ class XboxArmController(Node):
             self.control_mode = 'cartesian' if self.control_mode == 'pose' else 'pose'
             self.get_logger().info(f'Control mode: {self.control_mode}')
             
-        elif button_index == 4:  # LB - Open gripper
-            self.get_logger().info('Opening gripper')
-            msg = String()
-            msg.data = 'open'
-            self.gripper_cmd_pub.publish(msg)
-            
-        elif button_index == 5:  # RB - Close gripper
-            self.get_logger().info('Closing gripper')
-            msg = String()
-            msg.data = 'close'
-            self.gripper_cmd_pub.publish(msg)
+        elif button_index == 5:  # RB
+            self.get_logger().info('Hold RB to close gripper gradually')
+
+        elif button_index == 6:  # Back
+            self.get_logger().info('Hold Back to open gripper gradually')
             
         elif button_index == 7:  # Start - Emergency sleep
             self.get_logger().warn('EMERGENCY SLEEP!')
