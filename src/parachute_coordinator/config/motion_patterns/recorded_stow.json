@@ -1,0 +1,56 @@
+{
+  "name": "recorded_stow",
+  "description": "Path extracted from recorded waypoints - sweeping stow motion with added wider approach",
+  "reference_point": "start",
+  "speed_factor": 0.4,
+  "waypoints": [
+    {
+      "dx": 0.0,
+      "dy": 0.0,
+      "dz": 0.0,
+      "comment": "Start - extended position (0.412, 0.0, 0.287)"
+    },
+    {
+      "dx": -0.124,
+      "dy": 0.0,
+      "dz": -0.247,
+      "comment": "Move down to surface (0.288, 0.0, 0.040)"
+    },
+    {
+      "dx": -0.146,
+      "dy": 0.0,
+      "dz": -0.229,
+      "comment": "Slightly back (0.266, 0.0, 0.058)"
+    },
+    {
+      "dx": -0.247,
+      "dy": 0.084,
+      "dz": -0.230,
+      "comment": "Rotate to right side (0.165, 0.084, 0.057)"
+    },
+    {
+      "dx": -0.244,
+      "dy": -0.072,
+      "dz": -0.190,
+      "comment": "Rotate to left side (0.168, -0.072, 0.097)"
+    },
+    {
+      "dx": -0.244,
+      "dy": -0.12,
+      "dz": -0.190,
+      "comment": "ADDED: Go wider to left"
+    },
+    {
+      "dx": -0.15,
+      "dy": -0.08,
+      "dz": -0.170,
+      "comment": "ADDED: Move further in toward robot"
+    },
+    {
+      "dx": -0.098,
+      "dy": 0.001,
+      "dz": -0.171,
+      "comment": "Final position (0.314, 0.001, 0.116)"
+    }
+  ]
+}

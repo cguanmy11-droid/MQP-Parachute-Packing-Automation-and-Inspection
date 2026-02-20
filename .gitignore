@@ -2,6 +2,8 @@ build/
 install/
 log/
 .vscode/
+__pycache__/
+*.pyc
 
 # Vendor dependencies (pulled with vcs)
 src/interbotix_ros_core/

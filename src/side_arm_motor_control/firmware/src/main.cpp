@@ -152,20 +152,120 @@ void haltSteppersImmediate(bool disableDrivers = true) {
   }
 }
 
+// Homing states
+enum class HomingState { IDLE, BACKING_OFF, APPROACHING, DONE };
+HomingState stepper1HomingState = HomingState::IDLE;
+HomingState stepper2HomingState = HomingState::IDLE;
+HomingState dcHomingState = HomingState::IDLE;
+
+constexpr long BACKOFF_STEPS = 800;    // steps to back off from limit
+constexpr float HOMING_APPROACH_SPEED = 200.0;  // slow approach speed
+
 void requestHome(uint8_t target) {
-  if (target == 0) {
-    dcHoming = true;
-    applyDcCommand(DC_HOMING_SPEED);
-  } else if (target == 1) {
-    stepper1Homing = true;
-    stepper1.setMaxSpeed(HOMING_SPEED);
-    stepper1.setAcceleration(HOMING_SPEED * 2);
-    stepper1.move(-HOMING_TRAVEL_STEPS);
+  const LimitStates limits = readLimitStates();
+
+  if (target == 1) {
+    if (limits.sw3) {
+      // Already on limit — back off first
+      stepper1HomingState = HomingState::BACKING_OFF;
+      stepper1.setMaxSpeed(HOMING_SPEED);
+      stepper1.setAcceleration(HOMING_SPEED * 2);
+      stepper1.move(BACKOFF_STEPS);  // positive = away from limit
+      Serial.println("HOME stepper1: backing off limit");
+    } else {
+      // Not on limit — approach directly
+      stepper1HomingState = HomingState::APPROACHING;
+      stepper1.setMaxSpeed(HOMING_SPEED);
+      stepper1.setAcceleration(HOMING_SPEED * 2);
+      stepper1.move(-HOMING_TRAVEL_STEPS);
+      Serial.println("HOME stepper1: approaching limit");
+    }
   } else if (target == 2) {
-    stepper2Homing = true;
-    stepper2.setMaxSpeed(HOMING_SPEED);
-    stepper2.setAcceleration(HOMING_SPEED * 2);
-    stepper2.move(-HOMING_TRAVEL_STEPS);
+    if (limits.sw2) {
+      stepper2HomingState = HomingState::BACKING_OFF;
+      stepper2.setMaxSpeed(HOMING_SPEED);
+      stepper2.setAcceleration(HOMING_SPEED * 2);
+      stepper2.move(BACKOFF_STEPS);
+      Serial.println("HOME stepper2: backing off limit");
+    } else {
+      stepper2HomingState = HomingState::APPROACHING;
+      stepper2.setMaxSpeed(HOMING_SPEED);
+      stepper2.setAcceleration(HOMING_SPEED * 2);
+      stepper2.move(-HOMING_TRAVEL_STEPS);
+      Serial.println("HOME stepper2: approaching limit");
+    }
+  } else if (target == 0) {
+    if (limits.sw1) {
+      dcHomingState = HomingState::BACKING_OFF;
+      applyDcCommand(-DC_HOMING_SPEED);  // reverse away from limit
+      Serial.println("HOME DC: backing off limit");
+    } else {
+      dcHomingState = HomingState::APPROACHING;
+      applyDcCommand(DC_HOMING_SPEED);
+      Serial.println("HOME DC: approaching limit");
+    }
+  }
+}
+
+void updateHoming() {
+  const LimitStates limits = readLimitStates();
+
+  // === Stepper 1 ===
+  if (stepper1HomingState == HomingState::BACKING_OFF) {
+    if (!limits.sw3 && stepper1.distanceToGo() == 0) {
+      // Cleared the limit, now approach slowly
+      stepper1HomingState = HomingState::APPROACHING;
+      stepper1.setMaxSpeed(HOMING_APPROACH_SPEED);
+      stepper1.setAcceleration(HOMING_APPROACH_SPEED * 2);
+      stepper1.move(-HOMING_TRAVEL_STEPS);
+      Serial.println("HOME stepper1: approaching limit");
+    }
+  } else if (stepper1HomingState == HomingState::APPROACHING) {
+    if (limits.sw3) {
+      haltStepperImmediate(stepper1);
+      stepper1.setCurrentPosition(0);
+      stepper1HomingState = HomingState::DONE;
+      limit3Latched = true;
+      Serial.println("HOME stepper1: complete, position zeroed");
+    }
+  }
+
+  // === Stepper 2 ===
+  if (stepper2HomingState == HomingState::BACKING_OFF) {
+    if (!limits.sw2 && stepper2.distanceToGo() == 0) {
+      stepper2HomingState = HomingState::APPROACHING;
+      stepper2.setMaxSpeed(HOMING_APPROACH_SPEED);
+      stepper2.setAcceleration(HOMING_APPROACH_SPEED * 2);
+      stepper2.move(-HOMING_TRAVEL_STEPS);
+      Serial.println("HOME stepper2: approaching limit");
+    }
+  } else if (stepper2HomingState == HomingState::APPROACHING) {
+    if (limits.sw2) {
+      haltStepperImmediate(stepper2);
+      stepper2.setCurrentPosition(0);
+      stepper2HomingState = HomingState::DONE;
+      limit2Latched = true;
+      Serial.println("HOME stepper2: complete, position zeroed");
+    }
+  }
+
+  // === DC motor ===
+  if (dcHomingState == HomingState::BACKING_OFF) {
+    if (!limits.sw1) {
+      // Cleared limit, brief pause then approach
+      applyDcCommand(0);
+      delay(100);
+      dcHomingState = HomingState::APPROACHING;
+      applyDcCommand(DC_HOMING_SPEED);
+      Serial.println("HOME DC: approaching limit");
+    }
+  } else if (dcHomingState == HomingState::APPROACHING) {
+    if (limits.sw1) {
+      applyDcCommand(0);
+      dcHomingState = HomingState::DONE;
+      limit1Latched = true;
+      Serial.println("HOME DC: complete, position zeroed");
+    }
   }
 }
 
@@ -271,39 +371,36 @@ void readSerial() {
 void checkLimits() {
   const LimitStates limits = readLimitStates();
 
-  // l1 -> DC motor: stop and wait for next command
+  // l1 -> DC motor
   if (limits.sw1) {
-    if (!limit1Latched) {
+    if (!limit1Latched && dcHomingState == HomingState::IDLE) {
       limit1Latched = true;
       applyDcCommand(0);
-      dcHoming = false;
-      Serial.println("EVENT Limit1 -> DC stopped, z position zeroed, awaiting command");
+      Serial.println("EVENT Limit1 -> DC stopped");
     }
   } else {
     limit1Latched = false;
   }
 
-  // l2 -> stepper2: stop, zero position, wait for next command
+  // l2 -> stepper2
   if (limits.sw2) {
-    if (!limit2Latched) {
+    if (!limit2Latched && stepper2HomingState == HomingState::IDLE) {
       limit2Latched = true;
       haltStepperImmediate(stepper2);
       stepper2.setCurrentPosition(0);
-      stepper2Homing = false;
-      Serial.println("EVENT Limit2 -> stepper2 stopped, position zeroed, awaiting command");
+      Serial.println("EVENT Limit2 -> stepper2 stopped");
     }
   } else {
     limit2Latched = false;
   }
 
-  // l3 -> stepper1: stop, zero position, wait for next command
+  // l3 -> stepper1
   if (limits.sw3) {
-    if (!limit3Latched) {
+    if (!limit3Latched && stepper1HomingState == HomingState::IDLE) {
       limit3Latched = true;
       haltStepperImmediate(stepper1);
       stepper1.setCurrentPosition(0);
-      stepper1Homing = false;
-      Serial.println("EVENT Limit3 -> stepper1 stopped, position zeroed, awaiting command");
+      Serial.println("EVENT Limit3 -> stepper1 stopped");
     }
   } else {
     limit3Latched = false;
@@ -352,6 +449,7 @@ void setup() {
 void loop() {
   readSerial();
   checkLimits();
+  updateHoming();
 
   if (steppersEnabled) {
     stepper1.run();

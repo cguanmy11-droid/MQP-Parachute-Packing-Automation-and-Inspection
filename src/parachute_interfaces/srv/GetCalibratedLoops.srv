@@ -1,0 +1,11 @@
+# Get calibrated loop positions from calibration node
+# Used by coordinator to access ground truth loop positions
+
+---
+bool success
+string message
+int32 count                          # Number of calibrated loops
+geometry_msgs/Point[] positions      # Loop positions in world frame
+float32[] radii                      # Loop radii
+int32[] loop_ids                     # Loop IDs
+int32[] detection_counts             # Number of detections per loop
