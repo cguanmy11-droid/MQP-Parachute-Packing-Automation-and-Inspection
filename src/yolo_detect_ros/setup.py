@@ -12,8 +12,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', glob('launch/*.py')),
         (
-            'share/' + package_name + '/runs/yolov8_labelme2/weights',
-            ['runs/yolov8_labelme2/weights/best.pt'],
+            'share/' + package_name + '/runs/yolo26m_hole2_100/weights',
+            ['runs/yolo26m_hole2_100/weights/best.pt'],
         ),
     ],
     install_requires=[

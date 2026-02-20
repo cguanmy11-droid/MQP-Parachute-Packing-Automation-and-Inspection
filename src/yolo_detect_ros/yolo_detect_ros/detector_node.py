@@ -26,7 +26,7 @@ class YoloDetectorNode(Node):
     def __init__(self) -> None:
         super().__init__('yolo_detector')
         self.declare_parameter('camera_index', 0)
-        self.declare_parameter('weights_path', 'runs/yolov8_labelme2/weights/best.pt')
+        self.declare_parameter('weights_path', 'runs/yolo26m_hole2_100/weights/best.pt')
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('iou_threshold', 0.5)
         self.declare_parameter('frame_rate', 30.0)
