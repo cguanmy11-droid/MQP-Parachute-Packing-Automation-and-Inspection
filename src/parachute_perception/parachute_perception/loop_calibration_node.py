@@ -68,9 +68,9 @@ class LoopCalibrationNode(Node):
         self.declare_parameter('stable_time', 1.0)          # seconds with no new loops before early termination
         self.declare_parameter('homing_timeout', 60.0)      # max seconds to wait for homing
 
-        # Calibration position (where to move for best view of loops)
-        self.declare_parameter('calibration_x_mm', 50.0)  # Move enough to see loops clearly
-        self.declare_parameter('calibration_y_mm', 0.0)
+        # Calibration position (where to move for                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         best view of loops)
+        self.declare_parameter('calibration_x_mm', 30.0)  # Move enough to see loops clearly
+        self.declare_parameter('calibration_y_mm', 20.0)
         self.declare_parameter('calibration_z_mm', 0.0)
 
         # Frame settings
@@ -103,7 +103,7 @@ class LoopCalibrationNode(Node):
         # Side arm state tracking
         self.side_arm_is_homed = False
         self.side_arm_position = (0.0, 0.0, 0.0)  # x_mm, y_mm, z_mm
-
+stepper
         # ==================== SUBSCRIBERS ====================
         self.detection_sub = self.create_subscription(
             DetectedLoops,
