@@ -129,11 +129,17 @@ Visualization Manager:
       Frame Timeout: 15
       Frames:
         All Enabled: true
+        camera_frame:
+          Value: true
         framemodel:
           Value: true
         framemodel_root:
           Value: true
         parachute_bag:
+          Value: true
+        side_arm_hook:
+          Value: true
+        side_arm_origin:
           Value: true
         world:
           Value: true
@@ -174,6 +180,10 @@ Visualization Manager:
             framemodel_root:
               framemodel:
                 parachute_bag:
+                  {}
+            side_arm_origin:
+              side_arm_hook:
+                camera_frame:
                   {}
             wx200/shoulder_link:
               wx200/upper_arm_link:
@@ -233,6 +243,69 @@ Visualization Manager:
       Update Interval: 0
       Value: true
       Visual Enabled: true
+    - Alpha: 1
+      Class: rviz_default_plugins/RobotModel
+      Collision Enabled: false
+      Description File: ""
+      Description Source: Topic
+      Description Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /side_arm/robot_description
+      Enabled: true
+      Links:
+        All Links Enabled: true
+        Expand Joint Details: false
+        Expand Link Details: false
+        Expand Tree: false
+        Link Tree Style: Links in Alphabetic Order
+      Mass Properties:
+        Inertia: false
+        Mass: false
+      Name: SideArmURDF
+      TF Prefix: ""
+      Update Interval: 0
+      Value: true
+      Visual Enabled: true
+    - Class: rviz_default_plugins/Marker
+      Enabled: false
+      Name: SideArmMarker
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        Filter size: 10
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /side_arm_marker
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: DetectedLoopMarkers
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /detected_loop_markers
+      Value: true
+    - Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Name: GroundTruthLoops
+      Namespaces:
+        {}
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /loop_ground_truth_markers
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 154; 153; 150

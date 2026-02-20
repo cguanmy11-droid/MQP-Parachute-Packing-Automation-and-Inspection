@@ -16,6 +16,7 @@ find_package(action_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DetectedLoop.msg"
   "msg/DetectedLoops.msg"
+  "msg/LoopGroundTruth.msg"
   "msg/HookStatus.msg"
   "msg/ArmStatus.msg"
   "msg/SideArmState.msg"
@@ -24,6 +25,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/PlanToHook.srv"
   "srv/RotateHook.srv"
   "srv/MoveToPosition.srv"
+  "srv/MoveToWorldPose.srv"
+  "srv/GetCalibratedLoops.srv"
   "action/InsertHook.action"
   "action/ExecuteTrajectory.action"
   "action/MoveToCoordinate.action"

@@ -34,10 +34,17 @@ class SideArmCoordinateNode(Node):
     - Provides service /side_arm/move_to_position
     - Provides action /side_arm/move_to_coordinate
     - Publishes commands to /side_arm/command
+
+    Supports both hardware and simulation modes:
+    - simulation_mode=false: Requires serial connection, mirrors hardware
+    - simulation_mode=true: Simulates motion internally, hardware optional
     """
 
     def __init__(self):
         super().__init__('side_arm_coordinate_node')
+
+        # ========== MODE PARAMETERS ==========
+        self.declare_parameter('simulation_mode', False)  # Enable simulation
 
         # ========== CALIBRATION PARAMETERS (to be tuned) ==========
         self.declare_parameter('steps_per_mm_horizontal', 80.0)   # Stepper2 - belt drive
@@ -54,6 +61,9 @@ class SideArmCoordinateNode(Node):
         self.declare_parameter('max_y_mm', 200.0)
         self.declare_parameter('max_z_mm', 150.0)
 
+        # Simulation speed (mm/s for simulated motion)
+        self.declare_parameter('sim_speed_mm_per_sec', 50.0)
+
         self._load_parameters()
 
         # State tracking
@@ -66,8 +76,18 @@ class SideArmCoordinateNode(Node):
         self._dc_target_z_mm: Optional[float] = None
         self._dc_start_z_mm: float = 0.0      
         self._dc_duration: float = 0.0        
-        self._dc_direction: int = 0           
+        self._dc_direction: int = 0
         self._state_lock = threading.Lock()
+
+        # Simulation state tracking
+        self._sim_target_x_mm = 0.0
+        self._sim_target_y_mm = 0.0
+        self._sim_target_z_mm = 0.0
+        self._sim_move_start: Optional[float] = None
+        self._sim_start_x_mm = 0.0
+        self._sim_start_y_mm = 0.0
+        self._sim_start_z_mm = 0.0
+        self._hardware_connected = False  # Track if we're receiving hardware state
 
         # Callback group for concurrent callbacks
         self._cb_group = ReentrantCallbackGroup()
@@ -102,15 +122,29 @@ class SideArmCoordinateNode(Node):
         # Timer to monitor DC motor and stop after duration (50ms interval)
         self.create_timer(0.05, self._dc_motor_monitor_callback)
 
+        mode_str = 'SIMULATION' if self.simulation_mode else 'HARDWARE'
         self.get_logger().info(
-            f'Coordinate node initialized. Calibration: '
+            f'Coordinate node initialized in {mode_str} mode. Calibration: '
             f'H={self.steps_per_mm_horizontal} steps/mm, '
             f'V={self.steps_per_mm_vertical} steps/mm, '
             f'DC={self.dc_mm_per_second} mm/s'
         )
+        if self.simulation_mode:
+            self.get_logger().info(
+                f'  Simulation speed: {self.sim_speed_mm_per_sec} mm/s'
+            )
+            # In simulation mode, initialize as homed
+            self._is_homed = True
 
     def _load_parameters(self):
         """Load ROS parameters into instance variables."""
+        # Handle simulation_mode as either bool or string (from PythonExpression)
+        sim_mode_val = self.get_parameter('simulation_mode').value
+        if isinstance(sim_mode_val, bool):
+            self.simulation_mode = sim_mode_val
+        else:
+            self.simulation_mode = str(sim_mode_val).lower() == 'true'
+        self.sim_speed_mm_per_sec = self.get_parameter('sim_speed_mm_per_sec').value
         self.steps_per_mm_horizontal = self.get_parameter('steps_per_mm_horizontal').value
         self.steps_per_mm_vertical = self.get_parameter('steps_per_mm_vertical').value
         self.dc_mm_per_second = self.get_parameter('dc_mm_per_second').value
@@ -126,6 +160,9 @@ class SideArmCoordinateNode(Node):
         data = msg.data.strip()
         if not data.startswith('STATE'):
             return
+
+        # Mark that we have hardware connection
+        self._hardware_connected = True
 
         try:
             payload = data.split('STATE', 1)[1].strip()
@@ -164,24 +201,84 @@ class SideArmCoordinateNode(Node):
 
     def _publish_parsed_state(self):
         """Publish parsed state with mm coordinates."""
-        if self._current_state is None:
+        # In simulation mode, update simulated position
+        if self.simulation_mode:
+            self._update_simulated_position()
+
+        # If no hardware state and not in simulation mode, nothing to publish
+        if self._current_state is None and not self.simulation_mode:
             return
 
         with self._state_lock:
             msg = SideArmState()
             msg.header.stamp = self.get_clock().now().to_msg()
-            msg.limit_horizontal = bool(int(self._current_state.get('l2', 0)))
-            msg.limit_vertical = bool(int(self._current_state.get('l3', 0)))
-            msg.limit_depth = bool(int(self._current_state.get('l1', 0)))
-            msg.steps_horizontal = int(self._current_state.get('s2', 0))
-            msg.steps_vertical = int(self._current_state.get('s1', 0))
-            msg.dc_percent = int(self._current_state.get('dc', 0))
-            msg.x_mm = self._position_x_mm
-            msg.y_mm = self._position_y_mm
-            msg.z_mm = self._position_z_mm
-            msg.is_homed = self._is_homed
+
+            if self._current_state is not None:
+                # Hardware state available
+                msg.limit_horizontal = bool(int(self._current_state.get('l2', 0)))
+                msg.limit_vertical = bool(int(self._current_state.get('l3', 0)))
+                msg.limit_depth = bool(int(self._current_state.get('l1', 0)))
+                msg.steps_horizontal = int(self._current_state.get('s2', 0))
+                msg.steps_vertical = int(self._current_state.get('s1', 0))
+                msg.dc_percent = int(self._current_state.get('dc', 0))
+            else:
+                # Simulation-only mode - no hardware state
+                msg.limit_horizontal = self._position_x_mm <= 0
+                msg.limit_vertical = self._position_y_mm <= 0
+                msg.limit_depth = self._position_z_mm <= 0
+                msg.steps_horizontal = int(self._position_x_mm * self.steps_per_mm_horizontal)
+                msg.steps_vertical = int(self._position_y_mm * self.steps_per_mm_vertical)
+                msg.dc_percent = 0
+
+            msg.x_mm = float(self._position_x_mm)
+            msg.y_mm = float(self._position_y_mm)
+            msg.z_mm = float(self._position_z_mm)
+            msg.is_homed = self._is_homed or self.simulation_mode  # Always homed in sim
 
         self._state_pub.publish(msg)
+
+    def _update_simulated_position(self):
+        """Update position for simulation mode - interpolate toward target."""
+        with self._state_lock:
+            if self._sim_move_start is None:
+                return  # Not moving
+
+            elapsed = time.time() - self._sim_move_start
+            max_distance = elapsed * self.sim_speed_mm_per_sec
+
+            # Calculate distance to each target axis
+            dx = self._sim_target_x_mm - self._sim_start_x_mm
+            dy = self._sim_target_y_mm - self._sim_start_y_mm
+            dz = self._sim_target_z_mm - self._sim_start_z_mm
+
+            total_distance = (dx**2 + dy**2 + dz**2) ** 0.5
+
+            if total_distance <= 0.1:
+                # Already at target
+                self._position_x_mm = self._sim_target_x_mm
+                self._position_y_mm = self._sim_target_y_mm
+                self._position_z_mm = self._sim_target_z_mm
+                self._sim_move_start = None
+                return
+
+            # Calculate progress (0.0 to 1.0)
+            progress = min(1.0, max_distance / total_distance)
+
+            # Interpolate position
+            self._position_x_mm = self._sim_start_x_mm + dx * progress
+            self._position_y_mm = self._sim_start_y_mm + dy * progress
+            self._position_z_mm = self._sim_start_z_mm + dz * progress
+
+            # Check if we've reached target
+            if progress >= 1.0:
+                self._position_x_mm = self._sim_target_x_mm
+                self._position_y_mm = self._sim_target_y_mm
+                self._position_z_mm = self._sim_target_z_mm
+                self._sim_move_start = None
+                self.get_logger().info(
+                    f'[SIM] Reached target: ({self._position_x_mm:.1f}, '
+                    f'{self._position_y_mm:.1f}, {self._position_z_mm:.1f}) mm'
+                )
 
     def _dc_motor_monitor_callback(self):
         """Monitor DC motor movement and update position estimate."""
@@ -221,10 +318,104 @@ class SideArmCoordinateNode(Node):
                     )
 
     def _command_callback(self, msg: String):
-        """Track DC motor commands from any source (including manual_jog)."""
-        cmd = msg.data.strip().upper()
-        
-        if cmd.startswith('DC_SPEED,'):
+        """Track motor commands from any source (including manual_jog) for simulation."""
+        cmd = msg.data.strip()
+        cmd_upper = cmd.upper()
+
+        # Handle STEPPER_MOVE commands in simulation mode
+        if cmd_upper.startswith('STEPPER_MOVE,') and self.simulation_mode:
+            try:
+                parts = cmd.split(',')
+                if len(parts) >= 4:
+                    motor = int(parts[1])
+                    steps = int(parts[2])
+                    speed = int(parts[3])
+
+                    with self._state_lock:
+                        if motor == 1:  # Vertical (Y axis)
+                            delta_mm = steps / self.steps_per_mm_vertical
+                            new_y = self._position_y_mm + delta_mm
+                            new_y = max(0, min(new_y, self.max_y_mm))
+
+                            # Set up simulated motion
+                            self._sim_start_x_mm = self._position_x_mm
+                            self._sim_start_y_mm = self._position_y_mm
+                            self._sim_start_z_mm = self._position_z_mm
+                            self._sim_target_x_mm = self._position_x_mm
+                            self._sim_target_y_mm = new_y
+                            self._sim_target_z_mm = self._position_z_mm
+                            self._sim_move_start = time.time()
+
+                            self.get_logger().info(
+                                f'[SIM] Stepper1 (Y): {self._position_y_mm:.1f} -> {new_y:.1f} mm'
+                            )
+
+                        elif motor == 2:  # Horizontal (X axis)
+                            delta_mm = steps / self.steps_per_mm_horizontal
+                            new_x = self._position_x_mm + delta_mm
+                            new_x = max(0, min(new_x, self.max_x_mm))
+
+                            # Set up simulated motion
+                            self._sim_start_x_mm = self._position_x_mm
+                            self._sim_start_y_mm = self._position_y_mm
+                            self._sim_start_z_mm = self._position_z_mm
+                            self._sim_target_x_mm = new_x
+                            self._sim_target_y_mm = self._position_y_mm
+                            self._sim_target_z_mm = self._position_z_mm
+                            self._sim_move_start = time.time()
+
+                            self.get_logger().info(
+                                f'[SIM] Stepper2 (X): {self._position_x_mm:.1f} -> {new_x:.1f} mm'
+                            )
+
+            except (ValueError, IndexError) as e:
+                self.get_logger().warn(f'Failed to parse STEPPER_MOVE: {e}')
+            return
+
+        # Handle HOME commands in simulation mode
+        if cmd_upper.startswith('HOME') and self.simulation_mode:
+            with self._state_lock:
+                if cmd_upper == 'HOME_ALL':
+                    self._sim_start_x_mm = self._position_x_mm
+                    self._sim_start_y_mm = self._position_y_mm
+                    self._sim_start_z_mm = self._position_z_mm
+                    self._sim_target_x_mm = 0.0
+                    self._sim_target_y_mm = 0.0
+                    self._sim_target_z_mm = 0.0
+                    self._sim_move_start = time.time()
+                    self._is_homed = True
+                    self.get_logger().info('[SIM] Homing all axes to (0, 0, 0)')
+                elif cmd_upper == 'HOME,0':  # DC motor (Z)
+                    self._sim_start_x_mm = self._position_x_mm
+                    self._sim_start_y_mm = self._position_y_mm
+                    self._sim_start_z_mm = self._position_z_mm
+                    self._sim_target_x_mm = self._position_x_mm
+                    self._sim_target_y_mm = self._position_y_mm
+                    self._sim_target_z_mm = 0.0
+                    self._sim_move_start = time.time()
+                    self.get_logger().info('[SIM] Homing Z axis')
+                elif cmd_upper == 'HOME,1':  # Stepper1 (Y)
+                    self._sim_start_x_mm = self._position_x_mm
+                    self._sim_start_y_mm = self._position_y_mm
+                    self._sim_start_z_mm = self._position_z_mm
+                    self._sim_target_x_mm = self._position_x_mm
+                    self._sim_target_y_mm = 0.0
+                    self._sim_target_z_mm = self._position_z_mm
+                    self._sim_move_start = time.time()
+                    self.get_logger().info('[SIM] Homing Y axis')
+                elif cmd_upper == 'HOME,2':  # Stepper2 (X)
+                    self._sim_start_x_mm = self._position_x_mm
+                    self._sim_start_y_mm = self._position_y_mm
+                    self._sim_start_z_mm = self._position_z_mm
+                    self._sim_target_x_mm = 0.0
+                    self._sim_target_y_mm = self._position_y_mm
+                    self._sim_target_z_mm = self._position_z_mm
+                    self._sim_move_start = time.time()
+                    self.get_logger().info('[SIM] Homing X axis')
+            return
+
+        # Handle DC_SPEED commands (works in both modes for Z tracking)
+        if cmd_upper.startswith('DC_SPEED,'):
             try:
                 # Parse the speed percent
                 parts = cmd.split(',')
@@ -351,10 +542,10 @@ class SideArmCoordinateNode(Node):
     def _move_to_position_callback(self, request, response):
         """Service callback: move to absolute position."""
         try:
-            # Validate bounds
-            x = max(0, min(request.x_mm, self.max_x_mm))
-            y = max(0, min(request.y_mm, self.max_y_mm))
-            z = max(0, min(request.z_mm, self.max_z_mm))
+            # Validate bounds (ensure float for ROS message compatibility)
+            x = float(max(0, min(request.x_mm, self.max_x_mm)))
+            y = float(max(0, min(request.y_mm, self.max_y_mm)))
+            z = float(max(0, min(request.z_mm, self.max_z_mm)))
 
             speed_scale = max(0.1, min(1.0, request.speed_scale))
 
@@ -364,52 +555,73 @@ class SideArmCoordinateNode(Node):
                 dy = y - self._position_y_mm
                 dz = z - self._position_z_mm
 
-            # Convert to motor commands
-            steps_x = self._mm_to_steps_horizontal(dx)
-            steps_y = self._mm_to_steps_vertical(dy)
-
-            speed_x = int(self.default_speed_horizontal * speed_scale)
-            speed_y = int(self.default_speed_vertical * speed_scale)
-
             estimated_time = 0.0
 
-            # Send stepper commands
-            if abs(steps_x) > 0:
-                self._send_command(f'STEPPER_MOVE,2,{steps_x},{speed_x}')
-                estimated_time = max(
-                    estimated_time,
-                    abs(dx) / (speed_x / self.steps_per_mm_horizontal)
-                )
-
-            if abs(steps_y) > 0:
-                self._send_command(f'STEPPER_MOVE,1,{steps_y},{speed_y}')
-                estimated_time = max(
-                    estimated_time,
-                    abs(dy) / (speed_y / self.steps_per_mm_vertical)
-                )
-
-            # DC motor: timed movement
-            if abs(dz) > 0.5:  # Threshold to avoid tiny moves
-                dc_duration = self._mm_to_dc_duration(dz)
-                dc_percent = -self.dc_speed_percent if dz > 0 else self.dc_speed_percent
-                dc_percent = int(dc_percent * speed_scale)
-
+            # ========== SIMULATION MODE ==========
+            if self.simulation_mode:
+                # Start simulated motion
                 with self._state_lock:
-                    self._dc_start_z_mm = self._position_z_mm
-                    self._dc_move_start = time.time()
-                    self._dc_target_z_mm = z
-                    self._dc_duration = dc_duration
-                    self._dc_direction = 1 if dz > 0 else -1
+                    self._sim_start_x_mm = self._position_x_mm
+                    self._sim_start_y_mm = self._position_y_mm
+                    self._sim_start_z_mm = self._position_z_mm
+                    self._sim_target_x_mm = x
+                    self._sim_target_y_mm = y
+                    self._sim_target_z_mm = z
+                    self._sim_move_start = time.time()
 
-                self._send_command(f'DC_SPEED,{dc_percent}')
-                estimated_time = max(estimated_time, dc_duration)
+                total_distance = (dx**2 + dy**2 + dz**2) ** 0.5
+                estimated_time = total_distance / self.sim_speed_mm_per_sec
+
                 self.get_logger().info(
-                    f'DC motor moving Z: {self._dc_start_z_mm:.1f} -> {z:.1f}mm '
-                    f'(duration={dc_duration:.2f}s)'
+                    f'[SIM] Moving to ({x:.1f}, {y:.1f}, {z:.1f}) mm '
+                    f'(est. {estimated_time:.2f}s)'
                 )
 
+            # ========== HARDWARE MODE ==========
+            # Send hardware commands if hardware is connected OR if not in simulation mode
+            if self._hardware_connected or not self.simulation_mode:
+                # Convert to motor commands
+                steps_x = self._mm_to_steps_horizontal(dx)
+                steps_y = self._mm_to_steps_vertical(dy)
+
+                speed_x = int(self.default_speed_horizontal * speed_scale)
+                speed_y = int(self.default_speed_vertical * speed_scale)
+
+                # Send stepper commands
+                if abs(steps_x) > 0:
+                    self._send_command(f'STEPPER_MOVE,2,{steps_x},{speed_x}')
+                    hw_time_x = abs(dx) / (speed_x / self.steps_per_mm_horizontal)
+                    estimated_time = max(estimated_time, hw_time_x)
+
+                if abs(steps_y) > 0:
+                    self._send_command(f'STEPPER_MOVE,1,{steps_y},{speed_y}')
+                    hw_time_y = abs(dy) / (speed_y / self.steps_per_mm_vertical)
+                    estimated_time = max(estimated_time, hw_time_y)
+
+                # DC motor: timed movement
+                if abs(dz) > 0.5:  # Threshold to avoid tiny moves
+                    dc_duration = self._mm_to_dc_duration(dz)
+                    dc_percent = -self.dc_speed_percent if dz > 0 else self.dc_speed_percent
+                    dc_percent = int(dc_percent * speed_scale)
+
+                    with self._state_lock:
+                        self._dc_start_z_mm = self._position_z_mm
+                        self._dc_move_start = time.time()
+                        self._dc_target_z_mm = z
+                        self._dc_duration = dc_duration
+                        self._dc_direction = 1 if dz > 0 else -1
+
+                    self._send_command(f'DC_SPEED,{dc_percent}')
+                    estimated_time = max(estimated_time, dc_duration)
+                    self.get_logger().info(
+                        f'DC motor moving Z: {self._dc_start_z_mm:.1f} -> {z:.1f}mm '
+                        f'(duration={dc_duration:.2f}s)'
+                    )
+
+            mode_str = 'SIM+HW' if (self.simulation_mode and self._hardware_connected) else \
+                       'SIM' if self.simulation_mode else 'HW'
             response.success = True
-            response.message = f'Moving to ({x:.1f}, {y:.1f}, {z:.1f}) mm'
+            response.message = f'[{mode_str}] Moving to ({x:.1f}, {y:.1f}, {z:.1f}) mm'
             response.estimated_time_sec = estimated_time
 
         except Exception as e:
@@ -424,10 +636,10 @@ class SideArmCoordinateNode(Node):
         request = goal_handle.request
         feedback = MoveToCoordinate.Feedback()
 
-        # Validate bounds
-        x = max(0, min(request.x_mm, self.max_x_mm))
-        y = max(0, min(request.y_mm, self.max_y_mm))
-        z = max(0, min(request.z_mm, self.max_z_mm))
+        # Validate bounds (ensure float for ROS message compatibility)
+        x = float(max(0, min(request.x_mm, self.max_x_mm)))
+        y = float(max(0, min(request.y_mm, self.max_y_mm)))
+        z = float(max(0, min(request.z_mm, self.max_z_mm)))
         speed_scale = max(0.1, min(1.0, request.speed_scale))
 
         start_time = time.time()
@@ -442,42 +654,65 @@ class SideArmCoordinateNode(Node):
         dy = y - start_y
         dz = z - start_z
 
-        steps_x = self._mm_to_steps_horizontal(dx)
-        steps_y = self._mm_to_steps_vertical(dy)
-        speed_x = int(self.default_speed_horizontal * speed_scale)
-        speed_y = int(self.default_speed_vertical * speed_scale)
-
+        mode_str = 'SIM+HW' if (self.simulation_mode and self._hardware_connected) else \
+                   'SIM' if self.simulation_mode else 'HW'
         self.get_logger().info(
-            f'Moving from ({start_x:.1f}, {start_y:.1f}, {start_z:.1f}) '
+            f'[{mode_str}] Moving from ({start_x:.1f}, {start_y:.1f}, {start_z:.1f}) '
             f'to ({x:.1f}, {y:.1f}, {z:.1f}) mm'
         )
 
-        # Start stepper movements
-        if abs(steps_x) > 0:
-            self._send_command(f'STEPPER_MOVE,2,{steps_x},{speed_x}')
-        if abs(steps_y) > 0:
-            self._send_command(f'STEPPER_MOVE,1,{steps_y},{speed_y}')
-
-        # DC motor with timed stop
-        dc_duration = 0.0
-        if abs(dz) > 0.5:
-            dc_duration = self._mm_to_dc_duration(dz)
-            dc_percent = -self.dc_speed_percent if dz > 0 else self.dc_speed_percent
-            dc_percent = int(dc_percent * speed_scale)
-            self._send_command(f'DC_SPEED,{dc_percent}')
+        # ========== SIMULATION MODE ==========
+        sim_duration = 0.0
+        if self.simulation_mode:
             with self._state_lock:
-                self._dc_start_z_mm = start_z
-                self._dc_move_start = time.time()
-                self._dc_target_z_mm = z
-                self._dc_duration = dc_duration
-                self._dc_direction = 1 if dz > 0 else -1
+                self._sim_start_x_mm = start_x
+                self._sim_start_y_mm = start_y
+                self._sim_start_z_mm = start_z
+                self._sim_target_x_mm = x
+                self._sim_target_y_mm = y
+                self._sim_target_z_mm = z
+                self._sim_move_start = time.time()
 
-        # Calculate max duration for timeout
-        max_duration = max(
+            total_distance = (dx**2 + dy**2 + dz**2) ** 0.5
+            sim_duration = total_distance / self.sim_speed_mm_per_sec
+
+        # ========== HARDWARE MODE ==========
+        dc_duration = 0.0
+        steps_x = 0
+        steps_y = 0
+        speed_x = int(self.default_speed_horizontal * speed_scale)
+        speed_y = int(self.default_speed_vertical * speed_scale)
+
+        if self._hardware_connected or not self.simulation_mode:
+            steps_x = self._mm_to_steps_horizontal(dx)
+            steps_y = self._mm_to_steps_vertical(dy)
+
+            # Start stepper movements
+            if abs(steps_x) > 0:
+                self._send_command(f'STEPPER_MOVE,2,{steps_x},{speed_x}')
+            if abs(steps_y) > 0:
+                self._send_command(f'STEPPER_MOVE,1,{steps_y},{speed_y}')
+
+            # DC motor with timed stop
+            if abs(dz) > 0.5:
+                dc_duration = self._mm_to_dc_duration(dz)
+                dc_percent = -self.dc_speed_percent if dz > 0 else self.dc_speed_percent
+                dc_percent = int(dc_percent * speed_scale)
+                self._send_command(f'DC_SPEED,{dc_percent}')
+                with self._state_lock:
+                    self._dc_start_z_mm = start_z
+                    self._dc_move_start = time.time()
+                    self._dc_target_z_mm = z
+                    self._dc_duration = dc_duration
+                    self._dc_direction = 1 if dz > 0 else -1
+
+        # Calculate max duration for timeout (use longer of sim/hw)
+        hw_duration = max(
             abs(dx) / (speed_x / self.steps_per_mm_horizontal) if steps_x else 0,
             abs(dy) / (speed_y / self.steps_per_mm_vertical) if steps_y else 0,
             dc_duration
-        ) + 2.0  # Buffer
+        )
+        max_duration = max(sim_duration, hw_duration) + 2.0  # Buffer
 
         dc_stopped = dc_duration == 0.0
 
@@ -490,13 +725,15 @@ class SideArmCoordinateNode(Node):
                 current_y = self._position_y_mm
                 current_z = self._position_z_mm
 
-            # Stop DC motor after duration
+            # Stop DC motor after duration (hardware mode)
             if not dc_stopped and elapsed >= dc_duration:
-                self._send_command('DC_SPEED,0')
+                if self._hardware_connected or not self.simulation_mode:
+                    self._send_command('DC_SPEED,0')
                 with self._state_lock:
-                    self._position_z_mm = z
-                    current_z = z
-                    # Clear tracking variables
+                    if not self.simulation_mode:
+                        self._position_z_mm = z
+                        current_z = z
+                    # Clear DC tracking variables
                     self._dc_move_start = None
                     self._dc_target_z_mm = None
                     self._dc_duration = 0.0
@@ -517,7 +754,7 @@ class SideArmCoordinateNode(Node):
 
             feedback.current_x_mm = current_x
             feedback.current_y_mm = current_y
-            feedback.current_z_mm = current_z
+            feedback.current_z_mm = float(current_z)
             feedback.progress = progress
             goal_handle.publish_feedback(feedback)
 
@@ -541,10 +778,10 @@ class SideArmCoordinateNode(Node):
         result.final_y_mm = current_y
         result.final_z_mm = current_z
         result.execution_time_sec = time.time() - start_time
-        result.message = 'Move complete'
+        result.message = f'[{mode_str}] Move complete'
 
         self.get_logger().info(
-            f'Move complete in {result.execution_time_sec:.2f}s, '
+            f'[{mode_str}] Move complete in {result.execution_time_sec:.2f}s, '
             f'final position: ({current_x:.1f}, {current_y:.1f}, {current_z:.1f}) mm'
         )
 

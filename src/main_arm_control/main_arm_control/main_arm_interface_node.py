@@ -9,10 +9,15 @@ from rclpy.node import Node
 from rclpy.action import ActionServer
 from parachute_interfaces.action import ExecuteTrajectory
 from parachute_interfaces.msg import ArmStatus
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, Twist, PoseArray, Point
+from visualization_msgs.msg import Marker, MarkerArray
+from std_msgs.msg import ColorRGBA
+import numpy as np
+import modern_robotics as mr
 from std_msgs.msg import String, Float32
 from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
 import time
+from interbotix_xs_msgs.msg import JointSingleCommand
 
 class MainArmInterfaceNode(Node):
     def __init__(self):
@@ -26,12 +31,34 @@ class MainArmInterfaceNode(Node):
         self.declare_parameter('moving_time', 2.0)  # Time for each movement
         self.declare_parameter('accel_time', 0.5)   # Acceleration time
 
-        self.test_mode = self.get_parameter('test_mode').value
-        self.use_sim = self.get_parameter('use_sim').value
+        # Joystick control timing - must be fast for responsive feel
+        self.declare_parameter('joy_moving_time', 0.08)
+        self.declare_parameter('joy_accel_time', 0.04)
+        self.joy_moving_time = self.get_parameter('joy_moving_time').value
+        self.joy_accel_time = self.get_parameter('joy_accel_time').value
+
+        # Latest joystick command (non-blocking storage)
+        self.latest_ee_increment = None
+        self.joy_active = False
+
+        # Handle parameters as either bool or string (from LaunchConfiguration)
+        test_mode_val = self.get_parameter('test_mode').value
+        if isinstance(test_mode_val, bool):
+            self.test_mode = test_mode_val
+        else:
+            self.test_mode = str(test_mode_val).lower() == 'true'
+
+        use_sim_val = self.get_parameter('use_sim').value
+        if isinstance(use_sim_val, bool):
+            self.use_sim = use_sim_val
+        else:
+            self.use_sim = str(use_sim_val).lower() == 'true'
         robot_model = self.get_parameter('robot_model').value
         robot_name = self.get_parameter('robot_name').value
         moving_time = self.get_parameter('moving_time').value
         accel_time = self.get_parameter('accel_time').value
+        self.joy_moving_time = self.get_parameter('joy_moving_time').value
+        self.joy_accel_time = self.get_parameter('joy_accel_time').value
         
         self.bot = None
 
@@ -57,6 +84,15 @@ class MainArmInterfaceNode(Node):
                 
                 # Go to home pose on startup
                 self.bot.arm.go_to_home_pose()
+                # Gripper position control
+                self.declare_parameter('gripper_step', 0.003)    # increment per X/Y press
+                self.declare_parameter('gripper_open', 0.037)    # fully open position
+                self.declare_parameter('gripper_closed', 0.015)  # fully closed position
+
+                self.gripper_pwm = 0          # current PWM (0 = stopped)
+                self.gripper_pwm_max = 350    # max close force
+                self.gripper_pwm_step = 50    # step per X/Y press
+
                 self.current_pose_name = 'home'
             except Exception as e:
                 self.get_logger().error(f'Failed to initialize robot: {e}')
@@ -72,17 +108,30 @@ class MainArmInterfaceNode(Node):
         # Subscribers for simple pose and gripper commands
         self.pose_cmd_sub = self.create_subscription(String, '/main_arm/pose_command', self.pose_command_callback, 10)
         self.pose_cmd_sub = self.create_subscription(String, '/main_arm/gripper_command', self.gripper_command_callback, 10)
-        self.gripper_effort_sub = self.create_subscription(Float32, '/main_arm/gripper_effort', self.gripper_effort_callback, 10)
+        # self.gripper_effort_sub = self.create_subscription(Float32, '/main_arm/gripper_effort', self.gripper_effort_callback, 10)
+        self.ee_increment_sub = self.create_subscription(Twist, '/main_arm/ee_increment', self.ee_increment_callback, 10)
         # Add this subscriber for testing positions
         self.test_position_sub = self.create_subscription(Pose, '/main_arm/test_position', self.test_position_callback, 10)
-        
+        # subscriber for points with a specific pitch
+        self.target_point_sub = self.create_subscription(Point, '/main_arm/target_point', self.target_point_callback, 10)
+        self.target_pitch_sub = self.create_subscription(Float32, '/main_arm/target_pitch', self.target_pitch_callback, 10)
+        self.latest_target_pitch = 0.0
+
+        # Timer to process joystick commands - runs faster than the Xbox publishes
+        # so we never miss a command. Only processes if a new command is waiting.
+        self.joy_timer = self.create_timer(0.05, self.process_joy_increment)
+
         # Publisher for arm and pose status
         self.status_publisher = self.create_publisher(ArmStatus, '/main_arm/status', 10)
         self.simple_status_publisher = self.create_publisher(String, '/main_arm/simple_status', 10)
         self.pose_publisher = self.create_publisher(Pose, '/main_arm/current_pose', 10)
+
+        # Publisher for trajectory waypoints visualization (MarkerArray with LINE_STRIP + spheres)
+        self.waypoints_marker_pub = self.create_publisher(MarkerArray, '/main_arm/trajectory_markers', 10)
         
         # Timer to publish status
         self.timer = self.create_timer(1.0, self.publish_status)
+        self.gripper_pwm_pub = self.create_publisher(JointSingleCommand, '/wx200/commands/joint_single', 10)
 
         # State tracking
         self.current_state = ArmStatus.STATE_IDLE
@@ -113,7 +162,7 @@ class MainArmInterfaceNode(Node):
                 msg.current_pose = pose_msg
                 
                 # Also publish to separate topic
-                self.pose_pub.publish(pose_msg)
+                self.pose_publisher.publish(pose_msg)
             except:
                 msg.current_pose = Pose()
         else:
@@ -133,10 +182,57 @@ class MainArmInterfaceNode(Node):
         """Action callback - simulate trajectory execution"""
         num_waypoints = len(goal_handle.request.waypoints)
         self.get_logger().info(f'Executing trajectory with {num_waypoints} waypoints')
-        
+
+        # Publish waypoints as MarkerArray for RViz visualization (LINE_STRIP + spheres)
+        marker_array = MarkerArray()
+        stamp = self.get_clock().now().to_msg()
+
+        # LINE_STRIP connecting all waypoints
+        line_marker = Marker()
+        line_marker.header.stamp = stamp
+        line_marker.header.frame_id = 'world'
+        line_marker.ns = 'trajectory_path'
+        line_marker.id = 0
+        line_marker.type = Marker.LINE_STRIP
+        line_marker.action = Marker.ADD
+        line_marker.scale.x = 0.005  # Line width
+        line_marker.color = ColorRGBA(r=0.0, g=1.0, b=0.0, a=1.0)  # Green
+        line_marker.pose.orientation.w = 1.0
+
+        for waypoint in goal_handle.request.waypoints:
+            p = Point()
+            p.x = waypoint.position.x
+            p.y = waypoint.position.y
+            p.z = waypoint.position.z
+            line_marker.points.append(p)
+
+        marker_array.markers.append(line_marker)
+
+        # Spheres at each waypoint
+        for i, waypoint in enumerate(goal_handle.request.waypoints):
+            sphere = Marker()
+            sphere.header.stamp = stamp
+            sphere.header.frame_id = 'world'
+            sphere.ns = 'trajectory_points'
+            sphere.id = i
+            sphere.type = Marker.SPHERE
+            sphere.action = Marker.ADD
+            sphere.pose.position = waypoint.position
+            sphere.pose.orientation.w = 1.0
+            sphere.scale.x = 0.015  # Sphere diameter
+            sphere.scale.y = 0.015
+            sphere.scale.z = 0.015
+            # Color gradient: start=green, end=red
+            t = i / max(1, num_waypoints - 1)
+            sphere.color = ColorRGBA(r=t, g=1.0 - t, b=0.0, a=1.0)
+            marker_array.markers.append(sphere)
+
+        self.waypoints_marker_pub.publish(marker_array)
+        self.get_logger().info(f'Published {num_waypoints} waypoints to /main_arm/trajectory_markers')
+
         self.current_state = ArmStatus.STATE_EXECUTING
         feedback_msg = ExecuteTrajectory.Feedback()
-        
+
         try:
             # For each waypoint
             for i, waypoint in enumerate(goal_handle.request.waypoints):
@@ -150,11 +246,66 @@ class MainArmInterfaceNode(Node):
                 
                 # Execute waypoint on real robot
                 if self.bot is not None:
-                    success = self.bot.arm.set_ee_pose_components(
-                        x=waypoint.position.x,
-                        y=waypoint.position.y,
-                        z=waypoint.position.z
-                    )
+                    x = waypoint.position.x
+                    y = waypoint.position.y
+                    z = waypoint.position.z
+
+                    # Convert quaternion to pitch for Interbotix
+                    import tf_transformations
+                    quat = [
+                        waypoint.orientation.x,
+                        waypoint.orientation.y,
+                        waypoint.orientation.z,
+                        waypoint.orientation.w
+                    ]
+                    # Check if orientation is specified (non-zero quaternion)
+                    has_orientation = quat[3] != 0 or any(q != 0 for q in quat[:3])
+
+                    if has_orientation:
+                        # Extract preferred pitch from quaternion
+                        roll, preferred_pitch, yaw = tf_transformations.euler_from_quaternion(quat)
+
+                        # Use pitch-search to find a valid pitch
+                        success, actual_pitch, theta_list = self.find_valid_pitch(
+                            x, y, z, preferred_pitch
+                        )
+
+                        if success and theta_list is not None:
+                            if abs(actual_pitch - preferred_pitch) > 0.01:
+                                self.get_logger().info(
+                                    f'Waypoint {i+1}: using pitch={actual_pitch:.2f}rad '
+                                    f'(preferred {preferred_pitch:.2f} not feasible)'
+                                )
+                            # Execute with the valid pose
+                            auto_yaw = float(np.arctan2(y, x))
+                            T_sd = self._build_pose_matrix(x, y, z, actual_pitch, auto_yaw)
+                            result = self.bot.arm.set_ee_pose_matrix(
+                                T_sd,
+                                custom_guess=theta_list,
+                                execute=True
+                            )
+                            success = self._check_ik_result(result)
+                        else:
+                            # No valid pitch found, try position-only
+                            self.get_logger().info(f'Waypoint {i+1}: no valid pitch, trying position-only')
+                            success = self.bot.arm.set_ee_pose_components(x=x, y=y, z=z)
+                    else:
+                        # No orientation specified - search for any valid pitch
+                        success, actual_pitch, theta_list = self.find_valid_pitch(x, y, z, 0.0)
+
+                        if success and theta_list is not None:
+                            auto_yaw = float(np.arctan2(y, x))
+                            T_sd = self._build_pose_matrix(x, y, z, actual_pitch, auto_yaw)
+                            result = self.bot.arm.set_ee_pose_matrix(
+                                T_sd,
+                                custom_guess=theta_list,
+                                execute=True
+                            )
+                            success = self._check_ik_result(result)
+                        else:
+                            # Fallback to position-only
+                            success = self.bot.arm.set_ee_pose_components(x=x, y=y, z=z)
+
                     if not success:
                         self.get_logger().warn(f'Waypoint {i+1} unreachable, skipping')
                 else:
@@ -249,37 +400,336 @@ class MainArmInterfaceNode(Node):
             self.get_logger().error(f'Failed to move to {command}: {e}')
     
     def gripper_command_callback(self, msg):
-        """Handle gripper open/close commands"""
+        """Gripper control via PWM: open/close snap, inc/dec step"""
         command = msg.data.lower().strip()
         self.get_logger().info(f'Received gripper command: {command}')
-        
-        if self.bot is None and not self.use_sim:
-            self.get_logger().warn('No robot available')
+
+        if self.bot is None:
+            if self.test_mode:
+                self.get_logger().info(f'TEST: gripper {command}')
             return
-        
-        if self.use_sim:
-            self.get_logger().warn('Gripper commands not yet implemented for simulation')
-            return
-        
+
         try:
             if command == 'open':
-                self.bot.gripper.open()
-                self.get_logger().info('Gripper opened')
-                
+                self.bot.gripper.release()
+                self.gripper_pwm = 0
+                self.get_logger().info('Gripper OPEN (release)')
+
             elif command == 'close':
-                self.bot.gripper.close(effort=self.gripper_effort)
-                self.get_logger().info(f'Gripper closed with effort {self.gripper_effort:.2f}')
-                
+                self.bot.gripper.grasp()
+                self.gripper_pwm = self.gripper_pwm_max
+                self.get_logger().info('Gripper CLOSE (full grasp)')
+
+            elif command == 'inc':
+                self.gripper_pwm = max(0, self.gripper_pwm - self.gripper_pwm_step)
+                cmd = JointSingleCommand()
+                cmd.name = 'gripper'
+                cmd.cmd = float(self.gripper_pwm)
+                self.gripper_pwm_pub.publish(cmd)
+                self.get_logger().info(f'Gripper PWM: {self.gripper_pwm}')
+
+            elif command == 'dec':
+                self.gripper_pwm = min(
+                    self.gripper_pwm_max,
+                    self.gripper_pwm + self.gripper_pwm_step)
+                cmd = JointSingleCommand()
+                cmd.name = 'gripper'
+                cmd.cmd = float(self.gripper_pwm)
+                self.gripper_pwm_pub.publish(cmd)
+                self.get_logger().info(f'Gripper PWM: {self.gripper_pwm}')
+
             else:
                 self.get_logger().warn(f'Unknown gripper command: {command}')
-                
+
         except Exception as e:
             self.get_logger().error(f'Gripper command failed: {e}')
+
+    def target_pitch_callback(self, msg: Float32):
+        self.latest_target_pitch = float(msg.data)
+
+    def _build_pose_matrix(self, x, y, z, pitch, yaw):
+        """
+        Build a 4x4 pose matrix with pitch that follows the arm's pointing direction.
+
+        The rotation is composed as Rz @ Ry (intrinsic Y-Z):
+        - First pitch about Y (tilt gripper forward/back)
+        - Then yaw about Z (rotate to face target)
+
+        This way, pitch always tilts the gripper in the direction it's pointing,
+        regardless of waist rotation.
+        """
+        # Yaw about Z (face toward target in XY)
+        cy, sy = np.cos(yaw), np.sin(yaw)
+        Rz = np.array([[ cy, -sy, 0.0],
+                       [ sy,  cy, 0.0],
+                       [0.0, 0.0, 1.0]])
+
+        # Pitch about Y (tilt gripper forward/back in local frame)
+        cp, sp = np.cos(pitch), np.sin(pitch)
+        Ry = np.array([[ cp, 0.0,  sp],
+                       [0.0, 1.0, 0.0],
+                       [-sp, 0.0,  cp]])
+
+        # Intrinsic rotation: pitch first (local), then yaw (brings pitch with it)
+        R = Rz @ Ry
+
+        T_sd = np.eye(4)
+        T_sd[:3, :3] = R
+        T_sd[:3,  3] = [x, y, z]
+        return T_sd
+
+    def _check_ik_result(self, result):
+        """Extract success boolean from set_ee_pose_matrix result."""
+        if isinstance(result, tuple):
+            for item in result:
+                if isinstance(item, bool):
+                    return item
+            # If no bool found, check if we got valid joint angles
+            for item in result:
+                if hasattr(item, '__len__') and len(item) == 5:
+                    return True
+            return False
+        return bool(result)
+
+    def find_valid_pitch(self, x, y, z, preferred_pitch=0.0):
+        """
+        Search for a valid pitch that achieves IK success for the given position.
+
+        Returns: (success, pitch_used, theta_list) tuple
+        - success: True if a valid pose was found
+        - pitch_used: The pitch value that worked (or None)
+        - theta_list: Joint angles for the valid pose (or None)
+        """
+        if self.bot is None:
+            return (False, None, None)
+
+        yaw = float(np.arctan2(y, x))
+        guess = list(self.bot.arm.get_joint_commands())
+
+        # Build list of pitch candidates, ordered by preference
+        # Start with preferred pitch, then search nearby, then common angles
+        pitch_candidates = []
+
+        # 1. Preferred pitch first
+        pitch_candidates.append(preferred_pitch)
+
+        # 2. Search nearby (within ±0.5 rad / ~30° of preferred)
+        for delta in [0.1, -0.1, 0.2, -0.2, 0.3, -0.3, 0.4, -0.4, 0.5, -0.5]:
+            candidate = preferred_pitch + delta
+            if -np.pi/2 <= candidate <= np.pi/2 and candidate not in pitch_candidates:
+                pitch_candidates.append(candidate)
+
+        # 3. Common angles: 0°, ±30°, ±45°, ±60°, ±90°
+        common = [0.0, np.pi/6, -np.pi/6, np.pi/4, -np.pi/4,
+                  np.pi/3, -np.pi/3, np.pi/2, -np.pi/2]
+        for p in common:
+            if p not in pitch_candidates:
+                pitch_candidates.append(p)
+
+        # Try each pitch (IK only, no execution)
+        for pitch in pitch_candidates:
+            T_sd = self._build_pose_matrix(x, y, z, pitch, yaw)
+
+            try:
+                result = self.bot.arm.set_ee_pose_matrix(
+                    T_sd,
+                    custom_guess=guess,
+                    execute=False  # Just compute IK, don't move
+                )
+
+                if self._check_ik_result(result):
+                    # Extract joint angles
+                    theta_list = None
+                    if isinstance(result, tuple):
+                        for item in result:
+                            if hasattr(item, '__len__') and len(item) == 5:
+                                theta_list = list(item)
+                                break
+                    return (True, pitch, theta_list)
+            except Exception:
+                continue
+
+        return (False, None, None)
+
+    def target_point_callback(self, msg: Point):
+        if self.bot is None:
+            self.get_logger().warn('No robot available')
+            return
+
+        x, y, z = float(msg.x), float(msg.y), float(msg.z)
+        preferred_pitch = float(getattr(self, 'latest_target_pitch', 0.0))
+        yaw = float(np.arctan2(y, x))
+
+        self.get_logger().info(
+            f'Target (world): x={x:.3f} y={y:.3f} z={z:.3f} preferred_pitch={preferred_pitch:.3f}rad'
+        )
+
+        try:
+            # Search for a valid pitch
+            success, actual_pitch, theta_list = self.find_valid_pitch(x, y, z, preferred_pitch)
+
+            if success and theta_list is not None:
+                if abs(actual_pitch - preferred_pitch) > 0.01:
+                    self.get_logger().info(
+                        f'Using pitch={actual_pitch:.3f}rad (preferred {preferred_pitch:.3f} not feasible)'
+                    )
+                else:
+                    self.get_logger().info(f'Using preferred pitch={actual_pitch:.3f}rad')
+
+                # Execute the valid pose
+                T_sd = self._build_pose_matrix(x, y, z, actual_pitch, yaw)
+                result = self.bot.arm.set_ee_pose_matrix(
+                    T_sd,
+                    custom_guess=theta_list,  # Use the known-good solution as guess
+                    execute=True
+                )
+                success = self._check_ik_result(result)
+
+            if not success:
+                # Last resort: position-only (let IK choose everything)
+                self.get_logger().warn('No valid pitch found, trying position-only')
+                success = self.bot.arm.set_ee_pose_components(x=x, y=y, z=z)
+
+            if not success:
+                self.get_logger().warn('IK failed for target_point (all pitches tried)')
+        except Exception as e:
+            self.get_logger().error(f'target_point failed: {e}')
     
-    def gripper_effort_callback(self, msg):
-        """Update gripper effort setting"""
-        self.gripper_effort = max(0.0, min(1.0, msg.data))
-        self.get_logger().info(f'Gripper effort set to: {self.gripper_effort:.2f}')
+    def ee_increment_callback(self, msg):
+        """
+        NON-BLOCKING: Just store the latest command.
+        The joy_timer will process it.
+        """
+        self.latest_ee_increment = msg
+
+        # Switch to fast timing on first joystick input
+        if not self.joy_active and self.bot is not None:
+            self.joy_active = True
+            self.bot.arm.set_trajectory_time(
+                moving_time=self.joy_moving_time,
+                accel_time=self.joy_accel_time
+            )
+            self.get_logger().info(
+                f'Joystick control active (moving_time={self.joy_moving_time}s)')
+
+
+    def process_joy_increment(self):
+        """
+        ALL movement via direct joint control = all smooth.
+
+        Twist mapping:
+            linear.x/y/z    = EE translation (Jacobian → joint increments)
+            angular.x        = wrist_rotate joint (direct)
+            angular.y        = wrist_angle joint (direct)
+            angular.z        = waist joint (direct)
+
+        WX200 joint indices: 0=waist, 1=shoulder, 2=elbow, 3=wrist_angle, 4=wrist_rotate
+        """
+        import numpy as np
+        import modern_robotics as mr
+
+        msg = self.latest_ee_increment
+        if msg is None:
+            if self.joy_active:
+                self._joy_idle_count = getattr(self, '_joy_idle_count', 0) + 1
+                if self._joy_idle_count > 20:
+                    self.joy_active = False
+                    self._joy_idle_count = 0
+                    if self.bot is not None:
+                        moving_time = self.get_parameter('moving_time').value
+                        accel_time = self.get_parameter('accel_time').value
+                        self.bot.arm.set_trajectory_time(
+                            moving_time=moving_time,
+                            accel_time=accel_time
+                        )
+                        self.get_logger().info('Joystick idle - restored normal timing')
+            return
+
+        self.latest_ee_increment = None
+        self._joy_idle_count = 0
+
+        if self.bot is None:
+            if self.test_mode:
+                self.get_logger().info(
+                    f'TEST: dx={msg.linear.x:.4f} dz={msg.linear.z:.4f}',
+                    throttle_duration_sec=0.5)
+            return
+
+        try:
+            dx = msg.linear.x
+            dy = msg.linear.y
+            dz = msg.linear.z
+            d_wrist_rotate = msg.angular.x   # Right Stick X
+            d_wrist_angle = msg.angular.y    # Right Stick Y
+            dwaist = msg.angular.z           # Triggers
+
+            # Nothing to do?
+            if not any(v != 0.0 for v in [dx, dy, dz, d_wrist_rotate, d_wrist_angle, dwaist]):
+                return
+
+            # Get current joint positions
+            # WX200: [waist, shoulder, elbow, wrist_angle, wrist_rotate]
+            current_joints = list(self.bot.arm.get_joint_commands())
+
+            # ── Direct joint control: waist, wrist_angle, wrist_rotate ──
+            if dwaist != 0.0:
+                current_joints[0] += dwaist          # waist
+            if d_wrist_angle != 0.0:
+                current_joints[3] += d_wrist_angle   # wrist_angle
+            if d_wrist_rotate != 0.0:
+                current_joints[4] += d_wrist_rotate  # wrist_rotate
+
+            # ── Translation: Jacobian → joint increments ──
+            if any(v != 0.0 for v in [dx, dy, dz]):
+                joint_cmds = self.bot.arm.get_joint_commands()
+                jacobian = mr.JacobianSpace(
+                    self.bot.arm.robot_des.Slist,
+                    joint_cmds
+                )
+
+                # modern_robotics twist: [wx, wy, wz, vx, vy, vz]
+                # Only translation, no rotation in the twist
+                ee_twist = np.array([0.0, 0.0, 0.0, dx, dy, dz])
+
+                # Damped least squares for stability near singularities
+                damping = 0.01
+                J_JT = jacobian @ jacobian.T
+                J_pinv = jacobian.T @ np.linalg.inv(J_JT + damping**2 * np.eye(6))
+
+                joint_deltas = J_pinv @ ee_twist
+
+                for i in range(len(joint_deltas)):
+                    # Skip joints we already set directly
+                    if i == 0 and dwaist != 0.0:
+                        continue
+                    if i == 3 and d_wrist_angle != 0.0:
+                        continue
+                    if i == 4 and d_wrist_rotate != 0.0:
+                        continue
+                    if i < len(current_joints):
+                        current_joints[i] += joint_deltas[i]
+
+            # ── One single call, all joints at once, smooth ──
+            self.bot.arm.set_joint_positions(current_joints)
+
+        except Exception as e:
+            self.get_logger().warn(
+                f'Joy increment failed: {e}',
+                throttle_duration_sec=1.0)
+    
+    # def gripper_effort_callback(self, msg):
+    #     """Update gripper effort setting"""
+    #     self.gripper_effort = max(0.0, min(1.0, msg.data))
+    #     self.get_logger().info(f'Gripper effort set to: {self.gripper_effort:.2f}')
+
+    #     if self.bot is None and not self.use_sim:
+    #         self.get_logger().warn('No robot available')
+    #         return
+        
+    #     try:
+    #         self.bot.gripper.set_pressure(self.gripper_effort)
+    #     except Exception as e:
+    #         self.get_logger().error(f'Gripper command failed: {e}')
     
     # Make sure shut down is clean exit
     def shutdown(self):
@@ -447,7 +897,10 @@ def main(args=None):
     finally:
         node.shutdown()
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     main()

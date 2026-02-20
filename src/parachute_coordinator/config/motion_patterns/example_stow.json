@@ -1,0 +1,26 @@
+{
+  "name": "example_stow",
+  "description": "Example stowing pattern - approach from above/side, arc down to target",
+  "reference_point": "end",
+  "speed_factor": 0.4,
+  "waypoints": [
+    {
+      "dx": -0.08,
+      "dy": 0.0,
+      "dz": 0.12,
+      "gripper": "open"
+    },
+    {
+      "dx": -0.04,
+      "dy": 0.0,
+      "dz": 0.06
+    },
+    {
+      "dx": 0.0,
+      "dy": 0.0,
+      "dz": 0.0,
+      "gripper": "close",
+      "pause": 0.3
+    }
+  ]
+}

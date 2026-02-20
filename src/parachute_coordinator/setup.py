@@ -13,6 +13,10 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'config', 'motion_patterns'),
+            glob('config/motion_patterns/*.json')),
+        (os.path.join('share', package_name, 'config'), glob('config/*.rviz')),
+        (os.path.join('share', package_name, 'scripts'), glob('scripts/*.py')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -27,8 +31,9 @@ setup(
     },
     entry_points={
         'console_scripts': [
-		'packing_coordinator_node = parachute_coordinator.packing_coordinator_node:main',
-        'packing_demo_node = parachute_coordinator.packing_demo_node:main',
+            'packing_coordinator_node = parachute_coordinator.packing_coordinator_node:main',
+            'packing_demo_node = parachute_coordinator.packing_demo_node:main',
+            'full_stow_demo_node = parachute_coordinator.full_stow_demo_node:main',
         ],
     },
 )

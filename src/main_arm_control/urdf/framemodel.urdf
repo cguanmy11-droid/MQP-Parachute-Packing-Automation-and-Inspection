@@ -22,13 +22,13 @@
   </joint>
 
   <!-- Parachute bag -->
-  <link name="parachute_bag">
+  <!-- <link name="parachute_bag">
     <visual>
       <geometry>
         <mesh filename="package://main_arm_control/meshes/parachute_bag.stl" scale="0.5 0.5 0.5"/>
       </geometry>
       <material name="fabric">
-        <color rgba="0.2 0.4 0.2 1.0"/>  <!-- greenish -->
+        <color rgba="0.2 0.4 0.2 1.0"/>  <!- - greenish - ->
       </material>
     </visual>
   </link>
@@ -36,7 +36,7 @@
   <joint name="bag_to_frame" type="fixed">
     <parent link="framemodel"/>
     <child link="parachute_bag"/>
-    <origin xyz="-0.17 0.13 -0.22" rpy="-1.458 0 0"/>  <!-- Position relative to frame -->
-  </joint>
+    <origin xyz="-0.17 0.13 -0.22" rpy="-1.458 0 0"/>  <!- - Position relative to frame - ->
+  </joint> --> 
 
 </robot>

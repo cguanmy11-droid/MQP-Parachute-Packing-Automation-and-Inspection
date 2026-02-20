@@ -1,0 +1,10 @@
+# Request to move side arm to a position in world frame
+# Uses TF2 to transform world coordinates to side arm frame
+geometry_msgs/PoseStamped target_pose   # Pose in any frame (typically 'world')
+float64 speed_scale                      # 0.0 to 1.0, scales default speeds
+---
+bool success
+string message
+float64 final_x_mm    # Final position in side arm frame
+float64 final_y_mm
+float64 final_z_mm
