@@ -579,7 +579,7 @@ def generate_launch_description():
             'publish_rate': 5.0,
             # Debug - enable to bypass FOV checks and see what's happening
             'debug_bypass_fov': True,   # TEMP: Enable to detect loops even if camera wrong way
-            'debug_verbose': True,      # Show detailed logging
+            'debug_verbose': False,      # Show detailed logging
         }],
         condition=IfCondition(LaunchConfiguration('vision_test_mode'))
     )
