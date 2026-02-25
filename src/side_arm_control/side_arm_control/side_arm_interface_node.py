@@ -296,19 +296,47 @@ class SideArmInterfaceNode(Node):
     def insert_hook_callback(self, goal_handle):
         """Action callback - insert hook through detected loop."""
         target_loop = goal_handle.request.target_loop
-        loop_pos = target_loop.pose.pose.position
+        loop_pose = target_loop.pose
+
+        # Get source frame (default to 'world')
+        source_frame = loop_pose.header.frame_id or 'world'
+        loop_pos = loop_pose.pose.position
 
         self.get_logger().info(
             f'Inserting hook into loop {target_loop.loop_id} at '
-            f'({loop_pos.x:.3f}, {loop_pos.y:.3f}, {loop_pos.z:.3f}) m'
+            f'({loop_pos.x:.3f}, {loop_pos.y:.3f}, {loop_pos.z:.3f}) m (frame: {source_frame})'
         )
 
         feedback_msg = InsertHook.Feedback()
 
-        # Convert loop position from meters to mm
-        target_x_mm = loop_pos.x * 1000.0
-        target_y_mm = loop_pos.y * 1000.0
-        target_z_mm = loop_pos.z * 1000.0
+        # Transform loop position from source frame to side_arm_origin frame
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.side_arm_frame,  # target frame (side_arm_origin)
+                source_frame,          # source frame (world)
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=1.0)
+            )
+            transformed_pose = tf2_geometry_msgs.do_transform_pose_stamped(loop_pose, transform)
+            transformed_pos = transformed_pose.pose.position
+
+            self.get_logger().info(
+                f'Transformed to {self.side_arm_frame}: '
+                f'({transformed_pos.x:.3f}, {transformed_pos.y:.3f}, {transformed_pos.z:.3f}) m'
+            )
+
+            # Convert from meters to mm (now in side_arm_origin frame)
+            target_x_mm = transformed_pos.x * 1000.0
+            target_y_mm = transformed_pos.y * 1000.0
+            target_z_mm = transformed_pos.z * 1000.0
+
+        except TransformException as e:
+            self.get_logger().error(f'TF transform failed: {e}')
+            self.get_logger().warn('Falling back to direct conversion (may be inaccurate)')
+            # Fallback: direct conversion (only works if loop is already in side_arm frame)
+            target_x_mm = loop_pos.x * 1000.0
+            target_y_mm = loop_pos.y * 1000.0
+            target_z_mm = loop_pos.z * 1000.0
 
         # Stage 1: Approach - move to XY position, offset Z
         feedback_msg.current_state = InsertHook.Feedback.STATE_APPROACHING
