@@ -1,0 +1,75 @@
+# Stow State Machine Transitions
+#
+# Maps directly to Figure 6 in the MQP paper.
+# Each state lists its possible transitions as event -> next_state.
+# Edit this file to change state machine behavior without touching code.
+#
+# Events are strings emitted by action results, service responses,
+# subscriber callbacks, or operator commands.
+
+initial_state: IDLE
+
+states:
+  IDLE:
+    description: "System ready, arms homed, waiting for operator start command"
+    transitions:
+      start: AT_LOOP
+      home: IDLE            # re-home arms
+
+  AT_LOOP:
+    description: "Vision-guided positioning at next loop target"
+    transitions:
+      positioned: INSERT     # both arms report ready
+      no_targets: COMPLETE   # no more loops to stow
+      vision_failure: ERROR
+      ik_failure: ERROR
+      timeout: ERROR
+
+  INSERT:
+    description: "Hook insertion through loop with collision detection"
+    max_retries: 3
+    retry_offset_mm: 5.0
+    transitions:
+      inserted: HANDOFF      # hook depth verified
+      collision: INSERT       # retry with offset (if retries remaining)
+      max_retries: ERROR      # exhausted retries
+      depth_failure: ERROR    # depth verification failed
+      timeout: ERROR
+
+  HANDOFF:
+    description: "Synchronized dual-arm line transfer around hook"
+    transitions:
+      trajectory_complete: RETRACT
+      alignment_lost: AT_LOOP    # recoverable - retry from positioning
+      trajectory_failure: ERROR
+      timeout: ERROR
+
+  RETRACT:
+    description: "Hook withdrawal with line seating"
+    transitions:
+      retracted: RELEASE      # hook fully out, line position verified
+      excessive_force: ERROR  # current spike during retraction
+      position_failure: ERROR # line position verification failed
+      timeout: ERROR
+
+  RELEASE:
+    description: "Cycle completion, verification, and reset"
+    transitions:
+      loops_remaining: AT_LOOP   # more loops to stow
+      all_complete: COMPLETE     # done
+      quality_failure: ERROR     # stow quality check failed
+
+  COMPLETE:
+    description: "All loops stowed successfully"
+    transitions:
+      restart: IDLE           # operator wants to run again
+      home: IDLE
+
+  ERROR:
+    description: "Fault handling - halts all motion, awaits operator decision"
+    # error_source_state is tracked automatically
+    transitions:
+      retry: _PREVIOUS        # return to the state that errored
+      skip: AT_LOOP           # skip this loop, try next
+      abort: IDLE             # stop everything, go home
+      home: IDLE

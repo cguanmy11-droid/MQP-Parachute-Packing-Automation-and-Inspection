@@ -12,6 +12,8 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('share/parachute_coordinator/config', 
+            ['config/stow_transitions.yaml',]),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config', 'motion_patterns'),
             glob('config/motion_patterns/*.json')),
@@ -32,6 +34,7 @@ setup(
     entry_points={
         'console_scripts': [
             'packing_coordinator_node = parachute_coordinator.packing_coordinator_node:main',
+            'packing_coordinator_legacy_node = parachute_coordinator.packing_coordinator_legacy_node:main',
             'packing_demo_node = parachute_coordinator.packing_demo_node:main',
             'full_stow_demo_node = parachute_coordinator.full_stow_demo_node:main',
         ],
