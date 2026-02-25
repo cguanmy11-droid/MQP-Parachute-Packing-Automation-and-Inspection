@@ -37,6 +37,7 @@ setup(
             'packing_coordinator_legacy_node = parachute_coordinator.packing_coordinator_legacy_node:main',
             'packing_demo_node = parachute_coordinator.packing_demo_node:main',
             'full_stow_demo_node = parachute_coordinator.full_stow_demo_node:main',
+            'loop_visit_test_node = parachute_coordinator.loop_visit_test_node:main'
         ],
     },
 )

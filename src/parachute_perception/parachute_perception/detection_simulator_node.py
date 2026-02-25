@@ -45,7 +45,7 @@ class DetectionSimulatorNode(Node):
         self.declare_parameter('min_detection_range', 0.02)    # meters
 
         # Detection simulation parameters
-        self.declare_parameter('detection_noise_stddev', 0.003)  # meters
+        self.declare_parameter('detection_noise_stddev', 0.00005)  # meters
         self.declare_parameter('confidence_base', 0.90)
         self.declare_parameter('confidence_noise', 0.05)
         self.declare_parameter('false_negative_rate', 0.0)  # Probability of missing a visible loop

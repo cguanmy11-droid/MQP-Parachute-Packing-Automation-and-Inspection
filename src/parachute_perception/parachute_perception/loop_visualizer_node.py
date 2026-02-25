@@ -12,7 +12,7 @@ from rclpy.node import Node
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point, PointStamped
 from std_msgs.msg import ColorRGBA
-from parachute_interfaces.msg import DetectedLoops
+from parachute_interfaces.msg import DetectedLoops, DetectedLoop
 import tf2_ros
 from tf2_geometry_msgs import do_transform_point
 from builtin_interfaces.msg import Time
@@ -60,9 +60,17 @@ class LoopVisualizerNode(Node):
             10
         )
 
+        self.target_sub = self.create_subscription(
+            DetectedLoop, 
+            '/target_loop', 
+            self.target_loop_callback, 
+            10
+        )
+
         # Store last received loops for visualization
         self.current_loops = []
         self.current_loops_frame = ''
+        self.target_loop_id = None
         self.last_msg_time = self.get_clock().now()
         self._had_detections = False
 
@@ -109,6 +117,11 @@ class LoopVisualizerNode(Node):
                 tf2_ros.ExtrapolationException) as e:
             self.get_logger().debug(f'TF lookup failed: {e}')
             return point, False
+
+    def target_loop_callback(self, msg: DetectedLoop):
+        """Publish color visual markers for target loop."""
+        self.target_loop_id = msg.loop_id
+        self.get_logger().debug(f'Target loop set to: {self.target_loop_id}')
 
     def publish_markers(self):
         """Publish visualization markers for all detected loops."""
@@ -169,12 +182,12 @@ class LoopVisualizerNode(Node):
             return
 
         # Find the rightmost loop (highest X in output frame) to highlight as target
-        rightmost_idx = -1
-        max_x = float('-inf')
-        for i, (loop, pos) in enumerate(transformed_positions):
-            if pos.x > max_x:
-                max_x = pos.x
-                rightmost_idx = i
+        # rightmost_idx = -1
+        # max_x = float('-inf')
+        # for i, (loop, pos) in enumerate(transformed_positions):
+        #     if pos.x > max_x:
+        #         max_x = pos.x
+        #         rightmost_idx = i
 
         # Create sphere markers for each detected loop
         for i, (loop, pos) in enumerate(transformed_positions):
@@ -196,7 +209,7 @@ class LoopVisualizerNode(Node):
             marker.scale.z = scale * 2
 
             # Color - highlight rightmost loop as target
-            if i == rightmost_idx:
+            if self.target_loop_id is not None and i == self.target_loop_id:
                 marker.color = selected_color
             else:
                 # Adjust color based on confidence if available

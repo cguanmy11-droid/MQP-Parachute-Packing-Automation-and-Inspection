@@ -364,7 +364,7 @@ def generate_launch_description():
             'test_y': 0.0,
             'test_z': 0.0,
             # TF publishing
-            'publish_hook_tf': True,
+            'publish_hook_tf': False,
             'hook_frame_id': 'side_arm_hook',
             # Camera frame is now published by URDF robot_state_publisher (attached to y_carriage)
             # Set to False to avoid TF conflict with URDF's camera_frame

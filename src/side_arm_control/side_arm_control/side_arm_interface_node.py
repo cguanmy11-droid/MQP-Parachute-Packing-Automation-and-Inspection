@@ -36,6 +36,14 @@ class SideArmInterfaceNode(Node):
         self.declare_parameter('insert_depth_z', 30.0)      # mm through loop
         self.declare_parameter('side_arm_frame', 'side_arm_origin')  # TF frame for transforms
 
+        self.declare_parameter('hook_offset_x_mm', 10.0)
+        self.declare_parameter('hook_offset_y_mm', 194.0)
+        self.declare_parameter('hook_offset_z_mm', -160.0)
+
+        self.hook_offset_x = self.get_parameter('hook_offset_x_mm').value
+        self.hook_offset_y = self.get_parameter('hook_offset_y_mm').value
+        self.hook_offset_z = self.get_parameter('hook_offset_z_mm').value
+
         # Handle test_mode as either bool or string (from PythonExpression)
         test_mode_val = self.get_parameter('test_mode').value
         if isinstance(test_mode_val, bool):
@@ -261,9 +269,9 @@ class SideArmInterfaceNode(Node):
             )
 
             # Extract position in side arm frame (convert m to mm)
-            x_mm = transformed_pose.pose.position.x * 1000.0
-            y_mm = transformed_pose.pose.position.y * 1000.0
-            z_mm = transformed_pose.pose.position.z * 1000.0
+            x_mm = transformed_pose.pose.position.x * 1000.0 - self.hook_offset_x
+            y_mm = transformed_pose.pose.position.y * 1000.0 - self.hook_offset_y
+            z_mm = transformed_pose.pose.position.z * 1000.0 - self.hook_offset_z
 
             self.get_logger().info(
                 f'  Transformed to side arm frame: ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) mm'
