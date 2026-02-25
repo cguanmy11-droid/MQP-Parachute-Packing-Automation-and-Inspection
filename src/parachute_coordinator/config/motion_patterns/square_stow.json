@@ -4,8 +4,8 @@
   "reference_point": "start",
   "anchor_offset": {
     "x": -0.04,
-    "y": 0.04,
-    "z": 0.00
+    "y": -0.02,
+    "z": 0.06
   },
   "speed_factor": 0.4,
   "waypoints": [
