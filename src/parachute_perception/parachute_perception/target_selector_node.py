@@ -26,6 +26,8 @@ from parachute_interfaces.msg import DetectedLoops, DetectedLoop
 from parachute_interfaces.srv import RequestNextTarget
 from geometry_msgs.msg import Pose, PoseStamped, Point, Quaternion
 from std_msgs.msg import String
+import tf2_ros
+from tf2_geometry_msgs import do_transform_pose_stamped
 
 
 class TargetSelectorNode(Node):
@@ -36,10 +38,16 @@ class TargetSelectorNode(Node):
         self.declare_parameter('use_test_loops', False)
         self.declare_parameter('selection_strategy', 'rightmost')  # rightmost, leftmost, nearest
         self.declare_parameter('stow_proximity_threshold', 0.01)  # meters — how close to consider "same loop"
+        self.declare_parameter('output_frame', 'world')  # Frame to transform detections into
 
         self.use_test_loops = self.get_parameter('use_test_loops').value
         self.selection_strategy = self.get_parameter('selection_strategy').value
         self.proximity_threshold = self.get_parameter('stow_proximity_threshold').value
+        self.output_frame = self.get_parameter('output_frame').value
+
+        # ==================== TF2 ====================
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # ==================== STATE ====================
         self.current_loops: list[DetectedLoop] = []
@@ -103,17 +111,48 @@ class TargetSelectorNode(Node):
             f'Generated {len(self.current_loops)} test loops'
         )
 
+    def _transform_to_output_frame(self, pose_stamped: PoseStamped) -> PoseStamped:
+        """Transform a pose to the output frame (world)."""
+        source_frame = pose_stamped.header.frame_id
+        if not source_frame:
+            source_frame = 'camera_frame'  # Default assumption
+            pose_stamped.header.frame_id = source_frame
+
+        if source_frame == self.output_frame:
+            return pose_stamped  # Already in correct frame
+
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                self.output_frame,
+                source_frame,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.1)
+            )
+            transformed = do_transform_pose_stamped(pose_stamped, transform)
+            return transformed
+        except (tf2_ros.LookupException, tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException) as e:
+            self.get_logger().warn(f'TF transform failed ({source_frame} -> {self.output_frame}): {e}')
+            return pose_stamped  # Return original if transform fails
+
     def _loops_callback(self, msg: DetectedLoops):
-        """Store detected loops from perception pipeline."""
+        """Store detected loops from perception pipeline, transformed to world frame."""
         if self.use_test_loops:
             return  # Ignore detections in test mode
 
-        self.current_loops = list(msg.loops)
+        self.current_loops = []
 
-        # Assign IDs if not set (loop_id defaults to 0, so check for -1 or use index)
-        for i, loop in enumerate(self.current_loops):
-            if loop.loop_id < 0:
-                loop.loop_id = i
+        for i, loop in enumerate(msg.loops):
+            # Transform pose to world frame
+            transformed_pose = self._transform_to_output_frame(loop.pose)
+
+            # Create new loop with transformed pose
+            transformed_loop = DetectedLoop()
+            transformed_loop.loop_id = loop.loop_id if loop.loop_id >= 0 else i
+            transformed_loop.confidence = loop.confidence
+            transformed_loop.pose = transformed_pose
+
+            self.current_loops.append(transformed_loop)
 
     def _command_callback(self, msg: String):
         """Handle commands (reset stowed list, etc.)."""
