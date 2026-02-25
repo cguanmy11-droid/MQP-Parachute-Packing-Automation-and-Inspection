@@ -91,7 +91,7 @@ class TargetSelectorNode(Node):
 
         for i, (x, y, z) in enumerate(test_positions):
             loop = DetectedLoop()
-            loop.loop_id = f'test_loop_{i}'
+            loop.loop_id = i
             loop.confidence = 1.0
             loop.pose = PoseStamped()
             loop.pose.header.frame_id = 'world'
@@ -110,10 +110,10 @@ class TargetSelectorNode(Node):
 
         self.current_loops = list(msg.loops)
 
-        # Assign IDs if not set
+        # Assign IDs if not set (loop_id defaults to 0, so check for -1 or use index)
         for i, loop in enumerate(self.current_loops):
-            if not loop.loop_id:
-                loop.loop_id = f'loop_{i}'
+            if loop.loop_id < 0:
+                loop.loop_id = i
 
     def _command_callback(self, msg: String):
         """Handle commands (reset stowed list, etc.)."""
