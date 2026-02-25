@@ -11,10 +11,19 @@ initial_state: IDLE
 
 states:
   IDLE:
-    description: "System ready, arms homed, waiting for operator start command"
+    description: "System ready, waiting for operator start command"
     transitions:
-      start: AT_LOOP
-      home: IDLE            # re-home arms
+      start: HOMING         # start sequence by homing first
+      home: HOMING          # explicit home command
+
+  HOMING:
+    description: "Homing side arm to known position"
+    timeout_sec: 60
+    transitions:
+      homed: AT_LOOP        # homing complete, proceed to first loop
+      already_homed: AT_LOOP  # already homed, skip
+      homing_failed: ERROR
+      timeout: ERROR
 
   AT_LOOP:
     description: "Vision-guided positioning at next loop target"

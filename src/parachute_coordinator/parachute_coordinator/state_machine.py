@@ -20,6 +20,7 @@ import yaml
 class StowState(Enum):
     """States matching the stow transitions config."""
     IDLE = auto()
+    HOMING = auto()
     AT_LOOP = auto()
     INSERT = auto()
     HANDOFF = auto()

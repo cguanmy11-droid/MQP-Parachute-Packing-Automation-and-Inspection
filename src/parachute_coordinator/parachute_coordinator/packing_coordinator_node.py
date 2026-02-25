@@ -105,6 +105,8 @@ class PackingCoordinatorNode(Node):
         # Side arm homing tracking
         self._side_arm_is_homed = False
         self._has_homed_once = False  # Only home once at startup
+        self._homing_timer = None
+        self._homing_start_time = None
 
         # ==================== CALLBACK GROUP ====================
         self._cb_group = ReentrantCallbackGroup()
@@ -336,20 +338,57 @@ class PackingCoordinatorNode(Node):
     # ================================================================
 
     def on_enter_idle(self, state: StowState, event: str):
-        """Entered IDLE — system is ready. Homes side arm on first entry."""
+        """Entered IDLE — system is ready."""
         self.current_target_loop = None
         self._active_goal_handle = None
-
-        # Home side arm once at startup
-        if not self._has_homed_once:
-            self.get_logger().info('[IDLE] First entry - homing side arm...')
-            if self._home_side_arm(timeout=60.0):
-                self.get_logger().info('[IDLE] Side arm homed successfully')
-            else:
-                self.get_logger().warn('[IDLE] Side arm homing failed - continuing anyway')
-                self._has_homed_once = True  # Don't retry forever
-
         self.get_logger().info('System ready. Send "start" to begin.')
+
+    def on_enter_homing(self, state: StowState, event: str):
+        """Entered HOMING — home the side arm."""
+        self.get_logger().info('[HOMING] Starting side arm homing sequence...')
+
+        # Check if already homed (skip if so)
+        if self._side_arm_is_homed and self._has_homed_once:
+            self.get_logger().info('[HOMING] Side arm already homed, skipping')
+            self.sm.transition('already_homed')
+            return
+
+        # Send HOME_ALL command
+        self.get_logger().info('[HOMING] Sending HOME_ALL command...')
+        cmd = String()
+        cmd.data = 'HOME_ALL'
+        self.side_arm_cmd_pub.publish(cmd)
+
+        # Start a timer to check homing status
+        self._homing_start_time = time.time()
+        self._homing_timer = self.create_timer(0.5, self._check_homing_status)
+
+    def _check_homing_status(self):
+        """Timer callback to check if homing is complete."""
+        timeout = 60.0  # seconds
+
+        if self._side_arm_is_homed:
+            # Homing complete
+            self._homing_timer.cancel()
+            self._homing_timer = None
+            self._has_homed_once = True
+            elapsed = time.time() - self._homing_start_time
+            self.get_logger().info(f'[HOMING] Side arm homed in {elapsed:.1f}s')
+            self.sm.transition('homed')
+            return
+
+        # Check timeout
+        elapsed = time.time() - self._homing_start_time
+        if elapsed >= timeout:
+            self._homing_timer.cancel()
+            self._homing_timer = None
+            self.get_logger().error(f'[HOMING] Timeout after {timeout}s')
+            self._enter_error('homing_failed', 'Side arm homing timeout')
+            return
+
+        # Log progress every 10 seconds
+        if int(elapsed) % 10 == 0 and int(elapsed) > 0:
+            self.get_logger().info(f'[HOMING] Still homing... ({elapsed:.0f}s)')
 
     def on_enter_at_loop(self, state: StowState, event: str):
         """Entered AT_LOOP — request next target from perception."""
