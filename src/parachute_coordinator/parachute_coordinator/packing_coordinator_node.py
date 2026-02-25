@@ -44,9 +44,10 @@ from ament_index_python.packages import get_package_share_directory
 
 from parachute_interfaces.srv import RequestNextTarget, RotateHook
 from parachute_interfaces.action import InsertHook, ExecuteTrajectory
-from parachute_interfaces.msg import HookStatus
+from parachute_interfaces.msg import HookStatus, SideArmState
 from geometry_msgs.msg import Pose, Point
 from std_msgs.msg import String
+import time
 
 from .state_machine import StateMachine, StowState
 from .motion_pattern_manager import MotionPatternManager, BUILTIN_PATTERNS
@@ -101,6 +102,10 @@ class PackingCoordinatorNode(Node):
         self._error_message = ''
         self._active_goal_handle = None
 
+        # Side arm homing tracking
+        self._side_arm_is_homed = False
+        self._has_homed_once = False  # Only home once at startup
+
         # ==================== CALLBACK GROUP ====================
         self._cb_group = ReentrantCallbackGroup()
 
@@ -133,9 +138,14 @@ class PackingCoordinatorNode(Node):
             HookStatus, '/side_arm/status',
             self._hook_status_callback, 10
         )
+        self.side_arm_state_sub = self.create_subscription(
+            SideArmState, '/side_arm/parsed_state',
+            self._side_arm_state_callback, 10
+        )
 
         # ==================== PUBLISHERS ====================
         self.status_pub = self.create_publisher(String, '/stow/status', 10)
+        self.side_arm_cmd_pub = self.create_publisher(String, '/side_arm/command', 10)
         self.status_timer = self.create_timer(1.0, self._publish_status)
 
         # ==================== SERVICE CHECK ====================
@@ -236,6 +246,36 @@ class PackingCoordinatorNode(Node):
         # Could be used for safety monitoring during HANDOFF/RETRACT
         pass
 
+    def _side_arm_state_callback(self, msg: SideArmState):
+        """Track side arm homing status."""
+        self._side_arm_is_homed = msg.is_homed
+
+    def _home_side_arm(self, timeout: float = 60.0) -> bool:
+        """Home the side arm and wait for completion."""
+        self.get_logger().info('Homing side arm (HOME_ALL)...')
+
+        # Send HOME_ALL command
+        cmd = String()
+        cmd.data = 'HOME_ALL'
+        self.side_arm_cmd_pub.publish(cmd)
+
+        # Wait for is_homed to become True
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self._side_arm_is_homed:
+                self.get_logger().info(f'Side arm homed in {time.time() - start_time:.1f}s')
+                self._has_homed_once = True
+                return True
+
+            # Log progress every 10 seconds
+            elapsed = time.time() - start_time
+            if int(elapsed) % 10 == 0 and int(elapsed) > 0:
+                self.get_logger().info(f'  Still homing... ({elapsed:.0f}s)')
+
+        self.get_logger().error(f'Side arm homing timeout after {timeout}s')
+        return False
+
     # ================================================================
     #  STATUS PUBLISHING
     # ================================================================
@@ -296,11 +336,20 @@ class PackingCoordinatorNode(Node):
     # ================================================================
 
     def on_enter_idle(self, state: StowState, event: str):
-        """Entered IDLE — system is ready."""
-        self.get_logger().info('System ready. Send "start" to begin.')
+        """Entered IDLE — system is ready. Homes side arm on first entry."""
         self.current_target_loop = None
         self._active_goal_handle = None
-        # TODO: Home arms if not already homed
+
+        # Home side arm once at startup
+        if not self._has_homed_once:
+            self.get_logger().info('[IDLE] First entry - homing side arm...')
+            if self._home_side_arm(timeout=60.0):
+                self.get_logger().info('[IDLE] Side arm homed successfully')
+            else:
+                self.get_logger().warn('[IDLE] Side arm homing failed - continuing anyway')
+                self._has_homed_once = True  # Don't retry forever
+
+        self.get_logger().info('System ready. Send "start" to begin.')
 
     def on_enter_at_loop(self, state: StowState, event: str):
         """Entered AT_LOOP — request next target from perception."""
