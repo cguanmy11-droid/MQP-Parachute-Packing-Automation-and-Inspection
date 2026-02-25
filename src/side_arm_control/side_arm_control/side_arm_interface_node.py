@@ -53,24 +53,23 @@ class SideArmInterfaceNode(Node):
         # Callback group for concurrent operations
         self._cb_group = ReentrantCallbackGroup()
 
-        # Current position tracking (for real mode)
+        # Current position tracking
         self._current_position = Point()
         self._is_homed = False
 
-        # Set up real mode components
-        if not self.test_mode:
-            # Action client for coordinate moves
-            self._move_client = ActionClient(
-                self, MoveToCoordinate, '/side_arm/move_to_coordinate',
-                callback_group=self._cb_group)
+        # Action client for coordinate moves (used in both test and real mode)
+        # In test_mode, coordinate_node runs in simulation and updates RViz
+        self._move_client = ActionClient(
+            self, MoveToCoordinate, '/side_arm/move_to_coordinate',
+            callback_group=self._cb_group)
 
-            # Command publisher for direct commands
-            self._cmd_pub = self.create_publisher(String, '/side_arm/command', 10)
+        # Command publisher for direct commands
+        self._cmd_pub = self.create_publisher(String, '/side_arm/command', 10)
 
-            # State subscriber
-            self._state_sub = self.create_subscription(
-                SideArmState, '/side_arm/parsed_state',
-                self._state_callback, 10)
+        # State subscriber
+        self._state_sub = self.create_subscription(
+            SideArmState, '/side_arm/parsed_state',
+            self._state_callback, 10)
 
         # Action server for inserting hook
         self.action_server = ActionServer(
@@ -112,23 +111,17 @@ class SideArmInterfaceNode(Node):
         self._is_homed = msg.is_homed
 
     def _send_command(self, cmd: str):
-        """Send direct command to ESP32."""
-        if not self.test_mode:
-            msg = String()
-            msg.data = cmd
-            self._cmd_pub.publish(msg)
-            self.get_logger().debug(f'Sent command: {cmd}')
+        """Send direct command (works in both real and test/simulation mode)."""
+        msg = String()
+        msg.data = cmd
+        self._cmd_pub.publish(msg)
+        self.get_logger().debug(f'Sent command: {cmd}')
 
     def _move_to(self, x: float, y: float, z: float, speed_scale: float = 0.7) -> bool:
         """
         Move to position using coordinate node action.
-        Returns True on success.
+        Returns True on success. Works in both real and test/simulation mode.
         """
-        if self.test_mode:
-            self.get_logger().info(f'TEST: Would move to ({x:.1f}, {y:.1f}, {z:.1f}) mm')
-            time.sleep(1.0)  # Simulate movement
-            return True
-
         if not self._move_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error('Coordinate node not available')
             return False
@@ -180,21 +173,26 @@ class SideArmInterfaceNode(Node):
 
         self.get_logger().info(f'Rotating hook by {angle} degrees')
 
-        if self.test_mode:
-            # Simulate rotation time
-            rotation_time = abs(angle) / 90.0
-            time.sleep(rotation_time)
-        else:
-            # TODO: When servo is connected, send rotation command
-            # For now, use DC motor timed movement as placeholder
+        # Update current angle
+        self.current_angle += angle
+
+        # Convert degrees to servo microseconds (roughly 1000us = 90 degrees)
+        servo_us = int(self.current_angle * 1000.0 / 90.0)
+
+        # Send servo command (works in both test and real mode for visualization)
+        self._send_command(f'SERVO,{servo_us}')
+
+        if not self.test_mode:
+            # In real mode, also use DC motor as backup
             rotation_time = abs(angle) / 90.0
             dc_percent = 50 if angle > 0 else -50
             self._send_command(f'DC_SPEED,{dc_percent}')
             time.sleep(rotation_time)
             self._send_command('DC_SPEED,0')
-
-        # Update current angle
-        self.current_angle += angle
+        else:
+            # Simulate rotation time
+            rotation_time = abs(angle) / 90.0
+            time.sleep(rotation_time)
 
         response.success = True
         response.final_angle = self.current_angle
