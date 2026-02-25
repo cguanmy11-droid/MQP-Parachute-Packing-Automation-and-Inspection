@@ -124,16 +124,20 @@ def generate_launch_description():
 
     # Target selector - provides /request_next_target service
     # Called by packing_coordinator_node in AT_LOOP state
-    target_selector_node = Node(
-        package='parachute_perception',
-        executable='target_selector_node',
-        name='target_selector_node',
-        output='screen',
-        parameters=[{
-            'use_test_loops': LaunchConfiguration('use_test_loops'),
-            'selection_strategy': LaunchConfiguration('selection_strategy'),
-            'stow_proximity_threshold': 0.01,  # meters
-        }]
+    # Delayed slightly to allow TF tree to be established
+    target_selector_node = TimerAction(
+        period=2.0,
+        actions=[Node(
+            package='parachute_perception',
+            executable='target_selector_node',
+            name='target_selector_node',
+            output='screen',
+            parameters=[{
+                'use_test_loops': LaunchConfiguration('use_test_loops'),
+                'selection_strategy': LaunchConfiguration('selection_strategy'),
+                'stow_proximity_threshold': 0.01,  # meters
+            }]
+        )]
     )
 
     # ==================== COORDINATOR NODE ====================
