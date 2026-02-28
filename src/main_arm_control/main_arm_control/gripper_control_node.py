@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-Smart Gripper Controller for WX200
------------------------------------
-Closes/opens with PWM but monitors Present_Load in real-time.
-Stops the instant it detects contact (load threshold) so it
-never stalls, never triggers hardware errors, never ruins a run.
+Smart Gripper Controller for WX200 (v2)
+-----------------------------------------
+PWM control with both load monitoring AND position tracking.
+
+Fixes:
+- Ignores load during initial settling period (static friction spike)
+- Tracks encoder position to detect mechanical limits
+- Stops based on whichever triggers first: load threshold OR position stall
 
 Subscribes:
-    /main_arm/gripper_command  (String)  - 'open', 'close', 'release'
+    /main_arm/gripper_command  (String)  - 'open', 'close', 'stop', 'clear_error'
     /main_arm/gripper_position (Float32) - 0.0=closed, 1.0=open (proportional)
 
 Publishes:
     /main_arm/gripper_status   (String)  - 'open', 'closed', 'gripping', 'moving', 'error'
-    /main_arm/gripper_load     (Float32) - current load as percentage (for debugging)
-
-Works alongside main_arm_interface_node — just handles the gripper so
-the main node doesn't have to.
+    /main_arm/gripper_load     (Float32) - current load % (for tuning)
 """
 
 import rclpy
@@ -33,13 +33,22 @@ class SmartGripperController(Node):
 
         # ── Parameters ──
         self.declare_parameter('robot_name', 'wx200')
-        self.declare_parameter('grip_pwm', 200)        # PWM to close (tune this: 150-350)
-        self.declare_parameter('release_pwm', -200)     # PWM to open (negative = reverse)
-        self.declare_parameter('load_threshold', 30.0)  # % load that means "grabbed something"
-        self.declare_parameter('monitor_rate', 50.0)    # Hz to check load while moving
-        self.declare_parameter('move_timeout', 3.0)     # Max seconds for any gripper move
-        self.declare_parameter('hold_pwm', 0)           # PWM after grip detected (0 = just hold position)
+        self.declare_parameter('grip_pwm', 200)         # PWM to close (tune: 150-350)
+        self.declare_parameter('release_pwm', -200)      # PWM to open
+        self.declare_parameter('load_threshold', 40.0)   # % load = "grabbed something"
+        self.declare_parameter('monitor_rate', 50.0)     # Hz to check load/position
+        self.declare_parameter('move_timeout', 3.0)      # Max seconds for any move
+        self.declare_parameter('hold_pwm', 0)            # PWM after grip (0 = coast/hold)
         self.declare_parameter('test_mode', False)
+
+        # Settling: ignore load readings for this long after starting a move.
+        # Lets the motor get past static friction without false-triggering.
+        self.declare_parameter('settle_time', 0.5)
+
+        # Position stall detection: if encoder moves less than this (in raw units)
+        # over stall_check_window seconds, we've hit a mechanical limit.
+        self.declare_parameter('stall_position_threshold', 5)   # raw encoder ticks
+        self.declare_parameter('stall_check_window', 0.3)       # seconds
 
         self.robot_name = self.get_parameter('robot_name').value
         self.grip_pwm = self.get_parameter('grip_pwm').value
@@ -49,9 +58,12 @@ class SmartGripperController(Node):
         self.move_timeout = self.get_parameter('move_timeout').value
         self.hold_pwm = self.get_parameter('hold_pwm').value
         self.test_mode = self.get_parameter('test_mode').value
+        self.settle_time = self.get_parameter('settle_time').value
+        self.stall_position_threshold = self.get_parameter('stall_position_threshold').value
+        self.stall_check_window = self.get_parameter('stall_check_window').value
 
         # ── State ──
-        self.gripper_state = 'unknown'  # open, closed, gripping, moving, error
+        self.gripper_state = 'unknown'
         self.is_moving = False
         self.move_lock = threading.Lock()
 
@@ -69,7 +81,7 @@ class SmartGripperController(Node):
         self.create_subscription(Float32, '/main_arm/gripper_position',
                                  self.gripper_position_callback, 10)
 
-        # ── Service clients for reading registers ──
+        # ── Service clients ──
         self.get_register_client = self.create_client(
             RegisterValues,
             f'/{self.robot_name}/get_motor_registers'
@@ -82,112 +94,113 @@ class SmartGripperController(Node):
         # ── Status timer ──
         self.create_timer(0.5, self.publish_status)
 
-        # Wait for services
         if not self.test_mode:
             self.get_logger().info('Waiting for motor services...')
             self.get_register_client.wait_for_service(timeout_sec=10.0)
-            self.get_logger().info('Smart Gripper Controller ready')
-
-            # Clear any existing hardware errors on startup
             self._clear_hardware_errors()
+            self.get_logger().info('Smart Gripper Controller v2 ready')
         else:
-            self.get_logger().info('Smart Gripper Controller ready (TEST MODE)')
+            self.get_logger().info('Smart Gripper Controller v2 ready (TEST MODE)')
 
     # ─────────────────────────────────────────────
-    # Core: send PWM and monitor load
+    # Low-level motor helpers
     # ─────────────────────────────────────────────
     def _send_pwm(self, pwm_value: int):
-        """Send a raw PWM command to the gripper motor."""
         cmd = JointSingleCommand()
         cmd.name = 'gripper'
         cmd.cmd = float(pwm_value)
         self.pwm_pub.publish(cmd)
 
-    def _read_present_load(self) -> float:
-        """
-        Read Present_Load register from the gripper Dynamixel.
-        Returns load as a percentage (0-100).
-        Present_Load on XL430: 0-1000 (0.1% units), with direction bit.
-        """
+    def _read_register(self, reg_name: str) -> int:
+        """Read a single register from the gripper motor."""
         req = RegisterValues.Request()
         req.cmd_type = 'single'
         req.name = 'gripper'
-        req.reg = 'Present_Load'
+        req.reg = reg_name
 
         future = self.get_register_client.call_async(req)
         rclpy.spin_until_future_complete(self, future, timeout_sec=0.5)
 
-        if future.result() is not None:
-            raw = future.result().values[0]
-            # XL430 Present_Load: bits 0-9 = magnitude, bit 10 = direction
-            # Convert to percentage (max 1000 = 100%)
-            magnitude = raw & 0x3FF  # Lower 10 bits
-            load_pct = magnitude / 10.0  # Convert to percentage
-            return load_pct
-        else:
-            self.get_logger().warn('Failed to read Present_Load')
-            return 0.0
-
-    def _read_hardware_error(self) -> int:
-        """Read Hardware_Error_Status register. 0 = no error."""
-        req = RegisterValues.Request()
-        req.cmd_type = 'single'
-        req.name = 'gripper'
-        req.reg = 'Hardware_Error_Status'
-
-        future = self.get_register_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=0.5)
-
-        if future.result() is not None:
+        if future.result() is not None and len(future.result().values) > 0:
             return future.result().values[0]
         return -1
 
+    def _read_present_load(self) -> float:
+        """Read Present_Load as a percentage (0-100)."""
+        raw = self._read_register('Present_Load')
+        if raw < 0:
+            return 0.0
+        magnitude = raw & 0x3FF
+        return magnitude / 10.0
+
+    def _read_present_position(self) -> int:
+        """Read Present_Position in raw encoder ticks."""
+        return self._read_register('Present_Position')
+
+    def _read_hardware_error(self) -> int:
+        return self._read_register('Hardware_Error_Status')
+
     def _clear_hardware_errors(self):
-        """
-        Clear hardware errors by cycling torque.
-        Call this on startup and after any stall.
-        """
         hw_error = self._read_hardware_error()
-        if hw_error != 0:
-            self.get_logger().warn(
-                f'Hardware error detected ({hw_error}), clearing via torque cycle...'
-            )
-            # Disable torque
+        if hw_error != 0 and hw_error != -1:
+            self.get_logger().warn(f'Hardware error ({hw_error}), clearing...')
+
             req = TorqueEnable.Request()
             req.cmd_type = 'single'
             req.name = 'gripper'
+
             req.enable = False
             future = self.torque_client.call_async(req)
             rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
-
             time.sleep(0.5)
 
-            # Re-enable torque
             req.enable = True
             future = self.torque_client.call_async(req)
             rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
 
-            # Verify
             hw_error = self._read_hardware_error()
             if hw_error == 0:
-                self.get_logger().info('Hardware errors cleared successfully')
+                self.get_logger().info('Hardware errors cleared')
             else:
                 self.get_logger().error(
-                    f'Could not clear hardware error ({hw_error}). '
-                    'Power cycle the robot.'
+                    f'Could not clear error ({hw_error}). Power cycle needed.'
                 )
                 self.gripper_state = 'error'
         else:
             self.get_logger().info('No hardware errors on gripper')
 
     # ─────────────────────────────────────────────
-    # Smart close: PWM + load monitoring
+    # Position stall detection
+    # ─────────────────────────────────────────────
+    def _is_stalled(self, position_history: list, timestamps: list) -> bool:
+        """
+        Check if the motor has stopped moving by comparing recent
+        encoder positions. Returns True if position hasn't changed
+        significantly over the stall check window.
+        """
+        if len(position_history) < 2:
+            return False
+
+        now = timestamps[-1]
+        window_start = now - self.stall_check_window
+        recent = [
+            (t, p) for t, p in zip(timestamps, position_history)
+            if t >= window_start
+        ]
+
+        if len(recent) < 2:
+            return False
+
+        pos_range = abs(recent[-1][1] - recent[0][1])
+        return pos_range < self.stall_position_threshold
+
+    # ─────────────────────────────────────────────
+    # Smart close
     # ─────────────────────────────────────────────
     def smart_close(self):
         """
-        Close the gripper with load monitoring.
-        Sends PWM to close, monitors Present_Load, and stops
-        the instant load exceeds threshold (= grabbed something).
+        Close with load monitoring + position stall detection.
+        Ignores load during settle_time to get past static friction.
         """
         if not self.move_lock.acquire(blocking=False):
             self.get_logger().warn('Gripper already moving, ignoring close')
@@ -197,51 +210,76 @@ class SmartGripperController(Node):
             self.is_moving = True
             self.gripper_state = 'moving'
 
-            # Clear any prior errors
             self._clear_hardware_errors()
             if self.gripper_state == 'error':
                 return False
 
             self.get_logger().info(
                 f'Smart close: PWM={self.grip_pwm}, '
-                f'load threshold={self.load_threshold}%'
+                f'load_thresh={self.load_threshold}%, '
+                f'settle={self.settle_time}s'
             )
 
-            # Start closing
             self._send_pwm(self.grip_pwm)
 
-            # Monitor load at high frequency
             period = 1.0 / self.monitor_rate
             start_time = time.time()
+            settled = False
             max_load_seen = 0.0
+            position_history = []
+            timestamps = []
 
             while (time.time() - start_time) < self.move_timeout:
+                elapsed = time.time() - start_time
+                now = time.time()
+
                 load = self._read_present_load()
+                position = self._read_present_position()
                 max_load_seen = max(max_load_seen, load)
 
-                # Publish load for debugging
+                position_history.append(position)
+                timestamps.append(now)
+
+                # Publish for tuning
                 load_msg = Float32()
                 load_msg.data = load
                 self.load_pub.publish(load_msg)
 
-                if load >= self.load_threshold:
-                    # Contact detected! Stop immediately.
+                # After settling, start checking load
+                if not settled and elapsed >= self.settle_time:
+                    settled = True
+                    self.get_logger().info(
+                        f'Settled. Monitoring load (current={load:.1f}%, '
+                        f'pos={position})'
+                    )
+
+                # Load-based grip detection (only after settling)
+                if settled and load >= self.load_threshold:
                     self._send_pwm(self.hold_pwm)
                     self.gripper_state = 'gripping'
                     self.get_logger().info(
-                        f'Grip detected! Load={load:.1f}% '
-                        f'(threshold={self.load_threshold}%). '
-                        f'Holding with PWM={self.hold_pwm}'
+                        f'Grip detected! Load={load:.1f}% pos={position}. '
+                        f'Holding PWM={self.hold_pwm}'
                     )
                     return True
 
-                # Check for hardware error mid-move
+                # Position stall detection (only after settling)
+                if settled and self._is_stalled(position_history, timestamps):
+                    self._send_pwm(self.hold_pwm)
+                    self.gripper_state = 'closed'
+                    self.get_logger().info(
+                        f'Position stall at {position} (load={load:.1f}%). '
+                        f'Stopping.'
+                    )
+                    return True
+
+                # Hardware error check
                 hw_error = self._read_hardware_error()
-                if hw_error != 0:
+                if hw_error != 0 and hw_error != -1:
                     self._send_pwm(0)
                     self.get_logger().error(
-                        f'Hardware error during close ({hw_error}), '
-                        f'stopping. Max load was {max_load_seen:.1f}%'
+                        f'Hardware error during close ({hw_error}). '
+                        f'Max load={max_load_seen:.1f}%'
                     )
                     self.gripper_state = 'error'
                     self._clear_hardware_errors()
@@ -249,13 +287,11 @@ class SmartGripperController(Node):
 
                 time.sleep(period)
 
-            # Timeout - stop motor
             self._send_pwm(0)
             self.gripper_state = 'closed'
             self.get_logger().warn(
                 f'Close timed out ({self.move_timeout}s). '
-                f'Max load was {max_load_seen:.1f}%. '
-                'May not have grabbed anything.'
+                f'Max load={max_load_seen:.1f}%'
             )
             return True
 
@@ -263,10 +299,13 @@ class SmartGripperController(Node):
             self.is_moving = False
             self.move_lock.release()
 
+    # ─────────────────────────────────────────────
+    # Smart open
+    # ─────────────────────────────────────────────
     def smart_open(self):
         """
-        Open the gripper with load monitoring.
-        Simpler than close — just opens until load drops or timeout.
+        Open with position stall detection.
+        Stops when encoder stops changing (= fully open).
         """
         if not self.move_lock.acquire(blocking=False):
             self.get_logger().warn('Gripper already moving, ignoring open')
@@ -282,53 +321,60 @@ class SmartGripperController(Node):
 
             self.get_logger().info(f'Smart open: PWM={self.release_pwm}')
 
-            # Start opening
             self._send_pwm(self.release_pwm)
 
-            # Monitor — stop when load drops (fingers are free)
-            # or after a short timeout
             period = 1.0 / self.monitor_rate
             start_time = time.time()
-            open_timeout = min(self.move_timeout, 2.0)  # Opening is usually fast
-
-            # Give it a moment to start moving before checking load
-            time.sleep(0.2)
+            position_history = []
+            timestamps = []
+            open_timeout = min(self.move_timeout, 2.5)
 
             while (time.time() - start_time) < open_timeout:
-                load = self._read_present_load()
+                elapsed = time.time() - start_time
+                now = time.time()
 
-                load_msg = Float32()
-                load_msg.data = load
-                self.load_pub.publish(load_msg)
+                position = self._read_present_position()
+                position_history.append(position)
+                timestamps.append(now)
 
-                # Check for hardware error
+                # After settling, check if we've stopped
+                if elapsed > self.settle_time:
+                    if self._is_stalled(position_history, timestamps):
+                        self._send_pwm(0)
+                        self.gripper_state = 'open'
+                        self.get_logger().info(
+                            f'Fully open (stall at position={position})'
+                        )
+                        return True
+
                 hw_error = self._read_hardware_error()
-                if hw_error != 0:
+                if hw_error != 0 and hw_error != -1:
                     self._send_pwm(0)
-                    self.get_logger().error(f'Hardware error during open ({hw_error})')
+                    self.get_logger().error(
+                        f'Hardware error during open ({hw_error})'
+                    )
                     self.gripper_state = 'error'
                     self._clear_hardware_errors()
                     return False
 
                 time.sleep(period)
 
-            # Stop motor
             self._send_pwm(0)
             self.gripper_state = 'open'
-            self.get_logger().info('Gripper open')
+            self.get_logger().info('Open complete (timeout)')
             return True
 
         finally:
             self.is_moving = False
             self.move_lock.release()
 
+    # ─────────────────────────────────────────────
+    # Proportional control via timed PWM
+    # ─────────────────────────────────────────────
     def smart_partial(self, fraction: float):
         """
-        Proportional control via timed PWM.
-        fraction: 0.0 = full close, 1.0 = full open
-
-        Opens fully first, then closes for a proportional duration.
-        Load monitoring still active during close phase.
+        fraction: 0.0 = closed, 1.0 = open.
+        Opens fully, then closes for a proportional duration.
         """
         if not self.move_lock.acquire(blocking=False):
             self.get_logger().warn('Gripper already moving')
@@ -345,27 +391,46 @@ class SmartGripperController(Node):
                 self.move_lock.release()
                 return self.smart_close()
 
-            # Open fully first
             self.get_logger().info(f'Partial grip: {fraction*100:.0f}% open')
+
+            # Open fully first
             self._send_pwm(self.release_pwm)
-            time.sleep(1.5)  # Enough time to fully open
+            time.sleep(1.5)
             self._send_pwm(0)
             time.sleep(0.2)
 
-            # Close proportionally with load monitoring
-            close_duration = (1.0 - fraction) * 2.0  # ~2s for full close travel
+            # Close proportionally, still monitoring
+            close_duration = (1.0 - fraction) * 2.0
             self._send_pwm(self.grip_pwm)
 
             period = 1.0 / self.monitor_rate
             start_time = time.time()
+            position_history = []
+            timestamps = []
 
             while (time.time() - start_time) < close_duration:
+                elapsed = time.time() - start_time
+                now = time.time()
+
                 load = self._read_present_load()
-                if load >= self.load_threshold:
+                position = self._read_present_position()
+                position_history.append(position)
+                timestamps.append(now)
+
+                if elapsed > self.settle_time and load >= self.load_threshold:
                     self._send_pwm(self.hold_pwm)
                     self.gripper_state = 'gripping'
-                    self.get_logger().info(f'Contact during partial close at {load:.1f}%')
+                    self.get_logger().info(
+                        f'Contact during partial at {load:.1f}%'
+                    )
                     return True
+
+                if elapsed > self.settle_time:
+                    if self._is_stalled(position_history, timestamps):
+                        self._send_pwm(self.hold_pwm)
+                        self.gripper_state = 'closed'
+                        self.get_logger().info('Stall during partial close')
+                        return True
 
                 time.sleep(period)
 
@@ -386,11 +451,9 @@ class SmartGripperController(Node):
         self.get_logger().info(f'Gripper command: {command}')
 
         if self.test_mode:
-            self.get_logger().info(f'TEST: gripper {command}')
             self.gripper_state = command
             return
 
-        # Run in a thread so we don't block the executor
         if command in ('close', 'grasp', 'grip'):
             threading.Thread(target=self.smart_close, daemon=True).start()
         elif command in ('open', 'release'):
@@ -402,10 +465,9 @@ class SmartGripperController(Node):
         elif command == 'clear_error':
             self._clear_hardware_errors()
         else:
-            self.get_logger().warn(f'Unknown gripper command: {command}')
+            self.get_logger().warn(f'Unknown command: {command}')
 
     def gripper_position_callback(self, msg: Float32):
-        """0.0 = closed, 1.0 = open"""
         if self.test_mode:
             return
         threading.Thread(
