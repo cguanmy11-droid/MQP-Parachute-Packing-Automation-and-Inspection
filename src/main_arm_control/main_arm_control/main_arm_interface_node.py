@@ -18,6 +18,7 @@ from std_msgs.msg import String, Float32
 from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
 import time
 from interbotix_xs_msgs.msg import JointSingleCommand
+from interbotix_xs_msgs.srv import OperatingModes
 
 class MainArmInterfaceNode(Node):
     def __init__(self):
@@ -62,6 +63,21 @@ class MainArmInterfaceNode(Node):
         
         self.bot = None
 
+        # ── Gripper position control parameters ──
+        # WX200 gripper joint range (radians):
+        #   ~0.037  = fully open
+        #   ~0.015  = closed (light contact)
+        #  -0.037   = max close (beyond contact, high effort)
+        # We define a usable range for position control:
+        self.declare_parameter('gripper_pos_open', 0.037)
+        self.declare_parameter('gripper_pos_closed', -0.015)
+        self.declare_parameter('gripper_pos_step', 0.003)   # increment per inc/dec command
+
+        self.gripper_pos_open = self.get_parameter('gripper_pos_open').value
+        self.gripper_pos_closed = self.get_parameter('gripper_pos_closed').value
+        self.gripper_pos_step = self.get_parameter('gripper_pos_step').value
+        self.gripper_current_pos = self.gripper_pos_open  # start open
+
         # Initialize robot (only if not in test mode)
         if not self.test_mode:
             # Initialize robot for hardware and simulation
@@ -84,14 +100,9 @@ class MainArmInterfaceNode(Node):
                 
                 # Go to home pose on startup
                 self.bot.arm.go_to_home_pose()
+                # Set gripper to position 
+                self._switch_gripper_to_position_mode(robot_name)
                 # Gripper position control
-                self.declare_parameter('gripper_step', 0.003)    # increment per X/Y press
-                self.declare_parameter('gripper_open', 0.037)    # fully open position
-                self.declare_parameter('gripper_closed', 0.015)  # fully closed position
-
-                self.gripper_pwm = 0          # current PWM (0 = stopped)
-                self.gripper_pwm_max = 350    # max close force
-                self.gripper_pwm_step = 50    # step per X/Y press
 
                 self.current_pose_name = 'home'
             except Exception as e:
@@ -108,7 +119,7 @@ class MainArmInterfaceNode(Node):
         # Subscribers for simple pose and gripper commands
         self.pose_cmd_sub = self.create_subscription(String, '/main_arm/pose_command', self.pose_command_callback, 10)
         self.pose_cmd_sub = self.create_subscription(String, '/main_arm/gripper_command', self.gripper_command_callback, 10)
-        # self.gripper_effort_sub = self.create_subscription(Float32, '/main_arm/gripper_effort', self.gripper_effort_callback, 10)
+        self.gripper_position_sub = self.create_subscription(Float32, '/main_arm/gripper_position', self.gripper_position_callback, 10)
         self.ee_increment_sub = self.create_subscription(Twist, '/main_arm/ee_increment', self.ee_increment_callback, 10)
         # Add this subscriber for testing positions
         self.test_position_sub = self.create_subscription(Pose, '/main_arm/test_position', self.test_position_callback, 10)
@@ -141,6 +152,66 @@ class MainArmInterfaceNode(Node):
         self.error_message = ""
         
         self.get_logger().info('Main Arm Interface Node initialized')
+    
+    def _switch_gripper_to_position_mode(self, robot_name: str):
+        """
+        Call the /wx200/set_operating_modes service to switch the
+        gripper motor from PWM (default) to position control.
+        """
+        service_name = f'/{robot_name}/set_operating_modes'
+        client = self.create_client(OperatingModes, service_name)
+
+        if not client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error(
+                f'Service {service_name} not available! '
+                'Gripper will remain in PWM mode.'
+            )
+            return
+
+        req = OperatingModes.Request()
+        req.cmd_type = 'single'          # single joint, not a group
+        req.name = 'gripper'             # joint name
+        req.mode = 'position'            # target operating mode
+        # profile_type and profile_velocity/acceleration can stay default
+        # (the SDK will apply reasonable defaults for position mode)
+
+        future = client.call_async(req)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+
+        if future.result() is not None:
+            self.get_logger().info(
+                '✓ Gripper switched to POSITION control mode'
+            )
+        else:
+            self.get_logger().error(
+                'Failed to switch gripper to position mode'
+            )
+
+    def _send_gripper_position(self, position_rad: float):
+        """
+        Publish a position command to the gripper joint.
+        Clamps to safe range and updates internal tracking.
+        """
+        # Clamp to safe range
+        pos = max(self.gripper_pos_closed, min(self.gripper_pos_open, position_rad))
+        self.gripper_current_pos = pos
+
+        cmd = JointSingleCommand()
+        cmd.name = 'gripper'
+        cmd.cmd = float(pos)
+        self.gripper_pos_pub.publish(cmd)
+
+        self.get_logger().info(f'Gripper position: {pos:.4f} rad')
+
+    def gripper_position_callback(self, msg: Float32):
+        """
+        Set gripper to a normalized position (0.0 = closed, 1.0 = open).
+        Useful for other nodes that want proportional gripper control.
+        """
+        normalized = max(0.0, min(1.0, msg.data))
+        # Map 0..1 → closed..open
+        pos = self.gripper_pos_closed + normalized * (self.gripper_pos_open - self.gripper_pos_closed)
+        self._send_gripper_position(pos)
         
     def publish_status(self):
         """Publish current arm status"""
@@ -400,7 +471,15 @@ class MainArmInterfaceNode(Node):
             self.get_logger().error(f'Failed to move to {command}: {e}')
     
     def gripper_command_callback(self, msg):
-        """Gripper control via PWM: open/close snap, inc/dec step"""
+        """
+        Gripper control via POSITION mode.
+        
+        Commands:
+            'open'  → go to fully open position
+            'close' → go to fully closed position
+            'inc'   → open by one step
+            'dec'   → close by one step
+        """
         command = msg.data.lower().strip()
         self.get_logger().info(f'Received gripper command: {command}')
 
@@ -411,32 +490,22 @@ class MainArmInterfaceNode(Node):
 
         try:
             if command == 'open':
-                self.bot.gripper.release()
-                self.gripper_pwm = 0
-                self.get_logger().info('Gripper OPEN (release)')
+                self._send_gripper_position(self.gripper_pos_open)
+                self.get_logger().info('Gripper OPEN (position mode)')
 
             elif command == 'close':
-                self.bot.gripper.grasp()
-                self.gripper_pwm = self.gripper_pwm_max
-                self.get_logger().info('Gripper CLOSE (full grasp)')
+                self._send_gripper_position(self.gripper_pos_closed)
+                self.get_logger().info('Gripper CLOSE (position mode)')
 
             elif command == 'inc':
-                self.gripper_pwm = max(0, self.gripper_pwm - self.gripper_pwm_step)
-                cmd = JointSingleCommand()
-                cmd.name = 'gripper'
-                cmd.cmd = float(self.gripper_pwm)
-                self.gripper_pwm_pub.publish(cmd)
-                self.get_logger().info(f'Gripper PWM: {self.gripper_pwm}')
+                # Open a little more
+                new_pos = self.gripper_current_pos + self.gripper_pos_step
+                self._send_gripper_position(new_pos)
 
             elif command == 'dec':
-                self.gripper_pwm = min(
-                    self.gripper_pwm_max,
-                    self.gripper_pwm + self.gripper_pwm_step)
-                cmd = JointSingleCommand()
-                cmd.name = 'gripper'
-                cmd.cmd = float(self.gripper_pwm)
-                self.gripper_pwm_pub.publish(cmd)
-                self.get_logger().info(f'Gripper PWM: {self.gripper_pwm}')
+                # Close a little more
+                new_pos = self.gripper_current_pos - self.gripper_pos_step
+                self._send_gripper_position(new_pos)
 
             else:
                 self.get_logger().warn(f'Unknown gripper command: {command}')
