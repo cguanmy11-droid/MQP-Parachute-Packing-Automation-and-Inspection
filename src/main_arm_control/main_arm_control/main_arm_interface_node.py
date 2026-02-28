@@ -136,6 +136,7 @@ class MainArmInterfaceNode(Node):
         self.status_publisher = self.create_publisher(ArmStatus, '/main_arm/status', 10)
         self.simple_status_publisher = self.create_publisher(String, '/main_arm/simple_status', 10)
         self.pose_publisher = self.create_publisher(Pose, '/main_arm/current_pose', 10)
+        self.gripper_pos_pub = self.create_publisher(JointSingleCommand, '/wx200/commands/joint_single', 10)
 
         # Publisher for trajectory waypoints visualization (MarkerArray with LINE_STRIP + spheres)
         self.waypoints_marker_pub = self.create_publisher(MarkerArray, '/main_arm/trajectory_markers', 10)
