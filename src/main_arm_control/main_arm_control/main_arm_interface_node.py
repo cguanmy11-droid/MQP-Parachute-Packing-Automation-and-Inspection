@@ -156,39 +156,39 @@ class MainArmInterfaceNode(Node):
         self.get_logger().info('Main Arm Interface Node initialized')
     
     def _switch_gripper_to_position_mode(self, robot_name: str):
-    # 1. Disable torque (required before mode change)
-    torque_srv = f'/{robot_name}/torque_enable'
-    torque_client = self.create_client(TorqueEnable, torque_srv)
-    if torque_client.wait_for_service(timeout_sec=5.0):
-        req = TorqueEnable.Request()
-        req.cmd_type = 'single'
-        req.name = 'gripper'
-        req.enable = False
-        future = torque_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
-        self.get_logger().info('Gripper torque disabled for mode switch')
+        # 1. Disable torque (required before mode change)
+        torque_srv = f'/{robot_name}/torque_enable'
+        torque_client = self.create_client(TorqueEnable, torque_srv)
+        if torque_client.wait_for_service(timeout_sec=5.0):
+            req = TorqueEnable.Request()
+            req.cmd_type = 'single'
+            req.name = 'gripper'
+            req.enable = False
+            future = torque_client.call_async(req)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+            self.get_logger().info('Gripper torque disabled for mode switch')
 
-    # 2. Switch to position mode
-    mode_srv = f'/{robot_name}/set_operating_modes'
-    mode_client = self.create_client(OperatingModes, mode_srv)
-    if mode_client.wait_for_service(timeout_sec=5.0):
-        req = OperatingModes.Request()
-        req.cmd_type = 'single'
-        req.name = 'gripper'
-        req.mode = 'position'
-        future = mode_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
-        self.get_logger().info('Gripper set to position mode')
+        # 2. Switch to position mode
+        mode_srv = f'/{robot_name}/set_operating_modes'
+        mode_client = self.create_client(OperatingModes, mode_srv)
+        if mode_client.wait_for_service(timeout_sec=5.0):
+            req = OperatingModes.Request()
+            req.cmd_type = 'single'
+            req.name = 'gripper'
+            req.mode = 'position'
+            future = mode_client.call_async(req)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+            self.get_logger().info('Gripper set to position mode')
 
-    # 3. Re-enable torque
-    if torque_client.wait_for_service(timeout_sec=5.0):
-        req = TorqueEnable.Request()
-        req.cmd_type = 'single'
-        req.name = 'gripper'
-        req.enable = True
-        future = torque_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
-        self.get_logger().info('Gripper torque re-enabled')
+        # 3. Re-enable torque
+        if torque_client.wait_for_service(timeout_sec=5.0):
+            req = TorqueEnable.Request()
+            req.cmd_type = 'single'
+            req.name = 'gripper'
+            req.enable = True
+            future = torque_client.call_async(req)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+            self.get_logger().info('Gripper torque re-enabled')
 
     def _send_gripper_position(self, position_rad: float):
         """
