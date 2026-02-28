@@ -32,6 +32,7 @@ setup(
         'xbox_arm_controller_node = main_arm_control.xbox_arm_controller_node:main',
         'test_kinematics = main_arm_control.test_kinematics:main',
         'gripper_control_node = main_arm_control.gripper_control_node:main',
+        'motor_health_monitor = main_arm_control.motor_health_monitor:main',
         ],
     },
 )
