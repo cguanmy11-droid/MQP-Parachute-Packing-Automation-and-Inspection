@@ -88,6 +88,7 @@ class MainArmInterfaceNode(Node):
                     robot_name=robot_name,
                     moving_time=moving_time,
                     accel_time=accel_time,
+                    gripper_name=None,
                 )
                 if self.use_sim:
                     self.get_logger().info('Running in SIMULATION MODE')
