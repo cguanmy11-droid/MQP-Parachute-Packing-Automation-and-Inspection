@@ -231,15 +231,15 @@ class XboxArmController(Node):
             self.gripper_cmd_pub.publish(msg)
 
         elif idx == BUTTONS['X']:
-            self.get_logger().info('Gripper close step')
+            self.get_logger().info('Gripper STOP')
             msg = String()
             msg.data = 'dec'
             self.gripper_cmd_pub.publish(msg)
 
         elif idx == BUTTONS['Y']:
-            self.get_logger().info('Gripper open step')
+            self.get_logger().info('Gripper clear error')
             msg = String()
-            msg.data = 'inc'
+            msg.data = 'clear_error'
             self.gripper_cmd_pub.publish(msg)
 
         # ── Poses ──

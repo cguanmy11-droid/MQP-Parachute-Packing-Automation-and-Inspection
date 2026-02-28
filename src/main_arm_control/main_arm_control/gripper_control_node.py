@@ -33,8 +33,8 @@ class SmartGripperController(Node):
 
         # ── Parameters ──
         self.declare_parameter('robot_name', 'wx200')
-        self.declare_parameter('grip_pwm', 200)         # PWM to close (tune: 150-350)
-        self.declare_parameter('release_pwm', -200)      # PWM to open
+        self.declare_parameter('grip_pwm', -200)         # PWM to close (tune: 150-350)
+        self.declare_parameter('release_pwm', 200)      # PWM to open
         self.declare_parameter('load_threshold', 40.0)   # % load = "grabbed something"
         self.declare_parameter('monitor_rate', 50.0)     # Hz to check load/position
         self.declare_parameter('move_timeout', 3.0)      # Max seconds for any move
