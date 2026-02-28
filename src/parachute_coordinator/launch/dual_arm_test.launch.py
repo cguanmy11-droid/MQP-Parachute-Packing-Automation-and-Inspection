@@ -238,6 +238,37 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_main_arm'))
     )
 
+    gripper_control = Node(
+        package='main_arm_control',
+        executable='gripper_control_node',
+        name='gripper_control_node',
+        output='screen',
+        parameters=[{
+            'robot_name': LaunchConfiguration('robot_model'),
+            'grip_pwm': -200,
+            'release_pwm': 200,
+            'load_threshold': 40.0,
+            'settle_time': 0.5,
+            'test_mode': False,
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_main_arm'))
+    )
+
+    motor_health_monitor = Node(
+        package='main_arm_control',
+        executable='motor_health_monitor',
+        name='motor_health_monitor',
+        output='screen',
+        parameters=[{
+            'robot_name': LaunchConfiguration('robot_model'),
+            'monitor_rate': 2.0,
+            'load_warn_threshold': 6.0,
+            'load_critical_threshold': 80,
+            'auto_clear': False, # set True to auto recover from stalls
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_main_arm'))
+    )
+
     # Main arm teleop node (optional)
     main_arm_teleop = Node(
         package='main_arm_control',
@@ -607,6 +638,7 @@ def generate_launch_description():
         # Main arm nodes
         main_arm_control_launch,
         main_arm_interface,
+        gripper_control,
         # main_arm_planner,  # Disabled - main_arm_interface handles target_point with pitch
         main_arm_teleop,
 

@@ -333,7 +333,7 @@ void processCommand(const String& cmd) {
     deg = constrain(deg, -90, 90);
     int pulseUs = map(deg, -90, 90, SERVO_MIN_US, SERVO_MAX_US);
     long offset = parseLong(strtok_r(nullptr, ",", &savePtr), 0);
-    setServoPulseUs(offset);
+    setServoPulseUs(pulseUs);
   // ===== END SERVO COMMAND =====
   } else if (verb == "STOP_ALL") {
     stopAllMotion();
