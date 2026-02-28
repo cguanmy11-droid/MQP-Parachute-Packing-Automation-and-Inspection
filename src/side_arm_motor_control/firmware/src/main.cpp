@@ -22,10 +22,10 @@ constexpr int SERVO_PWM_CHANNEL = 6;
 constexpr int SERVO_PWM_FREQ = 50;
 constexpr int SERVO_PWM_RES_BITS = 16;
 
-constexpr int SERVO_NEUTRAL_US = 1500 - 21;
-constexpr int SERVO_MIN_US = 1000;
-constexpr int SERVO_MAX_US = 2000;
-constexpr int SERVO_DEADBAND_US = 6;
+constexpr int SERVO_NEUTRAL_US = 1500;
+constexpr int SERVO_MIN_US = 500;
+constexpr int SERVO_MAX_US = 2500;
+constexpr int SERVO_DEADBAND_US = 3;
 
 int servoPulseUs = SERVO_NEUTRAL_US;
 int servoTargetPulseUs = SERVO_NEUTRAL_US;
@@ -329,8 +329,11 @@ void processCommand(const String& cmd) {
     applyDcCommand(percent);
   // ===== SERVO COMMAND =====
   } else if (verb == "SERVO") {
+    long deg = parseLong(strtok_r(nullptr, ",", &savePtr), 0); // -90..90
+    deg = constrain(deg, -90, 90);
+    int pulseUs = map(deg, -90, 90, SERVO_MIN_US, SERVO_MAX_US);
     long offset = parseLong(strtok_r(nullptr, ",", &savePtr), 0);
-    setServoPulseUs(SERVO_NEUTRAL_US + offset);
+    setServoPulseUs(offset);
   // ===== END SERVO COMMAND =====
   } else if (verb == "STOP_ALL") {
     stopAllMotion();

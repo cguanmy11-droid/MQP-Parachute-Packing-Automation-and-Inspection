@@ -36,7 +36,7 @@ class SideArmInterfaceNode(Node):
         self.declare_parameter('insert_depth_z', 30.0)      # mm through loop
         self.declare_parameter('side_arm_frame', 'side_arm_origin')  # TF frame for transforms
 
-        self.declare_parameter('hook_offset_x_mm', 10.0)
+        self.declare_parameter('hook_offset_x_mm', 210.0)
         self.declare_parameter('hook_offset_y_mm', 194.0)
         self.declare_parameter('hook_offset_z_mm', -160.0)
 
@@ -334,9 +334,9 @@ class SideArmInterfaceNode(Node):
             )
 
             # Convert from meters to mm (now in side_arm_origin frame)
-            target_x_mm = transformed_pos.x * 1000.0
-            target_y_mm = transformed_pos.y * 1000.0
-            target_z_mm = transformed_pos.z * 1000.0
+            target_x_mm = transformed_pos.x * 1000.0 - self.hook_offset_x
+            target_y_mm = transformed_pos.y * 1000.0 - self.hook_offset_y
+            target_z_mm = transformed_pos.z * 1000.0 - self.hook_offset_z
 
         except TransformException as e:
             self.get_logger().error(f'TF transform failed: {e}')
