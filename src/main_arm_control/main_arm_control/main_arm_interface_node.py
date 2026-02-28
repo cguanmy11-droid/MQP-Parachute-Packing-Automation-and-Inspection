@@ -18,7 +18,7 @@ from std_msgs.msg import String, Float32
 from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
 import time
 from interbotix_xs_msgs.msg import JointSingleCommand
-from interbotix_xs_msgs.srv import OperatingModes
+from interbotix_xs_msgs.srv import OperatingModes, TorqueEnable
 
 class MainArmInterfaceNode(Node):
     def __init__(self):
@@ -156,38 +156,39 @@ class MainArmInterfaceNode(Node):
         self.get_logger().info('Main Arm Interface Node initialized')
     
     def _switch_gripper_to_position_mode(self, robot_name: str):
-        """
-        Call the /wx200/set_operating_modes service to switch the
-        gripper motor from PWM (default) to position control.
-        """
-        service_name = f'/{robot_name}/set_operating_modes'
-        client = self.create_client(OperatingModes, service_name)
-
-        if not client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error(
-                f'Service {service_name} not available! '
-                'Gripper will remain in PWM mode.'
-            )
-            return
-
-        req = OperatingModes.Request()
-        req.cmd_type = 'single'          # single joint, not a group
-        req.name = 'gripper'             # joint name
-        req.mode = 'position'            # target operating mode
-        # profile_type and profile_velocity/acceleration can stay default
-        # (the SDK will apply reasonable defaults for position mode)
-
-        future = client.call_async(req)
+    # 1. Disable torque (required before mode change)
+    torque_srv = f'/{robot_name}/torque_enable'
+    torque_client = self.create_client(TorqueEnable, torque_srv)
+    if torque_client.wait_for_service(timeout_sec=5.0):
+        req = TorqueEnable.Request()
+        req.cmd_type = 'single'
+        req.name = 'gripper'
+        req.enable = False
+        future = torque_client.call_async(req)
         rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+        self.get_logger().info('Gripper torque disabled for mode switch')
 
-        if future.result() is not None:
-            self.get_logger().info(
-                '✓ Gripper switched to POSITION control mode'
-            )
-        else:
-            self.get_logger().error(
-                'Failed to switch gripper to position mode'
-            )
+    # 2. Switch to position mode
+    mode_srv = f'/{robot_name}/set_operating_modes'
+    mode_client = self.create_client(OperatingModes, mode_srv)
+    if mode_client.wait_for_service(timeout_sec=5.0):
+        req = OperatingModes.Request()
+        req.cmd_type = 'single'
+        req.name = 'gripper'
+        req.mode = 'position'
+        future = mode_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+        self.get_logger().info('Gripper set to position mode')
+
+    # 3. Re-enable torque
+    if torque_client.wait_for_service(timeout_sec=5.0):
+        req = TorqueEnable.Request()
+        req.cmd_type = 'single'
+        req.name = 'gripper'
+        req.enable = True
+        future = torque_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future, timeout_sec=5.0)
+        self.get_logger().info('Gripper torque re-enabled')
 
     def _send_gripper_position(self, position_rad: float):
         """
