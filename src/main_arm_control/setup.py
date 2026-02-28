@@ -30,7 +30,8 @@ setup(
         'main_arm_planner_node = main_arm_control.main_arm_planner:main',
         'main_arm_teleop_node = main_arm_control.main_arm_teleop_node:main',
         'xbox_arm_controller_node = main_arm_control.xbox_arm_controller_node:main',
-        'test_kinematics = main_arm_control.test_kinematics:main'
+        'test_kinematics = main_arm_control.test_kinematics:main',
+        'gripper_control_node = main_arm_control.gripper_control_node:main',
         ],
     },
 )
