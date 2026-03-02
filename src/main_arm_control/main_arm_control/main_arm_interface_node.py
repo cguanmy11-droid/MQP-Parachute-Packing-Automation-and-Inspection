@@ -805,18 +805,17 @@ class MainArmInterfaceNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = MainArmInterfaceNode()
-    
+
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info('Keyboard interrupt')
+        pass
     finally:
         node.shutdown()
         node.destroy_node()
-        try:
+        if rclpy.ok():
             rclpy.shutdown()
-        except Exception:
-            pass
+
 
 if __name__ == '__main__':
     main()

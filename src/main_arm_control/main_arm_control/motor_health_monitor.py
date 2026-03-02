@@ -28,6 +28,8 @@ Dynamixel Hardware Error Bits:
 import json
 import rclpy
 from rclpy.node import Node
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from std_msgs.msg import String
 from interbotix_xs_msgs.srv import RegisterValues, TorqueEnable
 
@@ -92,6 +94,11 @@ class MotorHealthMonitor(Node):
         self.system_healthy = True
         self.error_count = 0
         self.last_alert = ''
+        self._services_ready = False
+        self._service_check_logged = False
+
+        # Callback group for service calls (allows concurrent execution)
+        self._service_cb_group = MutuallyExclusiveCallbackGroup()
 
         # ── Publishers ──
         self.health_pub = self.create_publisher(String, '/main_arm/motor_health', 10)
@@ -103,31 +110,52 @@ class MotorHealthMonitor(Node):
             self.health_cmd_callback, 10
         )
 
-        # ── Service clients ──
+        # ── Service clients (in separate callback group) ──
         self.get_register_client = self.create_client(
             RegisterValues,
-            f'/{self.robot_name}/get_motor_registers'
+            f'/{self.robot_name}/get_motor_registers',
+            callback_group=self._service_cb_group
         )
         self.torque_client = self.create_client(
             TorqueEnable,
-            f'/{self.robot_name}/torque_enable'
+            f'/{self.robot_name}/torque_enable',
+            callback_group=self._service_cb_group
         )
 
-        if not self.test_mode:
-            self.get_logger().info('Waiting for motor services...')
-            self.get_register_client.wait_for_service(timeout_sec=10.0)
-            self.get_logger().info(
-                f'Motor Health Monitor ready - watching {len(self.joints)} joints '
-                f'at {self.monitor_rate}Hz'
-            )
-        else:
+        if self.test_mode:
+            self._services_ready = True
             self.get_logger().info('Motor Health Monitor ready (TEST MODE)')
+        else:
+            self.get_logger().info('Motor Health Monitor starting - will wait for motor services...')
 
         # ── Monitor timer ──
         self.create_timer(1.0 / self.monitor_rate, self.monitor_tick)
 
         # ── Periodic summary (every 30s) ──
         self.create_timer(30.0, self.print_summary)
+
+    # ─────────────────────────────────────────────
+    # Service availability check
+    # ─────────────────────────────────────────────
+    def _check_services_ready(self) -> bool:
+        """Check if motor services are available (non-blocking)."""
+        if self._services_ready:
+            return True
+
+        if self.get_register_client.service_is_ready():
+            self._services_ready = True
+            self.get_logger().info(
+                f'Motor Health Monitor ready - watching {len(self.joints)} joints '
+                f'at {self.monitor_rate}Hz'
+            )
+            return True
+
+        # Log waiting message once
+        if not self._service_check_logged:
+            self.get_logger().info('Waiting for motor services to become available...')
+            self._service_check_logged = True
+
+        return False
 
     # ─────────────────────────────────────────────
     # Register reading
@@ -137,16 +165,25 @@ class MotorHealthMonitor(Node):
         if self.test_mode:
             return 0
 
+        if not self._services_ready:
+            return -1
+
         req = RegisterValues.Request()
         req.cmd_type = 'single'
         req.name = joint_name
         req.reg = reg_name
 
-        future = self.get_register_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=0.5)
+        try:
+            future = self.get_register_client.call_async(req)
+            # Wait for result with timeout (works with MultiThreadedExecutor)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=0.5)
 
-        if future.result() is not None and len(future.result().values) > 0:
-            return future.result().values[0]
+            if future.done() and future.result() is not None:
+                if len(future.result().values) > 0:
+                    return future.result().values[0]
+        except Exception as e:
+            self.get_logger().debug(f'Register read failed for {joint_name}/{reg_name}: {e}')
+
         return -1
 
     def _decode_hw_error(self, error_byte: int) -> list:
@@ -175,24 +212,32 @@ class MotorHealthMonitor(Node):
         if self.test_mode:
             return True
 
+        if not self._services_ready:
+            self.get_logger().warn('Cannot clear error - services not ready')
+            return False
+
         self.get_logger().info(f'Clearing error on {joint_name}...')
 
         req = TorqueEnable.Request()
         req.cmd_type = 'single'
         req.name = joint_name
 
-        # Disable torque
-        req.enable = False
-        future = self.torque_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+        try:
+            # Disable torque
+            req.enable = False
+            future = self.torque_client.call_async(req)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
 
-        import time
-        time.sleep(0.3)
+            import time
+            time.sleep(0.3)
 
-        # Re-enable torque
-        req.enable = True
-        future = self.torque_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+            # Re-enable torque
+            req.enable = True
+            future = self.torque_client.call_async(req)
+            rclpy.spin_until_future_complete(self, future, timeout_sec=2.0)
+        except Exception as e:
+            self.get_logger().error(f'Failed to cycle torque on {joint_name}: {e}')
+            return False
 
         # Verify
         hw_error = self._read_register(joint_name, 'Hardware_Error_Status')
@@ -229,8 +274,11 @@ class MotorHealthMonitor(Node):
     # ─────────────────────────────────────────────
     def monitor_tick(self):
         """Check all motors and publish health status."""
+        # Check if services are ready (non-blocking)
+        if not self._check_services_ready():
+            return
+
         alerts = []
-        any_error = False
 
         for joint in self.joints:
             status = self.motor_status[joint]
@@ -263,7 +311,6 @@ class MotorHealthMonitor(Node):
                 error_names = ', '.join(status['hw_error_names'])
                 status['warning'] = f'HW ERROR: {error_names}'
                 alerts.append(f'🔴 {joint}: {error_names}')
-                any_error = True
 
                 if self.auto_clear:
                     self.clear_error(joint)
@@ -384,16 +431,19 @@ def main(args=None):
     rclpy.init(args=args)
     node = MotorHealthMonitor()
 
+    # Use MultiThreadedExecutor to allow service calls from timer callbacks
+    executor = MultiThreadedExecutor(num_threads=2)
+    executor.add_node(node)
+
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
-        node.get_logger().info('Shutting down motor health monitor')
+        pass
     finally:
+        executor.shutdown()
         node.destroy_node()
-        try:
+        if rclpy.ok():
             rclpy.shutdown()
-        except Exception:
-            pass
 
 
 if __name__ == '__main__':

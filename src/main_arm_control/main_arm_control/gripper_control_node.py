@@ -66,6 +66,7 @@ class SmartGripperController(Node):
         self.gripper_state = 'unknown'
         self.is_moving = False
         self.move_lock = threading.Lock()
+        self._shutting_down = False  # Flag for clean shutdown
 
         # ── Publishers ──
         self.pwm_pub = self.create_publisher(
@@ -230,6 +231,10 @@ class SmartGripperController(Node):
             timestamps = []
 
             while (time.time() - start_time) < self.move_timeout:
+                if self._shutting_down:
+                    self._send_pwm(0)
+                    return False
+
                 elapsed = time.time() - start_time
                 now = time.time()
 
@@ -240,10 +245,11 @@ class SmartGripperController(Node):
                 position_history.append(position)
                 timestamps.append(now)
 
-                # Publish for tuning
-                load_msg = Float32()
-                load_msg.data = load
-                self.load_pub.publish(load_msg)
+                # Publish for tuning (only if not shutting down)
+                if not self._shutting_down:
+                    load_msg = Float32()
+                    load_msg.data = load
+                    self.load_pub.publish(load_msg)
 
                 # After settling, start checking load
                 if not settled and elapsed >= self.settle_time:
@@ -330,6 +336,10 @@ class SmartGripperController(Node):
             open_timeout = min(self.move_timeout, 2.5)
 
             while (time.time() - start_time) < open_timeout:
+                if self._shutting_down:
+                    self._send_pwm(0)
+                    return False
+
                 elapsed = time.time() - start_time
                 now = time.time()
 
@@ -409,6 +419,10 @@ class SmartGripperController(Node):
             timestamps = []
 
             while (time.time() - start_time) < close_duration:
+                if self._shutting_down:
+                    self._send_pwm(0)
+                    return False
+
                 elapsed = time.time() - start_time
                 now = time.time()
 
@@ -477,12 +491,18 @@ class SmartGripperController(Node):
         ).start()
 
     def publish_status(self):
+        if self._shutting_down:
+            return
         msg = String()
         msg.data = self.gripper_state
         self.status_pub.publish(msg)
 
     def shutdown(self):
+        """Clean shutdown - stop motors and signal threads to exit."""
+        self._shutting_down = True
         self._send_pwm(0)
+        # Give threads a moment to see the shutdown flag
+        time.sleep(0.1)
         self.get_logger().info('Gripper controller shutdown')
 
 
@@ -493,14 +513,12 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info('Keyboard interrupt')
+        pass
     finally:
         node.shutdown()
         node.destroy_node()
-        try:
+        if rclpy.ok():
             rclpy.shutdown()
-        except Exception:
-            pass
 
 
 if __name__ == '__main__':
