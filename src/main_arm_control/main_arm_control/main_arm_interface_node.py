@@ -539,8 +539,8 @@ class MainArmInterfaceNode(Node):
                 moving_time=self.joy_moving_time,
                 accel_time=self.joy_accel_time
             )
-            self.get_logger().info(
-                f'Joystick control active (moving_time={self.joy_moving_time}s)')
+            # self.get_logger().info(
+            #     f'Joystick control active (moving_time={self.joy_moving_time}s)')
 
 
     def process_joy_increment(self):
@@ -572,7 +572,7 @@ class MainArmInterfaceNode(Node):
                             moving_time=moving_time,
                             accel_time=accel_time
                         )
-                        self.get_logger().info('Joystick idle - restored normal timing')
+                        # self.get_logger().info('Joystick idle - restored normal timing')
             return
 
         self.latest_ee_increment = None

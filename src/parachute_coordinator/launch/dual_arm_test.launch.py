@@ -263,25 +263,37 @@ def generate_launch_description():
             'robot_name': LaunchConfiguration('robot_model'),
             'monitor_rate': 2.0,
             'load_warn_threshold': 6.0,
-            'load_critical_threshold': 80,
+            'load_critical_threshold': 80.0,
             'auto_clear': False, # set True to auto recover from stalls
         }],
         condition=IfCondition(LaunchConfiguration('enable_main_arm'))
     )
 
     # Main arm teleop node (optional)
-    main_arm_teleop = Node(
+    # main_arm_teleop = Node(
+    #     package='main_arm_control',
+    #     executable='main_arm_teleop_node',
+    #     name='main_arm_teleop_node',
+    #     output='screen',
+    #     parameters=[{
+    #         'robot_model': LaunchConfiguration('robot_model'),
+    #         'controller_type': LaunchConfiguration('controller_type'),
+    #         'auto_start': True,
+    #     }],
+    #     condition=IfCondition(
+    #         PythonExpression([
+    #             "'", LaunchConfiguration('enable_main_arm'), "' == 'true' and '",
+    #             LaunchConfiguration('enable_teleop'), "' == 'true'"
+    #         ])
+    #     )
+    # )
+
+    main_arm_xbox = Node(
         package='main_arm_control',
-        executable='main_arm_teleop_node',
-        name='main_arm_teleop_node',
+        executable='xbox_arm_controller_node',
+        name='xbox_arm_controller_node',
         output='screen',
-        parameters=[{
-            'robot_model': LaunchConfiguration('robot_model'),
-            'controller_type': LaunchConfiguration('controller_type'),
-            'auto_start': True,
-        }],
-        condition=IfCondition(
-            PythonExpression([
+        condition=IfCondition(PythonExpression([
                 "'", LaunchConfiguration('enable_main_arm'), "' == 'true' and '",
                 LaunchConfiguration('enable_teleop'), "' == 'true'"
             ])
@@ -293,12 +305,11 @@ def generate_launch_description():
         package='joy',
         executable='joy_node',
         name='joy_node',
-        parameters=[{
-            'device_id': 0,
-            'deadzone': 0.1,
-            'autorepeat_rate': 20.0,
-        }],
-        condition=IfCondition(LaunchConfiguration('enable_teleop'))
+        condition=IfCondition(PythonExpression([
+                "'", LaunchConfiguration('enable_main_arm'), "' == 'true' and '",
+                LaunchConfiguration('enable_teleop'), "' == 'true'"
+            ])
+        )
     )
 
     # ==================== SIDE ARM NODES ====================
@@ -639,8 +650,10 @@ def generate_launch_description():
         main_arm_control_launch,
         main_arm_interface,
         gripper_control,
+        motor_health_monitor,
         # main_arm_planner,  # Disabled - main_arm_interface handles target_point with pitch
-        main_arm_teleop,
+        # main_arm_teleop,
+        main_arm_xbox,
 
         # RViz with custom config
         rviz_node,
