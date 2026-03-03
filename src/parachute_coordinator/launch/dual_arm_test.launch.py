@@ -261,12 +261,17 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'robot_name': LaunchConfiguration('robot_model'),
-            'monitor_rate': 2.0,
-            'load_warn_threshold': 6.0,
-            'load_critical_threshold': 80.0,
+            'monitor_rate': 0.2,
+            'load_warn_threshold': 75.0,
+            'load_critical_threshold': 85.0,
             'auto_clear': False, # set True to auto recover from stalls
         }],
-        condition=IfCondition(LaunchConfiguration('enable_main_arm'))
+        condition=IfCondition(
+            PythonExpression([
+                "'", LaunchConfiguration('enable_main_arm'), "' == 'true' and '",
+                LaunchConfiguration('main_arm_sim'), "' != 'true'"
+            ])
+        )
     )
 
     # Main arm teleop node (optional)

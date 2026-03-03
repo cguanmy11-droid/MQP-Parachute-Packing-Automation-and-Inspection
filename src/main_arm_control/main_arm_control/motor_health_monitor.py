@@ -96,6 +96,7 @@ class MotorHealthMonitor(Node):
         self.last_alert = ''
         self._services_ready = False
         self._service_check_logged = False
+        self._joint_index = 0
 
         # Callback group for service calls (allows concurrent execution)
         self._service_cb_group = MutuallyExclusiveCallbackGroup()
@@ -144,13 +145,25 @@ class MotorHealthMonitor(Node):
 
         if self.get_register_client.service_is_ready():
             self._services_ready = True
+
+            # Probe each joint to determine correct load register
+            self.load_register = {}
+            for joint in self.joints:
+                raw = self._read_register(joint, 'Present_Current')
+                if raw != -1:
+                    self.load_register[joint] = 'Present_Current'
+                else:
+                    self.load_register[joint] = 'Present_Load'
+                self.get_logger().info(
+                    f'{joint}: using {self.load_register[joint]}'
+                )
+
             self.get_logger().info(
                 f'Motor Health Monitor ready - watching {len(self.joints)} joints '
                 f'at {self.monitor_rate}Hz'
             )
             return True
 
-        # Log waiting message once
         if not self._service_check_logged:
             self.get_logger().info('Waiting for motor services to become available...')
             self._service_check_logged = True
@@ -175,8 +188,11 @@ class MotorHealthMonitor(Node):
 
         try:
             future = self.get_register_client.call_async(req)
-            # Wait for result with timeout (works with MultiThreadedExecutor)
-            rclpy.spin_until_future_complete(self, future, timeout_sec=0.5)
+            # Don't use spin_until_future_complete — the executor handles it
+            import time
+            start = time.monotonic()
+            while not future.done() and (time.monotonic() - start) < 0.5:
+                time.sleep(0.01)
 
             if future.done() and future.result() is not None:
                 if len(future.result().values) > 0:
@@ -195,14 +211,22 @@ class MotorHealthMonitor(Node):
             if error_byte & (1 << bit):
                 errors.append(name)
         return errors
-
+    
     def _read_load_percent(self, joint_name: str) -> float:
-        """Read Present_Load as percentage."""
-        raw = self._read_register(joint_name, 'Present_Load')
-        if raw < 0:
+        """Read motor load using the correct register for this joint."""
+        reg = self.load_register.get(joint_name, 'Present_Load')
+        raw = self._read_register(joint_name, reg)
+        if raw == -1:
             return 0.0
-        magnitude = raw & 0x3FF
-        return magnitude / 10.0
+
+        if reg == 'Present_Current':
+            # XM430: signed value, unit ~2.69mA, stall ~1100mA
+            current_ma = abs(raw) * 2.69
+            return min((current_ma / 1100.0) * 100.0, 100.0)
+        else:
+            # XL430: 0-1023 load value
+            magnitude = raw & 0x3FF
+            return magnitude / 10.0
 
     # ─────────────────────────────────────────────
     # Error clearing
@@ -278,67 +302,70 @@ class MotorHealthMonitor(Node):
         if not self._check_services_ready():
             return
 
+
         alerts = []
 
-        for joint in self.joints:
-            status = self.motor_status[joint]
+        current_joint = self.joints[self._joint_index]
+        self._joint_index = (self._joint_index + 1) % len(self.joints)
 
-            # Read hardware error
-            hw_error = self._read_register(joint, 'Hardware_Error_Status')
-            if hw_error < 0:
-                # Read failed, skip this joint this tick
-                continue
+        status = self.motor_status[current_joint]
 
-            status['hw_error'] = hw_error
-            status['hw_error_names'] = self._decode_hw_error(hw_error)
+        # Read hardware error
+        hw_error = self._read_register(current_joint, 'Hardware_Error_Status')
+        if hw_error < 0:
+            # Read failed, skip this joint this tick
+            return
 
-            # Read load
-            load = self._read_load_percent(joint)
-            status['load'] = load
+        status['hw_error'] = hw_error
+        status['hw_error_names'] = self._decode_hw_error(hw_error)
 
-            # Read temperature
-            temp = self._read_register(joint, 'Present_Temperature')
-            if temp >= 0:
-                status['temperature'] = temp
+        # Read load
+        load = self._read_load_percent(current_joint)
+        status['load'] = load
 
-            # ── Evaluate health ──
-            status['healthy'] = True
-            status['warning'] = ''
+        # Read temperature
+        temp = self._read_register(current_joint, 'Present_Temperature')
+        if temp >= 0:
+            status['temperature'] = temp
 
-            # Hardware error (critical)
-            if hw_error != 0:
+        # ── Evaluate health ──
+        status['healthy'] = True
+        status['warning'] = ''
+
+        # Hardware error (critical)
+        if hw_error != 0:
+            status['healthy'] = False
+            error_names = ', '.join(status['hw_error_names'])
+            status['warning'] = f'HW ERROR: {error_names}'
+            alerts.append(f'🔴 {current_joint}: {error_names}')
+
+            if self.auto_clear:
+                self.clear_error(current_joint)
+
+        # Load monitoring
+        if load >= self.load_critical:
+            status['consecutive_high_load'] += 1
+            if status['consecutive_high_load'] >= 3:
                 status['healthy'] = False
-                error_names = ', '.join(status['hw_error_names'])
-                status['warning'] = f'HW ERROR: {error_names}'
-                alerts.append(f'🔴 {joint}: {error_names}')
+                status['warning'] = f'CRITICAL LOAD: {load:.1f}%'
+                alerts.append(f'🟠 {current_joint}: load {load:.1f}% (stall imminent)')
+        elif load >= self.load_warn:
+            status['consecutive_high_load'] += 1
+            if status['consecutive_high_load'] >= 5:
+                status['warning'] = f'HIGH LOAD: {load:.1f}%'
+                alerts.append(f'🟡 {current_joint}: load {load:.1f}%')
+        else:
+            status['consecutive_high_load'] = 0
 
-                if self.auto_clear:
-                    self.clear_error(joint)
-
-            # Load monitoring
-            if load >= self.load_critical:
-                status['consecutive_high_load'] += 1
-                if status['consecutive_high_load'] >= 3:
-                    status['healthy'] = False
-                    status['warning'] = f'CRITICAL LOAD: {load:.1f}%'
-                    alerts.append(f'🟠 {joint}: load {load:.1f}% (stall imminent)')
-            elif load >= self.load_warn:
-                status['consecutive_high_load'] += 1
-                if status['consecutive_high_load'] >= 5:
-                    status['warning'] = f'HIGH LOAD: {load:.1f}%'
-                    alerts.append(f'🟡 {joint}: load {load:.1f}%')
-            else:
-                status['consecutive_high_load'] = 0
-
-            # Temperature monitoring
-            if temp >= self.temp_critical:
-                status['healthy'] = False
-                status['warning'] = f'OVERHEATING: {temp}°C'
-                alerts.append(f'🔴 {joint}: temperature {temp}°C')
-            elif temp >= self.temp_warn:
-                if not status['warning']:
-                    status['warning'] = f'WARM: {temp}°C'
-                alerts.append(f'🟡 {joint}: temperature {temp}°C')
+        # Temperature monitoring
+        if temp >= self.temp_critical:
+            status['healthy'] = False
+            status['warning'] = f'OVERHEATING: {temp}°C'
+            alerts.append(f'🔴 {current_joint}: temperature {temp}°C')
+        elif temp >= self.temp_warn:
+            if not status['warning']:
+                status['warning'] = f'WARM: {temp}°C'
+            alerts.append(f'🟡 {current_joint}: temperature {temp}°C')
 
         # ── Update system health ──
         self.system_healthy = all(s['healthy'] for s in self.motor_status.values())

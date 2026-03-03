@@ -75,13 +75,13 @@ def generate_launch_description():
 
     # Target selection strategy
     selection_strategy_arg = DeclareLaunchArgument(
-        'selection_strategy', default_value='rightmost',
+        'selection_strategy', default_value='leftmost',
         description='Loop selection strategy: rightmost, leftmost, or nearest'
     )
 
     # Motion pattern
     stow_pattern_arg = DeclareLaunchArgument(
-        'stow_pattern', default_value='recorded_stow',
+        'stow_pattern', default_value='square_stow',
         description='Motion pattern for stowing trajectory'
     )
 

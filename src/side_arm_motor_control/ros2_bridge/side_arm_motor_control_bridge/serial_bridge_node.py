@@ -132,7 +132,8 @@ class SideArmSerialBridge(Node):
                         pass
                 msg = String()
                 msg.data = line
-                self._state_pub.publish(msg)
+                if not self._shutdown_event.is_set() and self.context.ok():
+                    self._state_pub.publish(msg)
 
     # endregion
 

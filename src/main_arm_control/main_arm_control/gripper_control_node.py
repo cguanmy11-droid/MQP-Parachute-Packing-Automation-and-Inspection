@@ -500,10 +500,12 @@ class SmartGripperController(Node):
     def shutdown(self):
         """Clean shutdown - stop motors and signal threads to exit."""
         self._shutting_down = True
-        self._send_pwm(0)
+        if self.context.ok():
+            self._send_pwm(0)
         # Give threads a moment to see the shutdown flag
         time.sleep(0.1)
-        self.get_logger().info('Gripper controller shutdown')
+        if self.context.ok():
+            self.get_logger().info('Gripper controller shutdown')
 
 
 def main(args=None):
