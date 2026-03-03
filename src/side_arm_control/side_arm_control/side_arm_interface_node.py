@@ -37,9 +37,15 @@ class SideArmInterfaceNode(Node):
         self.declare_parameter('insert_depth_z', 30.0)      # mm through loop
         self.declare_parameter('side_arm_frame', 'side_arm_origin')  # TF frame for transforms
 
-        self.declare_parameter('hook_offset_x_mm', 210.0)
-        self.declare_parameter('hook_offset_y_mm', 194.0)
-        self.declare_parameter('hook_offset_z_mm', -160.0)
+        # Hook offsets: position of hook tip in world frame when arm is homed (0,0,0)
+        # These are used to convert world targets to arm coordinates
+        self.declare_parameter('hook_offset_x_mm', 350.0)  # Hook X when homed
+        self.declare_parameter('hook_offset_y_mm', 180.0)  # Hook Y when homed
+        self.declare_parameter('hook_offset_z_mm', -10.0)  # Hook Z when homed
+        # Axis inversion flags: True if increasing arm position decreases world position
+        self.declare_parameter('invert_x', True)   # SA X+ = World X-
+        self.declare_parameter('invert_y', False)  # Set True if Y is also inverted
+        self.declare_parameter('invert_z', False)  # Set True if Z is also inverted
 
         # Vision servo parameters
         self.declare_parameter('enable_vision_servo', True)
@@ -53,6 +59,9 @@ class SideArmInterfaceNode(Node):
         self.hook_offset_x = self.get_parameter('hook_offset_x_mm').value
         self.hook_offset_y = self.get_parameter('hook_offset_y_mm').value
         self.hook_offset_z = self.get_parameter('hook_offset_z_mm').value
+        self.invert_x = self.get_parameter('invert_x').value
+        self.invert_y = self.get_parameter('invert_y').value
+        self.invert_z = self.get_parameter('invert_z').value
 
         # Vision servo config
         self.enable_vision_servo = self.get_parameter('enable_vision_servo').value
@@ -139,6 +148,34 @@ class SideArmInterfaceNode(Node):
 
         mode_str = 'TEST MODE' if self.test_mode else 'REAL MODE'
         self.get_logger().info(f'{mode_str}: Side Arm Interface Node initialized')
+        self.get_logger().info(
+            f'Hook offsets: ({self.hook_offset_x}, {self.hook_offset_y}, {self.hook_offset_z}) mm, '
+            f'Invert: X={self.invert_x}, Y={self.invert_y}, Z={self.invert_z}'
+        )
+
+    def _world_to_arm_coords(self, world_x_mm: float, world_y_mm: float, world_z_mm: float):
+        """
+        Convert world-frame position (in mm) to side arm carriage coordinates.
+
+        For inverted axes: arm_pos = hook_offset - world_pos
+        For normal axes:   arm_pos = world_pos - hook_offset
+        """
+        if self.invert_x:
+            arm_x = self.hook_offset_x - world_x_mm
+        else:
+            arm_x = world_x_mm - self.hook_offset_x
+
+        if self.invert_y:
+            arm_y = self.hook_offset_y - world_y_mm
+        else:
+            arm_y = world_y_mm - self.hook_offset_y
+
+        if self.invert_z:
+            arm_z = self.hook_offset_z - world_z_mm
+        else:
+            arm_z = world_z_mm - self.hook_offset_z
+
+        return arm_x, arm_y, arm_z
 
     def _state_callback(self, msg: SideArmState):
         """Track current position from coordinate node."""
@@ -365,13 +402,16 @@ class SideArmInterfaceNode(Node):
                 target_pose, transform
             )
 
-            # Extract position in side arm frame (convert m to mm)
-            x_mm = transformed_pose.pose.position.x * 1000.0 - self.hook_offset_x
-            y_mm = transformed_pose.pose.position.y * 1000.0 - self.hook_offset_y
-            z_mm = transformed_pose.pose.position.z * 1000.0 - self.hook_offset_z
+            # Extract position and convert to arm coordinates
+            world_x_mm = transformed_pose.pose.position.x * 1000.0
+            world_y_mm = transformed_pose.pose.position.y * 1000.0
+            world_z_mm = transformed_pose.pose.position.z * 1000.0
+
+            x_mm, y_mm, z_mm = self._world_to_arm_coords(world_x_mm, world_y_mm, world_z_mm)
 
             self.get_logger().info(
-                f'  Transformed to side arm frame: ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) mm'
+                f'  World (mm): ({world_x_mm:.1f}, {world_y_mm:.1f}, {world_z_mm:.1f}) -> '
+                f'Arm: ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) mm'
             )
 
         except TransformException as e:
@@ -425,15 +465,19 @@ class SideArmInterfaceNode(Node):
             transformed_pose = tf2_geometry_msgs.do_transform_pose_stamped(loop_pose, transform)
             transformed_pos = transformed_pose.pose.position
 
-            self.get_logger().info(
-                f'Transformed to {self.side_arm_frame}: '
-                f'({transformed_pos.x:.3f}, {transformed_pos.y:.3f}, {transformed_pos.z:.3f}) m'
+            # Convert from meters to mm and then to arm coordinates
+            world_x_mm = transformed_pos.x * 1000.0
+            world_y_mm = transformed_pos.y * 1000.0
+            world_z_mm = transformed_pos.z * 1000.0
+
+            target_x_mm, target_y_mm, target_z_mm = self._world_to_arm_coords(
+                world_x_mm, world_y_mm, world_z_mm
             )
 
-            # Convert from meters to mm (now in side_arm_origin frame)
-            target_x_mm = transformed_pos.x * 1000.0 - self.hook_offset_x
-            target_y_mm = transformed_pos.y * 1000.0 - self.hook_offset_y
-            target_z_mm = transformed_pos.z * 1000.0 - self.hook_offset_z
+            self.get_logger().info(
+                f'World (mm): ({world_x_mm:.1f}, {world_y_mm:.1f}, {world_z_mm:.1f}) -> '
+                f'Arm: ({target_x_mm:.1f}, {target_y_mm:.1f}, {target_z_mm:.1f}) mm'
+            )
 
         except TransformException as e:
             self.get_logger().error(f'TF transform failed: {e}')
