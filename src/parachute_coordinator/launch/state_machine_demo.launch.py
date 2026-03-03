@@ -90,6 +90,10 @@ def generate_launch_description():
         'action_timeout', default_value='30.0',
         description='Timeout for action calls (seconds)'
     )
+    expected_loop_count_arg = DeclareLaunchArgument(
+        'expected_loop_count', default_value='0',
+        description='Expected number of loops (0 = skip count verification)'
+    )
 
     # Visualization
     use_rviz_arg = DeclareLaunchArgument(
@@ -153,6 +157,7 @@ def generate_launch_description():
             'test_mode': False,
             'stow_pattern': LaunchConfiguration('stow_pattern'),
             'action_timeout': LaunchConfiguration('action_timeout'),
+            'expected_loop_count': LaunchConfiguration('expected_loop_count'),
         }]
     )
 
@@ -174,6 +179,7 @@ def generate_launch_description():
         selection_strategy_arg,
         stow_pattern_arg,
         action_timeout_arg,
+        expected_loop_count_arg,
         use_rviz_arg,
 
         # Dual arm system (includes RViz, TFs, visualization)
