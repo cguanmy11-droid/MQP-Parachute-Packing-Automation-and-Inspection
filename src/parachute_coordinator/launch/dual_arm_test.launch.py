@@ -39,6 +39,10 @@ Test with simulated vision (loops in RViz):
     ros2 launch parachute_coordinator dual_arm_test.launch.py \\
         side_arm_test_mode:=true vision_test_mode:=true enable_main_arm:=false
 
+Test with real camera (YOLO detection):
+    ros2 launch parachute_coordinator dual_arm_test.launch.py \\
+        use_real_camera:=true camera_index:=4
+
 Move side arm in simulation:
     ros2 service call /side_arm/move_to_position \\
         parachute_interfaces/srv/MoveToPosition \\
@@ -170,6 +174,30 @@ def generate_launch_description():
         'vision_test_mode',
         default_value='false',
         description='Use simulated loop detections instead of camera'
+    )
+
+    use_real_camera_arg = DeclareLaunchArgument(
+        'use_real_camera',
+        default_value='false',
+        description='Use real USB camera with YOLO detection'
+    )
+
+    camera_index_arg = DeclareLaunchArgument(
+        'camera_index',
+        default_value='4',
+        description='USB camera index for YOLO detector'
+    )
+
+    camera_display_arg = DeclareLaunchArgument(
+        'camera_display',
+        default_value='true',
+        description='Show YOLO detection window'
+    )
+
+    assumed_depth_arg = DeclareLaunchArgument(
+        'assumed_depth',
+        default_value='0.22',
+        description='Assumed depth from camera to loop plane (meters)'
     )
 
     enable_loop_visualization_arg = DeclareLaunchArgument(
@@ -618,8 +646,8 @@ def generate_launch_description():
             'camera_frame_id': 'camera_frame',
             'world_frame_id': 'world',
             # Camera FOV - set wide for testing, narrow later to match real camera
-            'camera_fov_horizontal': 80.0,  # degrees 
-            'camera_fov_vertical': 80.0,    # degrees 
+            'camera_fov_horizontal': 80.0,  # degrees
+            'camera_fov_vertical': 80.0,    # degrees
             'max_detection_range': 1.0,      # meters (extended for testing)
             'min_detection_range': 0.01,     # meters
             # Detection simulation
@@ -633,6 +661,48 @@ def generate_launch_description():
             'debug_verbose': False,      # Show detailed logging
         }],
         condition=IfCondition(LaunchConfiguration('vision_test_mode'))
+    )
+
+    # ==================== REAL CAMERA NODES ====================
+    # YOLO detector (real USB camera)
+    yolo_detector = Node(
+        package='yolo_detect_ros',
+        executable='yolo_detector',
+        name='yolo_detector',
+        output='screen',
+        parameters=[{
+            'camera_index': LaunchConfiguration('camera_index'),
+            'conf_threshold': 0.5,
+            'iou_threshold': 0.5,
+            'frame_rate': 30.0,
+            'camera_frame_id': 'camera_frame',
+            'centers_topic': '/yolo/centers',
+            'display': LaunchConfiguration('camera_display'),
+        }],
+        condition=IfCondition(LaunchConfiguration('use_real_camera'))
+    )
+
+    # Pixel to 3D converter (converts YOLO pixel detections to 3D world coordinates)
+    camera_to_3d = Node(
+        package='parachute_perception',
+        executable='camera_to_3d_node',
+        name='camera_to_3d_node',
+        output='screen',
+        parameters=[{
+            # Camera intrinsics
+            'image_width': 640,
+            'image_height': 480,
+            'camera_fov_horizontal': 80.0,
+            # Depth assumption
+            'assumed_depth': LaunchConfiguration('assumed_depth'),
+            # Topics
+            'input_topic': '/yolo/centers',
+            'output_topic': '/detected_loops',
+            'camera_frame_id': 'camera_frame',
+            # Detection confidence
+            'base_confidence': 0.85,
+        }],
+        condition=IfCondition(LaunchConfiguration('use_real_camera'))
     )
 
     # ==================== LAUNCH DESCRIPTION ====================
@@ -652,6 +722,10 @@ def generate_launch_description():
         enable_visualization_arg,
         use_rviz_arg,
         vision_test_mode_arg,
+        use_real_camera_arg,
+        camera_index_arg,
+        camera_display_arg,
+        assumed_depth_arg,
         enable_loop_visualization_arg,
         joy_node,
 
@@ -689,4 +763,8 @@ def generate_launch_description():
         loop_ground_truth,
         loop_visualizer,
         detection_simulator,
+
+        # Real camera nodes
+        yolo_detector,
+        camera_to_3d,
     ])

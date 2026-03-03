@@ -23,6 +23,14 @@ Usage:
     ros2 launch parachute_coordinator state_machine_demo.launch.py \
         vision_test_mode:=true
 
+    # Full hardware with REAL CAMERA (YOLO detection):
+    ros2 launch parachute_coordinator state_machine_demo.launch.py \
+        use_real_camera:=true
+
+    # Real camera with specific camera index:
+    ros2 launch parachute_coordinator state_machine_demo.launch.py \
+        use_real_camera:=true camera_index:=0
+
     # Start the stowing sequence:
     ros2 topic pub --once /stow/command std_msgs/String "data: start"
 
@@ -67,6 +75,14 @@ def generate_launch_description():
     vision_test_mode_arg = DeclareLaunchArgument(
         'vision_test_mode', default_value='false',
         description='Use simulated loop detections (ground truth + detection simulator)'
+    )
+    use_real_camera_arg = DeclareLaunchArgument(
+        'use_real_camera', default_value='false',
+        description='Use real USB camera with YOLO detection'
+    )
+    camera_index_arg = DeclareLaunchArgument(
+        'camera_index', default_value='4',
+        description='USB camera index for YOLO detector'
     )
     use_test_loops_arg = DeclareLaunchArgument(
         'use_test_loops', default_value='false',
@@ -120,6 +136,8 @@ def generate_launch_description():
             'enable_teleop': 'false',
             'use_rviz': LaunchConfiguration('use_rviz'),
             'vision_test_mode': LaunchConfiguration('vision_test_mode'),
+            'use_real_camera': LaunchConfiguration('use_real_camera'),
+            'camera_index': LaunchConfiguration('camera_index'),
             'enable_loop_visualization': 'true',
         }.items()
     )
@@ -175,6 +193,8 @@ def generate_launch_description():
         side_arm_sim_arg,
         side_arm_test_mode_arg,
         vision_test_mode_arg,
+        use_real_camera_arg,
+        camera_index_arg,
         use_test_loops_arg,
         selection_strategy_arg,
         stow_pattern_arg,
