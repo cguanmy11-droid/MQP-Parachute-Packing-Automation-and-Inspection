@@ -443,6 +443,10 @@ def generate_launch_description():
         name='side_arm_robot_state_publisher',
         namespace='side_arm',
         parameters=[{'robot_description': side_arm_urdf}],
+        remappings=[
+            ('/side_arm/tf', '/tf'),
+            ('/side_arm/tf_static', '/tf_static'),
+        ],
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
 
