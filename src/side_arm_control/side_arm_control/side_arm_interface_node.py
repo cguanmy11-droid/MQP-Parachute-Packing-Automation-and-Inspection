@@ -17,9 +17,10 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from parachute_interfaces.action import InsertHook, MoveToCoordinate
 from parachute_interfaces.srv import RotateHook, MoveToPosition, MoveToWorldPose
 from parachute_interfaces.msg import HookStatus, SideArmState
-from geometry_msgs.msg import Point, PoseStamped
+from geometry_msgs.msg import Point, PoseStamped, PoseArray
 from std_msgs.msg import String
 import time
+from typing import Optional, Tuple
 
 # TF2 for coordinate transforms
 from tf2_ros import Buffer, TransformListener, TransformException
@@ -40,9 +41,27 @@ class SideArmInterfaceNode(Node):
         self.declare_parameter('hook_offset_y_mm', 194.0)
         self.declare_parameter('hook_offset_z_mm', -160.0)
 
+        # Vision servo parameters
+        self.declare_parameter('enable_vision_servo', True)
+        self.declare_parameter('servo_kp_x', 1.2)
+        self.declare_parameter('servo_deadband_px', 5.0)
+        self.declare_parameter('servo_timeout_sec', 10.0)
+        self.declare_parameter('servo_min_speed', 400)
+        self.declare_parameter('servo_max_speed', 1100)
+        self.declare_parameter('image_width_px', 640)
+
         self.hook_offset_x = self.get_parameter('hook_offset_x_mm').value
         self.hook_offset_y = self.get_parameter('hook_offset_y_mm').value
         self.hook_offset_z = self.get_parameter('hook_offset_z_mm').value
+
+        # Vision servo config
+        self.enable_vision_servo = self.get_parameter('enable_vision_servo').value
+        self.servo_kp_x = self.get_parameter('servo_kp_x').value
+        self.servo_deadband_px = self.get_parameter('servo_deadband_px').value
+        self.servo_timeout_sec = self.get_parameter('servo_timeout_sec').value
+        self.servo_min_speed = self.get_parameter('servo_min_speed').value
+        self.servo_max_speed = self.get_parameter('servo_max_speed').value
+        self.image_width_px = self.get_parameter('image_width_px').value
 
         # Handle test_mode as either bool or string (from PythonExpression)
         test_mode_val = self.get_parameter('test_mode').value
@@ -65,6 +84,11 @@ class SideArmInterfaceNode(Node):
         self._current_position = Point()
         self._is_homed = False
 
+        # Vision servo state
+        self._vision_latest_x: Optional[float] = None
+        self._vision_lost_count: int = 0
+        self._servo_active: bool = False
+
         # Action client for coordinate moves (used in both test and real mode)
         # In test_mode, coordinate_node runs in simulation and updates RViz
         self._move_client = ActionClient(
@@ -78,6 +102,11 @@ class SideArmInterfaceNode(Node):
         self._state_sub = self.create_subscription(
             SideArmState, '/side_arm/parsed_state',
             self._state_callback, 10)
+
+        # Vision subscriber for servo control
+        self._vision_sub = self.create_subscription(
+            PoseArray, '/yolo/centers',
+            self._vision_callback, 10)
 
         # Action server for inserting hook
         self.action_server = ActionServer(
@@ -117,6 +146,74 @@ class SideArmInterfaceNode(Node):
         self._current_position.y = msg.y_mm
         self._current_position.z = msg.z_mm
         self._is_homed = msg.is_homed
+
+    def _vision_callback(self, msg: PoseArray):
+        """Track vision detections for servo control."""
+        if not msg.poses:
+            self._vision_latest_x = None
+            self._vision_lost_count += 1
+            return
+
+        # Track rightmost detection (matching vis_servo_benchmark logic)
+        rightmost = max(msg.poses, key=lambda p: p.position.x)
+        self._vision_latest_x = rightmost.position.x
+        self._vision_lost_count = 0
+
+    def _vision_servo_to_center(self, timeout: Optional[float] = None) -> Tuple[bool, str]:
+        """
+        Run vision servo loop to center on detected loop.
+
+        Returns:
+            (success, message): Whether centering succeeded and status message
+        """
+        timeout = timeout or self.servo_timeout_sec
+        center_x = self.image_width_px / 2.0
+        stepper_x = 2  # X axis stepper (from vis_servo_benchmark)
+
+        self.get_logger().info(f'[SERVO] Starting vision servo (timeout={timeout}s)')
+        self._servo_active = True
+        self._vision_lost_count = 0
+        start_time = time.time()
+
+        try:
+            while time.time() - start_time < timeout:
+                # Process callbacks to get fresh vision data
+                rclpy.spin_once(self, timeout_sec=0.05)
+
+                # Check for lost detection
+                if self._vision_latest_x is None:
+                    if self._vision_lost_count > 15:  # ~1.5 seconds at 10Hz
+                        self._send_command('STOP_ALL')
+                        return (False, 'Detection lost during servo')
+                    continue
+
+                # Calculate error
+                error_x = self._vision_latest_x - center_x
+
+                # Check if centered (within deadband)
+                if abs(error_x) < self.servo_deadband_px:
+                    self._send_command('STOP_ALL')
+                    self.get_logger().info(f'[SERVO] Centered (error={error_x:.1f}px)')
+                    return (True, 'Centered successfully')
+
+                # P-control velocity command
+                velocity = int(self.servo_kp_x * error_x)
+                velocity = max(-self.servo_max_speed, min(self.servo_max_speed, velocity))
+                if abs(velocity) < self.servo_min_speed:
+                    velocity = int(self.servo_min_speed * (1 if velocity > 0 else -1))
+
+                # Send velocity command (continuous mode)
+                self._send_command(f'STEPPER_MOVE,{stepper_x},{velocity}')
+
+                time.sleep(0.066)  # ~15Hz control loop
+
+            # Timeout
+            self._send_command('STOP_ALL')
+            return (False, f'Servo timeout after {timeout}s')
+
+        finally:
+            self._servo_active = False
+            self._send_command('STOP_ALL')  # Ensure motors stopped
 
     def _send_command(self, cmd: str):
         """Send direct command (works in both real and test/simulation mode)."""
@@ -360,6 +457,20 @@ class SideArmInterfaceNode(Node):
             result.success = False
             result.message = "Failed to approach loop"
             return result
+
+        # Stage 1b: Vision servo to center on loop (if enabled)
+        if self.enable_vision_servo:
+            feedback_msg.progress = 0.35
+            feedback_msg.current_state = InsertHook.Feedback.STATE_APPROACHING
+            goal_handle.publish_feedback(feedback_msg)
+            self.get_logger().info('Stage 1b: Vision servo centering')
+
+            servo_success, servo_msg = self._vision_servo_to_center()
+            if not servo_success:
+                self.get_logger().warn(f'Vision servo failed: {servo_msg} - continuing with open-loop')
+                # Continue with open-loop insert (degraded mode)
+            else:
+                self.get_logger().info(f'Vision servo: {servo_msg}')
 
         # Stage 2: Align
         feedback_msg.current_state = InsertHook.Feedback.STATE_ALIGNING

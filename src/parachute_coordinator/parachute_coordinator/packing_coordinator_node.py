@@ -42,7 +42,7 @@ from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from ament_index_python.packages import get_package_share_directory
 
-from parachute_interfaces.srv import RequestNextTarget, RotateHook
+from parachute_interfaces.srv import RequestNextTarget, RotateHook, CaptureLoops
 from parachute_interfaces.action import InsertHook, ExecuteTrajectory
 from parachute_interfaces.msg import HookStatus, SideArmState
 from geometry_msgs.msg import Pose, Point
@@ -70,10 +70,12 @@ class PackingCoordinatorNode(Node):
         self.declare_parameter('stow_pattern', 'recorded_stow')
         self.declare_parameter('pattern_dir', '')
         self.declare_parameter('action_timeout', 30.0)
+        self.declare_parameter('expected_loop_count', 0)  # 0 = skip count verification
 
         self.test_mode = self.get_parameter('test_mode').value
         self.current_pattern = self.get_parameter('stow_pattern').value
         self.action_timeout = self.get_parameter('action_timeout').value
+        self.expected_loop_count = self.get_parameter('expected_loop_count').value
 
         # ==================== STATE MACHINE ====================
         config_path = os.path.join(
@@ -118,6 +120,10 @@ class PackingCoordinatorNode(Node):
         )
         self.rotate_client = self.create_client(
             RotateHook, '/side_arm/rotate_hook',
+            callback_group=self._cb_group
+        )
+        self.capture_client = self.create_client(
+            CaptureLoops, '/capture_loops',
             callback_group=self._cb_group
         )
 
@@ -170,6 +176,7 @@ class PackingCoordinatorNode(Node):
         services = {
             '/request_next_target': self.target_client,
             '/side_arm/rotate_hook': self.rotate_client,
+            '/capture_loops': self.capture_client,
         }
         actions = {
             '/side_arm/insert_hook': self.hook_action_client,
@@ -347,10 +354,10 @@ class PackingCoordinatorNode(Node):
         """Entered HOMING — home the side arm."""
         self.get_logger().info('[HOMING] Starting side arm homing sequence...')
 
-        # Check if already homed (skip if so)
+        # Check if already homed (skip homing but still capture loops)
         if self._side_arm_is_homed and self._has_homed_once:
-            self.get_logger().info('[HOMING] Side arm already homed, skipping')
-            self.sm.transition('already_homed')
+            self.get_logger().info('[HOMING] Side arm already homed, skipping to capture')
+            self._capture_loops_after_homing()
             return
 
         # Send HOME_ALL command
@@ -374,7 +381,9 @@ class PackingCoordinatorNode(Node):
             self._has_homed_once = True
             elapsed = time.time() - self._homing_start_time
             self.get_logger().info(f'[HOMING] Side arm homed in {elapsed:.1f}s')
-            self.sm.transition('homed')
+
+            # Capture loop positions after homing
+            self._capture_loops_after_homing()
             return
 
         # Check timeout
@@ -389,6 +398,44 @@ class PackingCoordinatorNode(Node):
         # Log progress every 10 seconds
         if int(elapsed) % 10 == 0 and int(elapsed) > 0:
             self.get_logger().info(f'[HOMING] Still homing... ({elapsed:.0f}s)')
+
+    def _capture_loops_after_homing(self):
+        """Capture and lock loop positions after homing completes."""
+        self.get_logger().info('[HOMING] Capturing loop positions...')
+
+        if not self.capture_client.service_is_ready():
+            self.get_logger().warn(
+                '[HOMING] Capture service not available - proceeding without lock'
+            )
+            self.sm.transition('homed')
+            return
+
+        request = CaptureLoops.Request()
+        request.expected_count = self.expected_loop_count
+        request.timeout_sec = 2.0
+
+        future = self.capture_client.call_async(request)
+        future.add_done_callback(self._on_capture_response)
+
+    def _on_capture_response(self, future):
+        """Callback when loop capture completes."""
+        try:
+            response = future.result()
+        except Exception as e:
+            self.get_logger().error(f'[HOMING] Capture service error: {e}')
+            self._enter_error('homing_failed', f'Loop capture failed: {e}')
+            return
+
+        if response.success:
+            self.total_loops = response.captured_count
+            self.completed_loops = 0  # Reset for new sequence
+            self.get_logger().info(
+                f'[HOMING] Captured {response.captured_count} loops - ready to stow'
+            )
+            self.sm.transition('homed')
+        else:
+            self.get_logger().error(f'[HOMING] Capture failed: {response.message}')
+            self._enter_error('homing_failed', response.message)
 
     def on_enter_at_loop(self, state: StowState, event: str):
         """Entered AT_LOOP — request next target from perception."""

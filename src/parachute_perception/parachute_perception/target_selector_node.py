@@ -23,7 +23,7 @@ Usage:
 import rclpy
 from rclpy.node import Node
 from parachute_interfaces.msg import DetectedLoops, DetectedLoop
-from parachute_interfaces.srv import RequestNextTarget
+from parachute_interfaces.srv import RequestNextTarget, CaptureLoops
 from geometry_msgs.msg import Pose, PoseStamped, Point, Quaternion
 from std_msgs.msg import String
 import tf2_ros
@@ -53,6 +53,11 @@ class TargetSelectorNode(Node):
         self.current_loops: list[DetectedLoop] = []
         self.stowed_positions: list[Point] = []  # Track stowed loop positions
 
+        # ==================== CAPTURE/LOCK STATE ====================
+        self._is_locked: bool = False  # True after successful capture
+        self._locked_loops: list[DetectedLoop] = []  # Captured loop positions
+        self._capture_timestamp = None  # When capture occurred
+
         # ==================== SUBSCRIBERS ====================
         self.loop_sub = self.create_subscription(
             DetectedLoops, '/detected_loops',
@@ -63,10 +68,14 @@ class TargetSelectorNode(Node):
             self._command_callback, 10
         )
 
-        # ==================== SERVICE ====================
+        # ==================== SERVICES ====================
         self.target_service = self.create_service(
             RequestNextTarget, '/request_next_target',
             self._request_target_callback
+        )
+        self.capture_service = self.create_service(
+            CaptureLoops, '/capture_loops',
+            self._capture_loops_callback
         )
 
         # ==================== PUBLISHER ====================
@@ -140,6 +149,10 @@ class TargetSelectorNode(Node):
         if self.use_test_loops:
             return  # Ignore detections in test mode
 
+        # If locked, do NOT update current_loops - we use locked_loops instead
+        if self._is_locked:
+            return
+
         self.current_loops = []
 
         for i, loop in enumerate(msg.loops):
@@ -155,15 +168,98 @@ class TargetSelectorNode(Node):
             self.current_loops.append(transformed_loop)
 
     def _command_callback(self, msg: String):
-        """Handle commands (reset stowed list, etc.)."""
+        """Handle commands (reset stowed list, unlock, etc.)."""
         cmd = msg.data.strip().lower()
         if cmd == 'reset_targets':
             self.stowed_positions.clear()
-            self.get_logger().info('Stowed positions cleared')
+            self._is_locked = False
+            self._locked_loops.clear()
+            self.get_logger().info('Stowed positions cleared, loops unlocked')
+        elif cmd == 'unlock_loops':
+            self._is_locked = False
+            self._locked_loops.clear()
+            self.get_logger().info('Loops unlocked (positions retained)')
         elif cmd == 'refresh_test_loops' and self.use_test_loops:
             self.stowed_positions.clear()
             self._generate_test_loops()
             self.get_logger().info('Test loops regenerated')
+
+    def _capture_loops_callback(self, request, response):
+        """
+        Service callback - capture and lock current loop positions.
+
+        This freezes the loop list for the duration of the stowing sequence.
+        Call reset_targets to unlock and allow fresh detection.
+        """
+        import time
+
+        expected_count = request.expected_count
+        timeout = request.timeout_sec if request.timeout_sec > 0 else 2.0
+
+        # Already locked?
+        if self._is_locked:
+            response.success = True  # Not a failure - already captured
+            response.captured_count = len(self._locked_loops)
+            response.message = f'Already locked with {response.captured_count} loops'
+            response.loops = list(self._locked_loops)
+            self.get_logger().info(response.message)
+            return response
+
+        # Wait for stable detection (3 consecutive identical counts)
+        start = time.time()
+        stable_count = 0
+        last_count = -1
+
+        while time.time() - start < timeout:
+            current_count = len(self.current_loops)
+            if current_count > 0 and current_count == last_count:
+                stable_count += 1
+                if stable_count >= 3:  # 3 consecutive stable readings
+                    break
+            else:
+                stable_count = 0
+            last_count = current_count
+            time.sleep(0.1)
+
+        # Verify count if expected_count > 0
+        actual_count = len(self.current_loops)
+        if expected_count > 0 and actual_count != expected_count:
+            response.success = False
+            response.captured_count = actual_count
+            response.message = f'Count mismatch: expected {expected_count}, got {actual_count}'
+            response.loops = []
+            self.get_logger().warn(response.message)
+            return response
+
+        # No loops detected?
+        if actual_count == 0:
+            response.success = False
+            response.captured_count = 0
+            response.message = 'No loops detected to capture'
+            response.loops = []
+            self.get_logger().warn(response.message)
+            return response
+
+        # Capture and lock - deep copy current loops
+        self._locked_loops = list(self.current_loops)
+        self._is_locked = True
+        self._capture_timestamp = self.get_clock().now()
+
+        response.success = True
+        response.captured_count = actual_count
+        response.message = f'Captured {actual_count} loops'
+        response.loops = list(self._locked_loops)
+
+        self.get_logger().info(
+            f'Loop capture: {actual_count} loops locked at positions:'
+        )
+        for loop in self._locked_loops:
+            pos = loop.pose.pose.position
+            self.get_logger().info(
+                f'  Loop {loop.loop_id}: ({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f})'
+            )
+
+        return response
 
     def _is_already_stowed(self, loop: DetectedLoop) -> bool:
         """Check if a loop position has already been stowed."""
@@ -180,8 +276,11 @@ class TargetSelectorNode(Node):
 
     def _select_target(self, loops: list[DetectedLoop]) -> DetectedLoop | None:
         """Select next target from available loops using configured strategy."""
+        # Use locked loops if captured, otherwise use provided loops
+        source_loops = self._locked_loops if self._is_locked else loops
+
         # Filter out already-stowed loops
-        available = [l for l in loops if not self._is_already_stowed(l)]
+        available = [l for l in source_loops if not self._is_already_stowed(l)]
 
         if not available:
             return None

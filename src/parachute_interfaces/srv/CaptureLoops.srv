@@ -1,0 +1,10 @@
+# Capture and lock loop positions from current detections
+# Call after homing to freeze loop list for the stowing sequence
+
+int32 expected_count      # Expected number of loops (0 = skip count verification)
+float32 timeout_sec       # Timeout for stable detection (default 2.0 if <= 0)
+---
+bool success              # Whether capture succeeded
+int32 captured_count      # Number of loops captured
+string message            # Status message
+DetectedLoop[] loops      # The captured loops (for verification/debugging)
