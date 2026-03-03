@@ -134,8 +134,8 @@ class ManualJog(Node):
 
                     elif ch == ' ':
                         self.send('DC_SPEED,0')
-                        self.servo_offset = 0
-                        self.send('SERVO,0')  # Center servo
+                        # self.servo_offset = 0
+                        # self.send('SERVO,0')  # Center servo
                         print('\n\rDC stopped, servo centered')
 
                     elif ch == 'h':
