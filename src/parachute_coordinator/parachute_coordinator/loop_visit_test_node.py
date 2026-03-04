@@ -1,12 +1,24 @@
 #!/usr/bin/env python3
 """
-Loop Visit Test - moves side arm to each detected loop position (z=0) to verify transforms.
+Loop Visit Test - moves side arm to each detected loop position (X/Y only, z=0)
+to verify vision and coordinate transforms.
+
+This is a demo mode that:
+1. Captures detected loop positions from the camera
+2. Homes the side arm
+3. Visits each loop in left-to-right order (X/Y positioning only)
+4. Pauses at each loop for visual verification
+5. Returns home when complete
 
 Usage:
+    # With real camera (requires dual_arm_test with use_real_camera:=true running):
     ros2 run parachute_coordinator loop_visit_test_node
 
     # With test positions (no camera needed):
     ros2 run parachute_coordinator loop_visit_test_node --ros-args -p use_test_loops:=true
+
+    # Adjust pause time:
+    ros2 run parachute_coordinator loop_visit_test_node --ros-args -p pause_sec:=3.0
 """
 
 import time
@@ -14,11 +26,7 @@ import rclpy
 from rclpy.node import Node
 from parachute_interfaces.msg import DetectedLoops
 from parachute_interfaces.srv import MoveToPosition
-from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import String
-
-from tf2_ros import Buffer, TransformListener, TransformException
-import tf2_geometry_msgs
 
 
 class LoopVisitTestNode(Node):
@@ -28,16 +36,28 @@ class LoopVisitTestNode(Node):
         self.declare_parameter('use_test_loops', False)
         self.declare_parameter('pause_sec', 2.0)
         self.declare_parameter('speed', 0.5)
-        self.declare_parameter('side_arm_frame', 'side_arm_origin')
+
+        # Hook offset calibration - where is the hook in world frame when arm is homed
+        # These should match side_arm_interface_node parameters
+        self.declare_parameter('hook_offset_x_mm', 350.0)
+        self.declare_parameter('hook_offset_y_mm', 180.0)
+        self.declare_parameter('hook_offset_z_mm', -10.0)
+        # Axis inversion flags
+        self.declare_parameter('invert_x', True)
+        self.declare_parameter('invert_y', False)
+        self.declare_parameter('invert_z', False)
 
         self.use_test_loops = self.get_parameter('use_test_loops').value
         self.pause_sec = self.get_parameter('pause_sec').value
         self.speed = self.get_parameter('speed').value
-        self.side_arm_frame = self.get_parameter('side_arm_frame').value
 
-        # TF
-        self.tf_buffer = Buffer()
-        self.tf_listener = TransformListener(self.tf_buffer, self)
+        # Load hook offset parameters
+        self.hook_offset_x = self.get_parameter('hook_offset_x_mm').value
+        self.hook_offset_y = self.get_parameter('hook_offset_y_mm').value
+        self.hook_offset_z = self.get_parameter('hook_offset_z_mm').value
+        self.invert_x = self.get_parameter('invert_x').value
+        self.invert_y = self.get_parameter('invert_y').value
+        self.invert_z = self.get_parameter('invert_z').value
 
         # Service client
         self.move_client = self.create_client(MoveToPosition, '/side_arm/move_to_position')
@@ -61,6 +81,14 @@ class LoopVisitTestNode(Node):
             )
             self.get_logger().info('Waiting for /detected_loops...')
 
+        # Log calibration
+        self.get_logger().info(
+            f'Hook offsets: ({self.hook_offset_x}, {self.hook_offset_y}, {self.hook_offset_z}) mm'
+        )
+        self.get_logger().info(
+            f'Axis inversion: X={self.invert_x}, Y={self.invert_y}, Z={self.invert_z}'
+        )
+
         # Wait then run
         self.create_timer(1.0, self._tick)
         self.started = False
@@ -79,27 +107,35 @@ class LoopVisitTestNode(Node):
         self.loops_received = True
         self.get_logger().info(f'Got {len(self.loops)} loops')
 
-    def _transform_to_side_arm(self, x, y, z, source_frame='world'):
-        """Transform world point to side arm mm coordinates."""
-        pose = PoseStamped()
-        pose.header.frame_id = source_frame
-        pose.pose.position.x = float(x)
-        pose.pose.position.y = float(y)
-        pose.pose.position.z = float(z)
-        pose.pose.orientation.w = 1.0
+    def _world_to_arm_coords(self, world_x_m, world_y_m, world_z_m):
+        """
+        Convert world-frame position (in meters) to side arm carriage coordinates (in mm).
 
-        try:
-            transform = self.tf_buffer.lookup_transform(
-                self.side_arm_frame, source_frame,
-                rclpy.time.Time(),
-                timeout=rclpy.duration.Duration(seconds=2.0)
-            )
-            transformed = tf2_geometry_msgs.do_transform_pose_stamped(pose, transform)
-            tp = transformed.pose.position
-            return tp.x * 1000.0, tp.y * 1000.0, tp.z * 1000.0
-        except TransformException as e:
-            self.get_logger().error(f'TF failed: {e}')
-            return None
+        Uses hook offset calibration: when arm is at (0,0,0), hook is at hook_offset in world.
+        For inverted axes: arm_pos = hook_offset - world_pos
+        For normal axes:   arm_pos = world_pos - hook_offset
+        """
+        # Convert meters to mm
+        world_x_mm = world_x_m * 1000.0
+        world_y_mm = world_y_m * 1000.0
+        world_z_mm = world_z_m * 1000.0
+
+        if self.invert_x:
+            arm_x = self.hook_offset_x - world_x_mm
+        else:
+            arm_x = world_x_mm - self.hook_offset_x
+
+        if self.invert_y:
+            arm_y = self.hook_offset_y - world_y_mm
+        else:
+            arm_y = world_y_mm - self.hook_offset_y
+
+        if self.invert_z:
+            arm_z = self.hook_offset_z - world_z_mm
+        else:
+            arm_z = world_z_mm - self.hook_offset_z
+
+        return arm_x, arm_y, arm_z
 
     def _move_to(self, x_mm, y_mm, z_mm):
         """Blocking move via service."""
@@ -140,19 +176,15 @@ class LoopVisitTestNode(Node):
             self.get_logger().info(f'--- Loop {i+1}/{len(sorted_loops)} ---')
             self.get_logger().info(f'  World: ({wx:.3f}, {wy:.3f}, {wz:.3f}) m')
 
-            result = self._transform_to_side_arm(wx, wy, wz)
-            if result is None:
-                self.get_logger().error('  Transform failed, skipping')
-                continue
-
-            sa_x, sa_y, sa_z = result
-            self.get_logger().info(f'  Side arm: ({sa_x:.1f}, {sa_y:.1f}, {sa_z:.1f}) mm')
-            self.get_logger().info(f'  Moving to ({sa_x:.1f}, {sa_y:.1f}, 0.0) mm (z=0)')
+            # Convert world position to arm coordinates
+            sa_x, sa_y, sa_z = self._world_to_arm_coords(wx, wy, wz)
+            self.get_logger().info(f'  Arm coords: ({sa_x:.1f}, {sa_y:.1f}, {sa_z:.1f}) mm')
+            self.get_logger().info(f'  Moving to ({sa_x:.1f}, {sa_y:.1f}, 0.0) mm (Z=0 for safety)')
 
             if self._move_to(sa_x, sa_y, 0.0):
-                self.get_logger().info(f'  ✓ Arrived. Pausing {self.pause_sec}s...')
+                self.get_logger().info(f'  Arrived at loop {i+1}. Pausing {self.pause_sec}s...')
             else:
-                self.get_logger().error(f'  ✗ Move failed')
+                self.get_logger().error(f'  Move failed for loop {i+1}')
 
             time.sleep(self.pause_sec)
 
