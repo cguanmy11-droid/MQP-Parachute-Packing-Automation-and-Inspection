@@ -46,6 +46,7 @@ class StateMachine:
         self._state_configs: Dict[StowState, dict] = {}
         self._error_source: Optional[StowState] = None
         self._retry_count: int = 0
+        self.on_transition = None  
 
         self._load_config(config_path)
         self.current_state: StowState = self._initial_state
@@ -157,7 +158,7 @@ class StateMachine:
         if target == StowState.ERROR:
             self._error_source = old_state
 
-        # Track retry count
+        # Track retry count1
         if target == old_state:
             self._retry_count += 1
         else:
@@ -181,6 +182,9 @@ class StateMachine:
         # Update state
         self._previous_state = old_state
         self.current_state = target
+
+        if self.on_transition:
+            self.on_transition(old_state.name, target.name)
 
         self._log(
             f'Transition: {old_state.name} --[{event}]--> {target.name}'

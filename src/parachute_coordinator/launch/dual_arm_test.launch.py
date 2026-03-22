@@ -658,9 +658,9 @@ def generate_launch_description():
             'max_detection_range': 1.0,      # meters (extended for testing)
             'min_detection_range': 0.01,     # meters
             # Detection simulation
-            'detection_noise_stddev': 0.003,  # meters
+            'detection_noise_stddev': 0.00003,  # meters
             'confidence_base': 0.90,
-            'confidence_noise': 0.05,
+            'confidence_noise': 0.0001,
             'false_negative_rate': 0.0,
             'publish_rate': 5.0,
             # Debug - enable to bypass FOV checks and see what's happening

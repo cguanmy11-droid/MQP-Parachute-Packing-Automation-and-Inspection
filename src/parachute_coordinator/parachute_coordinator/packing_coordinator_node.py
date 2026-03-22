@@ -88,6 +88,21 @@ class PackingCoordinatorNode(Node):
             logger=self.get_logger()
         )
 
+        self.state_pub = self.create_publisher(String, '/coordinator/state', 10)
+        self.error_pub = self.create_publisher(String, '/coordinator/error', 10)
+        def _on_state_change(old, new):
+            if self._paused:
+                # Roll back — don't allow transitions while paused
+                self.get_logger().warn(f'Transition {old}→{new} blocked (paused)')
+                self.sm.current_state = self.sm._states[old]  # revert
+                return
+            self.state_pub.publish(String(data=new))
+
+        self.sm.on_transition = _on_state_change
+        self._paused = False
+        self._pending_event = None
+        self.state_pub.publish(String(data=self.sm.state_name))
+
         # ==================== MOTION PATTERNS ====================
         pattern_dir = self.get_parameter('pattern_dir').value or None
         self.pattern_manager = MotionPatternManager(
@@ -212,7 +227,25 @@ class PackingCoordinatorNode(Node):
 
         if cmd == 'home':
             self._halt_all()
-            self.sm.transition('home')
+            self._transition('home')
+            return
+        
+        if cmd == 'pause':
+            self._paused = True
+            self.get_logger().info('Sequence PAUSED by operator')
+            self.state_pub.publish(String(data=f'{self.sm.state_name} (PAUSED)'))
+            return
+
+        if cmd == 'resume':
+            self._paused = False
+            self.get_logger().info('Sequence RESUMED')
+            self.state_pub.publish(String(data=self.sm.state_name))
+            # Replay any event that was blocked while paused
+            if self._pending_event:
+                event = self._pending_event
+                self._pending_event = None
+                self.get_logger().info(f'Replaying queued event "{event}"')
+                self.sm.transition(event)
             return
 
         if cmd.startswith('pattern:'):
@@ -239,7 +272,7 @@ class PackingCoordinatorNode(Node):
 
         # State-specific commands — forward as events to the state machine
         if self.sm.can_transition(cmd):
-            self.sm.transition(cmd)
+            self._transition(cmd)
         else:
             valid = self.sm.get_valid_events()
             self.get_logger().warn(
@@ -333,7 +366,7 @@ class PackingCoordinatorNode(Node):
         """Common error entry — halts motion, records diagnostics."""
         self._halt_all()
         self._error_message = message
-        self.sm.transition(event)
+        self._transition(event)
 
     # ================================================================
     #  STATE HANDLERS — on_enter_<state>
@@ -343,6 +376,14 @@ class PackingCoordinatorNode(Node):
     #  calls). When the async work completes, the callback emits an
     #  event that triggers the next transition.
     # ================================================================
+
+    def _transition(self, event: str) -> bool:
+        if self._paused:
+            self._pending_event = event   # store it
+            self.get_logger().info(f'Paused — queued transition "{event}"')
+            return False
+        self._pending_event = None
+        return self.sm.transition(event)
 
     def on_enter_idle(self, state: StowState, event: str):
         """Entered IDLE — system is ready."""
@@ -407,7 +448,7 @@ class PackingCoordinatorNode(Node):
             self.get_logger().warn(
                 '[HOMING] Capture service not available - proceeding without lock'
             )
-            self.sm.transition('homed')
+            self._transition('homed')
             return
 
         request = CaptureLoops.Request()
@@ -432,7 +473,7 @@ class PackingCoordinatorNode(Node):
             self.get_logger().info(
                 f'[HOMING] Captured {response.captured_count} loops - ready to stow'
             )
-            self.sm.transition('homed')
+            self._transition('homed')
         else:
             self.get_logger().error(f'[HOMING] Capture failed: {response.message}')
             self._enter_error('homing_failed', response.message)
@@ -465,7 +506,7 @@ class PackingCoordinatorNode(Node):
 
         if not response.target_available:
             self.get_logger().info('[AT_LOOP] No more targets available')
-            self.sm.transition('no_targets')
+            self._transition('no_targets')
             return
 
         self.current_target_loop = response.target_loop
@@ -483,7 +524,7 @@ class PackingCoordinatorNode(Node):
         #   3. Wait for both to report success
         #   4. Then transition 'positioned'
 
-        self.sm.transition('positioned')
+        self._transition('positioned')
 
     def on_enter_insert(self, state: StowState, event: str):
         """Entered INSERT — send hook through the target loop."""
@@ -519,7 +560,7 @@ class PackingCoordinatorNode(Node):
         )
         # TODO: Check for collision via motor current in feedback
         # if feedback.motor_current > COLLISION_THRESHOLD:
-        #     self.sm.transition('collision')
+        #     self._transition('collision')
 
     def _on_insert_goal_response(self, future):
         """Handle goal acceptance for hook insertion."""
@@ -540,12 +581,12 @@ class PackingCoordinatorNode(Node):
         if result.success:
             self.get_logger().info('[INSERT] Hook inserted successfully')
             # TODO: Verify depth with forward kinematics
-            self.sm.transition('inserted')
+            self._transition('inserted')
         else:
             self.get_logger().warn(f'[INSERT] Failed: {result.message}')
             # Distinguish collision from other failures
             # TODO: Check result for collision flag
-            self.sm.transition('collision')  # will retry with offset
+            self._transition('collision')  # will retry with offset
 
     def on_enter_handoff(self, state: StowState, event: str):
         """Entered HANDOFF — rotate hook and execute stow trajectory."""
@@ -619,7 +660,7 @@ class PackingCoordinatorNode(Node):
         )
         # TODO: Check vision alignment
         # if not vision_aligned:
-        #     self.sm.transition('alignment_lost')
+        #     self._transition('alignment_lost')
 
     def _on_trajectory_goal_response(self, future):
         """Handle trajectory goal acceptance."""
@@ -639,7 +680,7 @@ class PackingCoordinatorNode(Node):
 
         if result.success:
             self.get_logger().info('[HANDOFF] Stow trajectory complete')
-            self.sm.transition('trajectory_complete')
+            self._transition('trajectory_complete')
         else:
             self.get_logger().error(f'[HANDOFF] Trajectory failed: {result.message}')
             self._enter_error('trajectory_failure', result.message)
@@ -685,7 +726,7 @@ class PackingCoordinatorNode(Node):
 
         self.get_logger().info('[RETRACT] Hook retracted')
         # TODO: Verify line position using vision
-        self.sm.transition('retracted')
+        self._transition('retracted')
 
     def on_enter_release(self, state: StowState, event: str):
         """Entered RELEASE — verify stow and prepare for next loop."""
@@ -706,9 +747,9 @@ class PackingCoordinatorNode(Node):
 
         # Check if more loops remain
         if self.total_loops > 0 and self.completed_loops >= self.total_loops:
-            self.sm.transition('all_complete')
+            self._transition('all_complete')
         else:
-            self.sm.transition('loops_remaining')
+            self._transition('loops_remaining')
 
     def on_enter_complete(self, state: StowState, event: str):
         """Entered COMPLETE — all loops stowed."""
@@ -728,6 +769,7 @@ class PackingCoordinatorNode(Node):
         self.get_logger().error('  Commands: retry | skip | abort')
         self.get_logger().error('=' * 50)
 
+        self.error_pub.publish(String(data=msg))
 
 def main(args=None):
     rclpy.init(args=args)
