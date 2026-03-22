@@ -121,6 +121,12 @@ def generate_launch_description():
         description='Main arm robot model'
     )
 
+    motor_monitor_arg = DeclareLaunchArgument(
+        'enable_monitor',
+        default_value='false',
+        description='Enable Motor Monitoring for Main Arm'
+    )
+
     # Side arm arguments
     enable_side_arm_arg = DeclareLaunchArgument(
         'enable_side_arm',
@@ -297,7 +303,8 @@ def generate_launch_description():
         condition=IfCondition(
             PythonExpression([
                 "'", LaunchConfiguration('enable_main_arm'), "' == 'true' and '",
-                LaunchConfiguration('main_arm_sim'), "' != 'true'"
+                LaunchConfiguration('main_arm_sim'), "' != 'true' and '", 
+                LaunchConfiguration('enable_monitor'), "' == 'true'",
             ])
         )
     )
@@ -714,6 +721,7 @@ def generate_launch_description():
         enable_teleop_arg,
         controller_type_arg,
         robot_model_arg,
+        motor_monitor_arg,
         enable_side_arm_arg,
         side_arm_sim_arg,
         side_arm_test_mode_arg,
