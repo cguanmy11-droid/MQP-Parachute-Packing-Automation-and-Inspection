@@ -227,7 +227,7 @@ def launch_setup(context, *args, **kwargs):
     rviz_config = os.path.join(
         get_package_share_directory('parachute_coordinator'),
         'config',
-        'dual_arm.rviz'
+        'dual_arm_both.rviz'
     )
     nodes.append(Node(
         package='rviz2',
