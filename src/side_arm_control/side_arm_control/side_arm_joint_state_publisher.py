@@ -55,11 +55,10 @@ class SideArmJointStatePublisher(Node):
             10
         )
 
-        # Subscriber for parsed state (relative topic - will be namespaced)
-        # Note: parsed_state is published by coordinate_node which should be in same namespace
+        # Subscriber for parsed state (relative topic for namespace support)
         self.state_sub = self.create_subscription(
             SideArmState,
-            '/side_arm/parsed_state',  # TODO: Make relative once coordinate_node is updated
+            'parsed_state',
             self.state_callback,
             10
         )
@@ -67,7 +66,7 @@ class SideArmJointStatePublisher(Node):
         # Subscriber for raw state (servo angle from hardware)
         self.raw_state_sub = self.create_subscription(
             String,
-            '/side_arm/state',  # TODO: Make relative once serial_bridge is updated
+            'state',
             self.raw_state_callback,
             10
         )
@@ -75,7 +74,7 @@ class SideArmJointStatePublisher(Node):
         # Subscriber for commands (to track servo in simulation mode)
         self.cmd_sub = self.create_subscription(
             String,
-            '/side_arm/command',  # TODO: Make relative once all nodes updated
+            'command',
             self.command_callback,
             10
         )

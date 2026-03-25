@@ -29,11 +29,13 @@ from parachute_interfaces.action import MoveToCoordinate
 class SideArmCoordinateNode(Node):
     """
     Coordinate system node that:
-    - Subscribes to /side_arm/state (raw ESP32 JSON)
-    - Publishes /side_arm/parsed_state (parsed with mm coordinates)
-    - Provides service /side_arm/move_to_position
-    - Provides action /side_arm/move_to_coordinate
-    - Publishes commands to /side_arm/command
+    - Subscribes to state (raw ESP32 JSON)
+    - Publishes parsed_state (parsed with mm coordinates)
+    - Provides service move_to_position
+    - Provides action move_to_coordinate
+    - Publishes commands to command topic
+
+    Topics use relative names for namespace support (e.g., /side_arm_left/command).
 
     Supports both hardware and simulation modes:
     - simulation_mode=false: Requires serial connection, mirrors hardware
@@ -92,27 +94,27 @@ class SideArmCoordinateNode(Node):
         # Callback group for concurrent callbacks
         self._cb_group = ReentrantCallbackGroup()
 
-        # Publishers
-        self._cmd_pub = self.create_publisher(String, '/side_arm/command', 10)
-        self._state_pub = self.create_publisher(SideArmState, '/side_arm/parsed_state', 10)
+        # Publishers (relative topics for namespace support)
+        self._cmd_pub = self.create_publisher(String, 'command', 10)
+        self._state_pub = self.create_publisher(SideArmState, 'parsed_state', 10)
 
-        # Subscribers
+        # Subscribers (relative topics for namespace support)
         self._raw_state_sub = self.create_subscription(
-            String, '/side_arm/state', self._raw_state_callback, 10)
+            String, 'state', self._raw_state_callback, 10)
 
         # Subscribe to commands to track DC movements from any source
         self._cmd_sub = self.create_subscription(
-            String, '/side_arm/command', self._command_callback, 10)
+            String, 'command', self._command_callback, 10)
 
-        # Services
+        # Services (relative topics for namespace support)
         self._move_srv = self.create_service(
-            MoveToPosition, '/side_arm/move_to_position',
+            MoveToPosition, 'move_to_position',
             self._move_to_position_callback,
             callback_group=self._cb_group)
 
-        # Action server
+        # Action server (relative topics for namespace support)
         self._move_action = ActionServer(
-            self, MoveToCoordinate, '/side_arm/move_to_coordinate',
+            self, MoveToCoordinate, 'move_to_coordinate',
             self._move_to_coordinate_callback,
             callback_group=self._cb_group)
 

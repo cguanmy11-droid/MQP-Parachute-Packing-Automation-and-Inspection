@@ -100,46 +100,47 @@ class SideArmInterfaceNode(Node):
 
         # Action client for coordinate moves (used in both test and real mode)
         # In test_mode, coordinate_node runs in simulation and updates RViz
+        # Uses relative topic for namespace support
         self._move_client = ActionClient(
-            self, MoveToCoordinate, '/side_arm/move_to_coordinate',
+            self, MoveToCoordinate, 'move_to_coordinate',
             callback_group=self._cb_group)
 
-        # Command publisher for direct commands
-        self._cmd_pub = self.create_publisher(String, '/side_arm/command', 10)
+        # Command publisher for direct commands (relative topic)
+        self._cmd_pub = self.create_publisher(String, 'command', 10)
 
-        # State subscriber
+        # State subscriber (relative topic)
         self._state_sub = self.create_subscription(
-            SideArmState, '/side_arm/parsed_state',
+            SideArmState, 'parsed_state',
             self._state_callback, 10)
 
-        # Vision subscriber for servo control
+        # Vision subscriber for servo control (absolute - shared across arms)
         self._vision_sub = self.create_subscription(
             PoseArray, '/yolo/centers',
             self._vision_callback, 10)
 
-        # Action server for inserting hook
+        # Action server for inserting hook (relative topic)
         self.action_server = ActionServer(
-            self, InsertHook, '/side_arm/insert_hook',
+            self, InsertHook, 'insert_hook',
             self.insert_hook_callback,
             callback_group=self._cb_group)
 
-        # Service for rotating hook
+        # Service for rotating hook (relative topic)
         self.rotate_service = self.create_service(
-            RotateHook, '/side_arm/rotate_hook',
+            RotateHook, 'rotate_hook',
             self.rotate_hook_callback)
 
-        # Service for direct position move (in side arm frame, mm)
+        # Service for direct position move (relative topic)
         self.move_service = self.create_service(
-            MoveToPosition, '/side_arm/move_to_position',
+            MoveToPosition, 'move_to_position',
             self.move_to_position_callback)
 
-        # Service for world-frame move with TF transform
+        # Service for world-frame move with TF transform (relative topic)
         self.world_move_service = self.create_service(
-            MoveToWorldPose, '/side_arm/move_to_world_pose',
+            MoveToWorldPose, 'move_to_world_pose',
             self.move_to_world_pose_callback)
 
-        # Publisher for hook status
-        self.status_publisher = self.create_publisher(HookStatus, '/side_arm/status', 10)
+        # Publisher for hook status (relative topic)
+        self.status_publisher = self.create_publisher(HookStatus, 'status', 10)
 
         # Timer to publish status
         self.timer = self.create_timer(1.0, self.publish_status)

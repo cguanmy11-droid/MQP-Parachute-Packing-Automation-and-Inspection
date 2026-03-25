@@ -47,18 +47,18 @@ class SideArmVisualizer(Node):
         # TF broadcaster for hook frame (camera will be child of this)
         self.tf_broadcaster = TransformBroadcaster(self)
         
-        # Subscribe to parsed state (for x, y, z position)
+        # Subscribe to parsed state (relative topic for namespace support)
         self.state_sub = self.create_subscription(
             SideArmState,
-            '/side_arm/parsed_state',
+            'parsed_state',
             self.state_callback,
             10
         )
-        
-        # Subscribe to raw state (for servo angle)
+
+        # Subscribe to raw state (relative topic for namespace support)
         self.raw_state_sub = self.create_subscription(
             String,
-            '/side_arm/state',
+            'state',
             self.raw_state_callback,
             10
         )
