@@ -1,0 +1,158 @@
+# Side Arm Configuration - Version 1
+# This file contains all parameters for the side arm system.
+# To switch arm versions, change the arm_config launch argument.
+#
+# Usage:
+#   ros2 launch parachute_coordinator dual_arm_test.launch.py arm_config:=side_arm_v1.yaml
+#   ros2 launch parachute_coordinator dual_arm_test.launch.py arm_config:=side_arm_v2.yaml
+
+# =============================================================================
+# ARM IDENTITY
+# =============================================================================
+side_arm:
+  # Identifier for this arm configuration
+  arm_id: "v1"
+  description: "Side Arm Version 1 - Original gantry configuration"
+
+  # URDF file to use (relative to side_arm_control/urdf/)
+  urdf_file: "side_arm.urdf"
+
+# =============================================================================
+# HARDWARE COMMUNICATION
+# =============================================================================
+serial_bridge:
+  # Serial port for ESP32 connection
+  # Can also be set via SIDE_ARM_PORT environment variable
+  serial_port: "/dev/ttyUSB0"
+  baud_rate: 115200
+
+  # State polling
+  state_request_hz: 10.0
+  auto_request_state: true
+
+# =============================================================================
+# MOTOR CALIBRATION
+# =============================================================================
+# These values are specific to each arm's mechanical setup
+coordinate_node:
+  # Stepper motor calibration
+  # Stepper2 (X-axis) - belt drive
+  steps_per_mm_horizontal: 300.0
+  # Stepper1 (Y-axis) - lead screw
+  steps_per_mm_vertical: 100.0
+
+  # DC motor calibration (Z-axis)
+  dc_mm_per_second: 4.0
+  dc_speed_percent: 50
+
+  # Default motion speeds (steps/sec)
+  default_speed_horizontal: 1200.0
+  default_speed_vertical: 500.0
+
+  # Simulation motion speed (mm/sec)
+  sim_speed_mm_per_sec: 50.0
+
+# =============================================================================
+# WORKSPACE LIMITS
+# =============================================================================
+# Physical travel limits in millimeters
+workspace:
+  max_x_mm: 300.0
+  max_y_mm: 200.0
+  max_z_mm: 150.0
+
+# =============================================================================
+# HOOK POSITIONING
+# =============================================================================
+# These offsets define where the hook is in the arm's coordinate system
+# when the arm is at its home position
+interface_node:
+  # Hook offset from origin when homed (mm)
+  hook_offset_x_mm: 350.0
+  hook_offset_y_mm: 180.0
+  hook_offset_z_mm: -10.0
+
+  # Axis inversion for world coordinate mapping
+  invert_x: true
+  invert_y: false
+  invert_z: false
+
+  # Insertion parameters (mm)
+  approach_offset_z: 50.0
+  insert_depth_z: 30.0
+
+  # Vision servo parameters
+  enable_vision_servo: true
+  servo_kp_x: 1.2
+  servo_deadband_px: 5.0
+  servo_timeout_sec: 10.0
+  servo_min_speed: 400
+  servo_max_speed: 1100
+  image_width_px: 640
+
+# =============================================================================
+# VISUALIZATION
+# =============================================================================
+visualizer:
+  # Hook mesh orientation (radians)
+  roll: -1.5708
+  pitch: 0.0
+  yaw: -1.5708
+
+  # Hook mesh offset (meters)
+  offset_x: -0.01
+  offset_y: 0.009
+  offset_z: 0.07
+
+  # Mesh scale
+  scale: 0.001
+
+  # Servo rotation axis and scale
+  servo_axis: "pitch"
+  servo_scale: 0.001
+
+  # TF publishing options
+  publish_hook_tf: false
+  hook_frame_id: "side_arm_hook"
+  publish_camera_tf: false
+  camera_frame_id: "camera_frame"
+
+  # Camera offset (meters) - only used if publish_camera_tf is true
+  camera_offset_x: 0.0
+  camera_offset_y: 0.0
+  camera_offset_z: 0.05
+  camera_roll: 0.0
+  camera_pitch: 3.1416
+  camera_yaw: 0.0
+
+# =============================================================================
+# JOINT STATE PUBLISHER
+# =============================================================================
+joint_state_publisher:
+  servo_scale: 0.001
+  publish_rate: 50.0
+
+  # Test mode positions (meters)
+  test_x: 0.15
+  test_y: 0.10
+  test_z: 0.05
+  test_servo: 0.0
+
+# =============================================================================
+# TF TRANSFORM
+# =============================================================================
+# Position of side_arm_origin relative to world frame
+# This defines where the arm is mounted in the workspace
+tf_transform:
+  # Translation (meters)
+  x: 0.37
+  y: 0.41
+  z: -0.26
+  # Rotation (radians)
+  roll: 1.5708
+  pitch: 0.0
+  yaw: 3.1416
+  # Parent frame
+  parent_frame: "world"
+  # Child frame (the arm's root frame)
+  child_frame: "side_arm_origin"

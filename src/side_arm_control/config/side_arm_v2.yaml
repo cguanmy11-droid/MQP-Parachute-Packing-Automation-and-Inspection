@@ -1,0 +1,128 @@
+# Side Arm Configuration - Version 2
+# Template for the second side arm version.
+# Modify these values to match the V2 arm's specifications.
+#
+# Usage:
+#   ros2 launch parachute_coordinator dual_arm_test.launch.py arm_config:=side_arm_v2.yaml
+
+# =============================================================================
+# ARM IDENTITY
+# =============================================================================
+side_arm:
+  arm_id: "v2"
+  description: "Side Arm Version 2 - [TODO: Add description]"
+
+  # URDF file to use (create side_arm_v2.urdf when ready)
+  # For now, falls back to v1 URDF
+  urdf_file: "side_arm.urdf"  # TODO: Change to "side_arm_v2.urdf"
+
+# =============================================================================
+# HARDWARE COMMUNICATION
+# =============================================================================
+serial_bridge:
+  # V2 arm uses a different serial port
+  serial_port: "/dev/ttyUSB1"
+  baud_rate: 115200
+  state_request_hz: 10.0
+  auto_request_state: true
+
+# =============================================================================
+# MOTOR CALIBRATION
+# =============================================================================
+# TODO: Calibrate these values for the V2 arm
+coordinate_node:
+  # Stepper motor calibration - ADJUST FOR V2 HARDWARE
+  steps_per_mm_horizontal: 300.0  # TODO: Calibrate
+  steps_per_mm_vertical: 100.0    # TODO: Calibrate
+
+  # DC motor calibration
+  dc_mm_per_second: 4.0   # TODO: Calibrate
+  dc_speed_percent: 50
+
+  # Default motion speeds
+  default_speed_horizontal: 1200.0
+  default_speed_vertical: 500.0
+  sim_speed_mm_per_sec: 50.0
+
+# =============================================================================
+# WORKSPACE LIMITS
+# =============================================================================
+# TODO: Measure V2 arm travel limits
+workspace:
+  max_x_mm: 300.0  # TODO: Verify
+  max_y_mm: 200.0  # TODO: Verify
+  max_z_mm: 150.0  # TODO: Verify
+
+# =============================================================================
+# HOOK POSITIONING
+# =============================================================================
+# TODO: Calibrate hook offsets for V2 arm
+interface_node:
+  hook_offset_x_mm: 350.0  # TODO: Calibrate
+  hook_offset_y_mm: 180.0  # TODO: Calibrate
+  hook_offset_z_mm: -10.0  # TODO: Calibrate
+
+  invert_x: true
+  invert_y: false
+  invert_z: false
+
+  approach_offset_z: 50.0
+  insert_depth_z: 30.0
+
+  enable_vision_servo: true
+  servo_kp_x: 1.2
+  servo_deadband_px: 5.0
+  servo_timeout_sec: 10.0
+  servo_min_speed: 400
+  servo_max_speed: 1100
+  image_width_px: 640
+
+# =============================================================================
+# VISUALIZATION
+# =============================================================================
+visualizer:
+  # TODO: Adjust if V2 has different hook geometry
+  roll: -1.5708
+  pitch: 0.0
+  yaw: -1.5708
+  offset_x: -0.01
+  offset_y: 0.009
+  offset_z: 0.07
+  scale: 0.001
+  servo_axis: "pitch"
+  servo_scale: 0.001
+  publish_hook_tf: false
+  hook_frame_id: "side_arm_hook"
+  publish_camera_tf: false
+  camera_frame_id: "camera_frame"
+  camera_offset_x: 0.0
+  camera_offset_y: 0.0
+  camera_offset_z: 0.05
+  camera_roll: 0.0
+  camera_pitch: 3.1416
+  camera_yaw: 0.0
+
+# =============================================================================
+# JOINT STATE PUBLISHER
+# =============================================================================
+joint_state_publisher:
+  servo_scale: 0.001
+  publish_rate: 50.0
+  test_x: 0.15
+  test_y: 0.10
+  test_z: 0.05
+  test_servo: 0.0
+
+# =============================================================================
+# TF TRANSFORM
+# =============================================================================
+# TODO: Set V2 arm mounting position
+tf_transform:
+  x: 0.37    # TODO: Set V2 position
+  y: 0.41
+  z: -0.26
+  roll: 1.5708
+  pitch: 0.0
+  yaw: 3.1416
+  parent_frame: "world"
+  child_frame: "side_arm_origin"

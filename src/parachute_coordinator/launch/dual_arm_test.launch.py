@@ -50,14 +50,21 @@ Move side arm in simulation:
 """
 
 import os
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction, OpaqueFunction
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition, UnlessCondition
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+
+
+def load_side_arm_config(config_file: str) -> dict:
+    """Load side arm configuration from YAML file."""
+    with open(config_file, 'r') as f:
+        return yaml.safe_load(f)
 
 
 def generate_launch_description():
@@ -78,15 +85,41 @@ def generate_launch_description():
     with open(frame_urdf_path, 'r') as f:
         frame_urdf = f.read()
 
-    # Load side arm URDF
+    # =============================================================================
+    # SIDE ARM CONFIGURATION
+    # =============================================================================
+    # Default config file path - can be overridden via arm_config launch argument
+    side_arm_config_dir = os.path.join(
+        get_package_share_directory('side_arm_control'),
+        'config'
+    )
+    default_arm_config = os.path.join(side_arm_config_dir, 'side_arm_v1.yaml')
+
+    # Load side arm configuration from YAML
+    # Note: This is loaded at launch file parse time. For dynamic switching,
+    # the config file path can be changed via the arm_config argument.
+    arm_config_file = os.environ.get('SIDE_ARM_CONFIG', default_arm_config)
+    side_arm_config = load_side_arm_config(arm_config_file)
+
+    # Extract URDF filename from config
+    urdf_filename = side_arm_config.get('side_arm', {}).get('urdf_file', 'side_arm.urdf')
     side_arm_urdf_path = os.path.join(
         get_package_share_directory('side_arm_control'),
         'urdf',
-        'side_arm.urdf'
+        urdf_filename
     )
 
     with open(side_arm_urdf_path, 'r') as f:
         side_arm_urdf = f.read()
+
+    # Extract config sections for easier access
+    serial_config = side_arm_config.get('serial_bridge', {})
+    coord_config = side_arm_config.get('coordinate_node', {})
+    workspace_config = side_arm_config.get('workspace', {})
+    interface_config = side_arm_config.get('interface_node', {})
+    viz_config = side_arm_config.get('visualizer', {})
+    joint_pub_config = side_arm_config.get('joint_state_publisher', {})
+    tf_config = side_arm_config.get('tf_transform', {})
 
     # ==================== LAUNCH ARGUMENTS ====================
 
@@ -146,9 +179,19 @@ def generate_launch_description():
         description='Run side arm in test mode (simulated movements alongside hardware)'
     )
 
-    # Use environment variable if set, otherwise fall back to default
-    # Set SIDE_ARM_PORT in ~/.bashrc for persistent configuration
-    side_arm_port_default = os.environ.get('SIDE_ARM_PORT', '/dev/ttyUSB0')
+    # Arm configuration file argument
+    arm_config_arg = DeclareLaunchArgument(
+        'arm_config',
+        default_value=arm_config_file,
+        description='Path to side arm YAML config file (or set SIDE_ARM_CONFIG env var)'
+    )
+
+    # Use environment variable, then config file, then fall back to default
+    # Priority: SIDE_ARM_PORT env var > config file > /dev/ttyUSB0
+    side_arm_port_default = os.environ.get(
+        'SIDE_ARM_PORT',
+        serial_config.get('serial_port', '/dev/ttyUSB0')
+    )
 
     serial_port_arg = DeclareLaunchArgument(
         'serial_port',
@@ -363,11 +406,11 @@ def generate_launch_description():
         name='side_arm_serial_bridge',
         parameters=[{
             'serial_port': LaunchConfiguration('serial_port'),
-            'baud_rate': 115200,
+            'baud_rate': serial_config.get('baud_rate', 115200),
             'command_topic': '/side_arm/command',
             'state_topic': '/side_arm/state',
-            'state_request_hz': 10.0,
-            'auto_request_state': True,
+            'state_request_hz': serial_config.get('state_request_hz', 10.0),
+            'auto_request_state': serial_config.get('auto_request_state', True),
         }],
         output='screen',
         condition=IfCondition(
@@ -392,16 +435,16 @@ def generate_launch_description():
         name='side_arm_coordinate_node',
         parameters=[{
             'simulation_mode': side_arm_simulation_enabled,  # Enable simulation when sim or test mode
-            'sim_speed_mm_per_sec': 50.0,  # Simulation motion speed
-            'steps_per_mm_horizontal': 300.0,
-            'steps_per_mm_vertical': 100.0,
-            'dc_mm_per_second': 4.0,
-            'dc_speed_percent': 50,
-            'default_speed_horizontal': 1200.0,
-            'default_speed_vertical': 500.0,
-            'max_x_mm': 300.0,
-            'max_y_mm': 200.0,
-            'max_z_mm': 150.0,
+            'sim_speed_mm_per_sec': coord_config.get('sim_speed_mm_per_sec', 50.0),
+            'steps_per_mm_horizontal': coord_config.get('steps_per_mm_horizontal', 300.0),
+            'steps_per_mm_vertical': coord_config.get('steps_per_mm_vertical', 100.0),
+            'dc_mm_per_second': coord_config.get('dc_mm_per_second', 4.0),
+            'dc_speed_percent': coord_config.get('dc_speed_percent', 50),
+            'default_speed_horizontal': coord_config.get('default_speed_horizontal', 1200.0),
+            'default_speed_vertical': coord_config.get('default_speed_vertical', 500.0),
+            'max_x_mm': workspace_config.get('max_x_mm', 300.0),
+            'max_y_mm': workspace_config.get('max_y_mm', 200.0),
+            'max_z_mm': workspace_config.get('max_z_mm', 150.0),
         }],
         output='screen',
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
@@ -414,8 +457,21 @@ def generate_launch_description():
         name='side_arm_interface_node',
         parameters=[{
             'test_mode': side_arm_simulation_enabled,
-            'approach_offset_z': 50.0,
-            'insert_depth_z': 30.0,
+            'approach_offset_z': interface_config.get('approach_offset_z', 50.0),
+            'insert_depth_z': interface_config.get('insert_depth_z', 30.0),
+            'hook_offset_x_mm': interface_config.get('hook_offset_x_mm', 350.0),
+            'hook_offset_y_mm': interface_config.get('hook_offset_y_mm', 180.0),
+            'hook_offset_z_mm': interface_config.get('hook_offset_z_mm', -10.0),
+            'invert_x': interface_config.get('invert_x', True),
+            'invert_y': interface_config.get('invert_y', False),
+            'invert_z': interface_config.get('invert_z', False),
+            'enable_vision_servo': interface_config.get('enable_vision_servo', True),
+            'servo_kp_x': interface_config.get('servo_kp_x', 1.2),
+            'servo_deadband_px': interface_config.get('servo_deadband_px', 5.0),
+            'servo_timeout_sec': interface_config.get('servo_timeout_sec', 10.0),
+            'servo_min_speed': interface_config.get('servo_min_speed', 400),
+            'servo_max_speed': interface_config.get('servo_max_speed', 1100),
+            'image_width_px': interface_config.get('image_width_px', 640),
         }],
         output='screen',
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
@@ -428,38 +484,37 @@ def generate_launch_description():
         name='side_arm_visualizer',
         output='screen',
         parameters=[{
-            # Hook mesh orientation
-            'roll': -1.5708,
-            'pitch': 0.0,
-            'yaw': -1.5708,
+            # Hook mesh orientation (from config)
+            'roll': viz_config.get('roll', -1.5708),
+            'pitch': viz_config.get('pitch', 0.0),
+            'yaw': viz_config.get('yaw', -1.5708),
             # Hook mesh offset
-            'offset_x': -0.01,
-            'offset_y': 0.009,
-            'offset_z': 0.07,
-            'scale': 0.001,
+            'offset_x': viz_config.get('offset_x', -0.01),
+            'offset_y': viz_config.get('offset_y', 0.009),
+            'offset_z': viz_config.get('offset_z', 0.07),
+            'scale': viz_config.get('scale', 0.001),
             # Servo rotation
-            'servo_axis': 'pitch',
-            'servo_scale': 0.001,
+            'servo_axis': viz_config.get('servo_axis', 'pitch'),
+            'servo_scale': viz_config.get('servo_scale', 0.001),
             # Test mode (enabled in sim or test mode)
             'test_mode': side_arm_simulation_enabled,
             'test_x': 0.0,
             'test_y': 0.0,
             'test_z': 0.0,
             # TF publishing
-            'publish_hook_tf': False,
-            'hook_frame_id': 'side_arm_hook',
+            'publish_hook_tf': viz_config.get('publish_hook_tf', False),
+            'hook_frame_id': viz_config.get('hook_frame_id', 'side_arm_hook'),
             # Camera frame is now published by URDF robot_state_publisher (attached to y_carriage)
             # Set to False to avoid TF conflict with URDF's camera_frame
-            'publish_camera_tf': False,
-            'camera_frame_id': 'camera_frame',
-            'camera_offset_x': 0.0,    # Not used when publish_camera_tf is False
-            'camera_offset_y': 0.0,
-            'camera_offset_z': 0.05,
+            'publish_camera_tf': viz_config.get('publish_camera_tf', False),
+            'camera_frame_id': viz_config.get('camera_frame_id', 'camera_frame'),
+            'camera_offset_x': viz_config.get('camera_offset_x', 0.0),
+            'camera_offset_y': viz_config.get('camera_offset_y', 0.0),
+            'camera_offset_z': viz_config.get('camera_offset_z', 0.05),
             # Rotate camera to look toward the ground truth loops
-            # These values need tuning based on actual setup
-            'camera_roll': 0.0,
-            'camera_pitch': 3.1416,    # 180 degrees - flip forward direction
-            'camera_yaw': 0.0,
+            'camera_roll': viz_config.get('camera_roll', 0.0),
+            'camera_pitch': viz_config.get('camera_pitch', 3.1416),
+            'camera_yaw': viz_config.get('camera_yaw', 0.0),
         }],
         condition=IfCondition(
             PythonExpression([
@@ -506,13 +561,13 @@ def generate_launch_description():
         name='side_arm_joint_state_publisher',
         namespace='side_arm',
         parameters=[{
-            'servo_scale': 0.001,
-            'publish_rate': 50.0,
+            'servo_scale': joint_pub_config.get('servo_scale', 0.001),
+            'publish_rate': joint_pub_config.get('publish_rate', 50.0),
             'test_mode': side_arm_simulation_enabled,
-            'test_x': 0.15,
-            'test_y': 0.10,
-            'test_z': 0.05,
-            'test_servo': 0.0,
+            'test_x': joint_pub_config.get('test_x', 0.15),
+            'test_y': joint_pub_config.get('test_y', 0.10),
+            'test_z': joint_pub_config.get('test_z', 0.05),
+            'test_servo': joint_pub_config.get('test_servo', 0.0),
         }],
         output='screen',
         condition=IfCondition(
@@ -568,16 +623,20 @@ def generate_launch_description():
         )
     )
 
-    # Side arm origin TF
+    # Side arm origin TF (position from config)
     side_arm_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='side_arm_static_tf',
         arguments=[
-            '--x', '0.37', '--y', '0.41', '--z', '-0.26',
-            '--roll', '1.5708', '--pitch', '0', '--yaw', '3.1416',
-            '--frame-id', 'world', # wx200/base_link
-            '--child-frame-id', 'side_arm_origin'
+            '--x', str(tf_config.get('x', 0.37)),
+            '--y', str(tf_config.get('y', 0.41)),
+            '--z', str(tf_config.get('z', -0.26)),
+            '--roll', str(tf_config.get('roll', 1.5708)),
+            '--pitch', str(tf_config.get('pitch', 0)),
+            '--yaw', str(tf_config.get('yaw', 3.1416)),
+            '--frame-id', tf_config.get('parent_frame', 'world'),
+            '--child-frame-id', tf_config.get('child_frame', 'side_arm_origin')
         ],
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
@@ -725,6 +784,7 @@ def generate_launch_description():
         enable_side_arm_arg,
         side_arm_sim_arg,
         side_arm_test_mode_arg,
+        arm_config_arg,
         serial_port_arg,
         use_joint_sliders_arg,
         enable_visualization_arg,
