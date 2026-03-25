@@ -56,13 +56,14 @@ workspace:
 # =============================================================================
 # HOOK POSITIONING
 # =============================================================================
-# TODO: Calibrate hook offsets for V2 arm
+# TODO: Calibrate hook offsets for V2 arm using:
+#   ros2 run tf2_ros tf2_echo side_arm_origin hook_link
 interface_node:
-  hook_offset_x_mm: 350.0  # TODO: Calibrate
-  hook_offset_y_mm: 180.0  # TODO: Calibrate
-  hook_offset_z_mm: -10.0  # TODO: Calibrate
+  hook_offset_x_mm: 10.0   # TODO: Calibrate for V2
+  hook_offset_y_mm: 210.0  # TODO: Calibrate for V2
+  hook_offset_z_mm: -156.0 # TODO: Calibrate for V2
 
-  invert_x: true
+  invert_x: false
   invert_y: false
   invert_z: false
 
