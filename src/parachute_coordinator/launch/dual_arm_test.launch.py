@@ -48,7 +48,7 @@ Move side arm in simulation:
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition, UnlessCondition
@@ -64,25 +64,31 @@ def generate_launch_description():
         'dual_arm.rviz'
     )
 
-    # Load frame URDF
-    frame_urdf_path = os.path.join(
-        get_package_share_directory('main_arm_control'),
-        'urdf',
-        'framemodel.urdf'
-    )
+    # Load frame URDF (optional — only needed when main arm is enabled)
+    frame_urdf = ''
+    try:
+        frame_urdf_path = os.path.join(
+            get_package_share_directory('main_arm_control'),
+            'urdf',
+            'framemodel.urdf'
+        )
+        with open(frame_urdf_path, 'r') as f:
+            frame_urdf = f.read()
+    except Exception:
+        pass  # main_arm_control not built — main arm nodes will be skipped
 
-    with open(frame_urdf_path, 'r') as f:
-        frame_urdf = f.read()
-
-    # Load side arm URDF
-    side_arm_urdf_path = os.path.join(
-        get_package_share_directory('side_arm_control'),
-        'urdf',
-        'side_arm.urdf'
-    )
-
-    with open(side_arm_urdf_path, 'r') as f:
-        side_arm_urdf = f.read()
+    # Load side arm URDF (optional — only needed when side arm is enabled)
+    side_arm_urdf = ''
+    try:
+        side_arm_urdf_path = os.path.join(
+            get_package_share_directory('side_arm_control'),
+            'urdf',
+            'side_arm.urdf'
+        )
+        with open(side_arm_urdf_path, 'r') as f:
+            side_arm_urdf = f.read()
+    except Exception:
+        pass  # side_arm_control not built — side arm nodes will be skipped
 
     # ==================== LAUNCH ARGUMENTS ====================
 
@@ -176,6 +182,37 @@ def generate_launch_description():
         'enable_loop_visualization',
         default_value='true',
         description='Enable loop detection visualization in RViz'
+    )
+
+    # Top camera loop state arguments
+    enable_top_cam_arg = DeclareLaunchArgument(
+        'enable_top_cam',
+        default_value='false',
+        description='Enable top camera YOLO loop state detection'
+    )
+
+    top_cam_device_arg = DeclareLaunchArgument(
+        'top_cam_device',
+        default_value='/dev/video0',
+        description='Top camera device path'
+    )
+
+    top_cam_det_weights_arg = DeclareLaunchArgument(
+        'top_cam_det_weights',
+        default_value=os.path.join(
+            os.path.expanduser('~'),
+            'MQP_ws/MQP-Parachute-Packing-Automation-and-Inspection/src/top_cam_yolo/runs/detect/runs/detect/yolo26m_holes_all_aug/weights/best.pt'
+        ),
+        description='Top camera YOLO detection weights'
+    )
+
+    top_cam_cls_weights_arg = DeclareLaunchArgument(
+        'top_cam_cls_weights',
+        default_value=os.path.join(
+            os.path.expanduser('~'),
+            'MQP_ws/MQP-Parachute-Packing-Automation-and-Inspection/src/top_cam_yolo/runs/classify/runs/classify/yolo26m_cls_custom_aug/weights/best.pt'
+        ),
+        description='Top camera YOLO classification weights'
     )
 
     # ==================== MAIN ARM NODES ====================
@@ -584,6 +621,33 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('vision_test_mode'))
     )
 
+    # ==================== TOP CAMERA LOOP STATE ====================
+
+    # Ensure user site-packages are visible for ultralytics
+    _user_site = os.path.expanduser("~/.local/lib/python3.12/site-packages")
+    _extra_path = _user_site if os.path.isdir(_user_site) else ""
+    _existing_pythonpath = os.environ.get("PYTHONPATH", "")
+    _merged_pythonpath = f"{_extra_path}:{_existing_pythonpath}" if _extra_path else _existing_pythonpath
+
+    top_cam_env = SetEnvironmentVariable("PYTHONPATH", _merged_pythonpath)
+
+    top_cam_loop_state = Node(
+        package='top_cam_loop_state',
+        executable='loop_state_node',
+        name='top_cam_loop_state',
+        output='screen',
+        parameters=[{
+            'camera_index': LaunchConfiguration('top_cam_device'),
+            'det_weights': LaunchConfiguration('top_cam_det_weights'),
+            'cls_weights': LaunchConfiguration('top_cam_cls_weights'),
+            'conf_threshold': 0.35,
+            'iou_threshold': 0.45,
+            'frame_rate': 30.0,
+            'display': True,
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_top_cam'))
+    )
+
     # ==================== LAUNCH DESCRIPTION ====================
 
     return LaunchDescription([
@@ -602,6 +666,11 @@ def generate_launch_description():
         use_rviz_arg,
         vision_test_mode_arg,
         enable_loop_visualization_arg,
+        enable_top_cam_arg,
+        top_cam_device_arg,
+        top_cam_det_weights_arg,
+        top_cam_cls_weights_arg,
+        top_cam_env,
         joy_node,
 
         # Main arm nodes
@@ -635,4 +704,7 @@ def generate_launch_description():
         loop_ground_truth,
         loop_visualizer,
         detection_simulator,
+
+        # Top camera loop state
+        top_cam_loop_state,
     ])
