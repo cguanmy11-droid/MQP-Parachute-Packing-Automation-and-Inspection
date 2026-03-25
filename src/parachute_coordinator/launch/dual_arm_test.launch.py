@@ -67,7 +67,8 @@ def load_side_arm_config(config_file: str) -> dict:
         return yaml.safe_load(f)
 
 
-def generate_launch_description():
+def launch_setup(context, *args, **kwargs):
+    """Setup function called at launch time when arguments are resolved."""
     # Load custom RViz config
     rviz_config_path = os.path.join(
         get_package_share_directory('parachute_coordinator'),
@@ -88,17 +89,18 @@ def generate_launch_description():
     # =============================================================================
     # SIDE ARM CONFIGURATION
     # =============================================================================
-    # Default config file path - can be overridden via arm_config launch argument
-    side_arm_config_dir = os.path.join(
-        get_package_share_directory('side_arm_control'),
-        'config'
-    )
-    default_arm_config = os.path.join(side_arm_config_dir, 'side_arm_v1.yaml')
+    # Get the arm_config argument value (resolved at launch time)
+    arm_config_file = LaunchConfiguration('arm_config').perform(context)
 
-    # Load side arm configuration from YAML
-    # Note: This is loaded at launch file parse time. For dynamic switching,
-    # the config file path can be changed via the arm_config argument.
-    arm_config_file = os.environ.get('SIDE_ARM_CONFIG', default_arm_config)
+    # If it's just a filename (not a full path), look in the config directory
+    if not os.path.isabs(arm_config_file) and not os.path.exists(arm_config_file):
+        side_arm_config_dir = os.path.join(
+            get_package_share_directory('side_arm_control'),
+            'config'
+        )
+        arm_config_file = os.path.join(side_arm_config_dir, arm_config_file)
+
+    print(f"[dual_arm_test] Loading side arm config: {arm_config_file}")
     side_arm_config = load_side_arm_config(arm_config_file)
 
     # Extract URDF/xacro filename and frame prefix from config
@@ -132,140 +134,6 @@ def generate_launch_description():
     viz_config = side_arm_config.get('visualizer', {})
     joint_pub_config = side_arm_config.get('joint_state_publisher', {})
     tf_config = side_arm_config.get('tf_transform', {})
-
-    # ==================== LAUNCH ARGUMENTS ====================
-
-    # Main arm arguments
-    enable_main_arm_arg = DeclareLaunchArgument(
-        'enable_main_arm',
-        default_value='true',
-        description='Enable main arm (WX200) control'
-    )
-
-    main_arm_sim_arg = DeclareLaunchArgument(
-        'main_arm_sim',
-        default_value='false',
-        description='Run main arm in simulation mode'
-    )
-
-    enable_teleop_arg = DeclareLaunchArgument(
-        'enable_teleop',
-        default_value='false',
-        description='Enable Xbox controller teleoperation for main arm'
-    )
-
-    controller_type_arg = DeclareLaunchArgument(
-        'controller_type',
-        default_value='xboxone',
-        description='Controller type (xboxone, ps4, etc.)'
-    )
-
-    robot_model_arg = DeclareLaunchArgument(
-        'robot_model',
-        default_value='wx200',
-        description='Main arm robot model'
-    )
-
-    motor_monitor_arg = DeclareLaunchArgument(
-        'enable_monitor',
-        default_value='false',
-        description='Enable Motor Monitoring for Main Arm'
-    )
-
-    # Side arm arguments
-    enable_side_arm_arg = DeclareLaunchArgument(
-        'enable_side_arm',
-        default_value='true',
-        description='Enable side arm control'
-    )
-
-    side_arm_sim_arg = DeclareLaunchArgument(
-        'side_arm_sim',
-        default_value='false',
-        description='Run side arm in pure simulation mode (no serial bridge)'
-    )
-
-    side_arm_test_mode_arg = DeclareLaunchArgument(
-        'side_arm_test_mode',
-        default_value='false',
-        description='Run side arm in test mode (simulated movements alongside hardware)'
-    )
-
-    # Arm configuration file argument
-    arm_config_arg = DeclareLaunchArgument(
-        'arm_config',
-        default_value=arm_config_file,
-        description='Path to side arm YAML config file (or set SIDE_ARM_CONFIG env var)'
-    )
-
-    # Use environment variable, then config file, then fall back to default
-    # Priority: SIDE_ARM_PORT env var > config file > /dev/ttyUSB0
-    side_arm_port_default = os.environ.get(
-        'SIDE_ARM_PORT',
-        serial_config.get('serial_port', '/dev/ttyUSB0')
-    )
-
-    serial_port_arg = DeclareLaunchArgument(
-        'serial_port',
-        default_value=side_arm_port_default,
-        description='Serial port for side arm ESP32 connection (or set SIDE_ARM_PORT env var)'
-    )
-
-    use_joint_sliders_arg = DeclareLaunchArgument(
-        'use_joint_sliders',
-        default_value='false',
-        description='Use joint_state_publisher_gui for manual side arm control via sliders'
-    )
-
-    # Visualization arguments
-    enable_visualization_arg = DeclareLaunchArgument(
-        'enable_visualization',
-        default_value='true',
-        description='Enable side arm RViz visualization marker'
-    )
-
-    use_rviz_arg = DeclareLaunchArgument(
-        'use_rviz',
-        default_value='true',
-        description='Launch RViz for main arm visualization'
-    )
-
-    # Vision/perception arguments
-    vision_test_mode_arg = DeclareLaunchArgument(
-        'vision_test_mode',
-        default_value='false',
-        description='Use simulated loop detections instead of camera'
-    )
-
-    use_real_camera_arg = DeclareLaunchArgument(
-        'use_real_camera',
-        default_value='false',
-        description='Use real USB camera with YOLO detection'
-    )
-
-    camera_index_arg = DeclareLaunchArgument(
-        'camera_index',
-        default_value='4',
-        description='USB camera index for YOLO detector'
-    )
-
-    camera_display_arg = DeclareLaunchArgument(
-        'camera_display',
-        default_value='true',
-        description='Show YOLO detection window'
-    )
-
-    assumed_depth_arg = DeclareLaunchArgument(
-        'assumed_depth',
-        default_value='0.22',
-        description='Assumed depth from camera to loop plane (meters)'
-    )
-
-    enable_loop_visualization_arg = DeclareLaunchArgument(
-        'enable_loop_visualization',
-        default_value='true',
-        description='Enable loop detection visualization in RViz'
-    )
 
     # ==================== MAIN ARM NODES ====================
 
@@ -789,30 +657,10 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('use_real_camera'))
     )
 
-    # ==================== LAUNCH DESCRIPTION ====================
+    # ==================== RETURN NODES ====================
+    # Return list of nodes (arguments are declared in generate_launch_description)
 
-    return LaunchDescription([
-        # Arguments
-        enable_main_arm_arg,
-        main_arm_sim_arg,
-        enable_teleop_arg,
-        controller_type_arg,
-        robot_model_arg,
-        motor_monitor_arg,
-        enable_side_arm_arg,
-        side_arm_sim_arg,
-        side_arm_test_mode_arg,
-        arm_config_arg,
-        serial_port_arg,
-        use_joint_sliders_arg,
-        enable_visualization_arg,
-        use_rviz_arg,
-        vision_test_mode_arg,
-        use_real_camera_arg,
-        camera_index_arg,
-        camera_display_arg,
-        assumed_depth_arg,
-        enable_loop_visualization_arg,
+    return [
         joy_node,
 
         # Main arm nodes
@@ -853,4 +701,133 @@ def generate_launch_description():
         # Real camera nodes
         yolo_detector,
         camera_to_3d,
+    ]
+
+
+def generate_launch_description():
+    """Generate launch description with arguments and OpaqueFunction for config loading."""
+
+    # Default config paths
+    side_arm_config_dir = os.path.join(
+        get_package_share_directory('side_arm_control'),
+        'config'
+    )
+    default_arm_config = os.environ.get(
+        'SIDE_ARM_CONFIG',
+        os.path.join(side_arm_config_dir, 'side_arm_v1.yaml')
+    )
+
+    return LaunchDescription([
+        # ==================== LAUNCH ARGUMENTS ====================
+
+        # Main arm arguments
+        DeclareLaunchArgument(
+            'enable_main_arm',
+            default_value='true',
+            description='Enable main arm (WX200) control'
+        ),
+        DeclareLaunchArgument(
+            'main_arm_sim',
+            default_value='false',
+            description='Run main arm in simulation mode'
+        ),
+        DeclareLaunchArgument(
+            'enable_teleop',
+            default_value='false',
+            description='Enable Xbox controller teleoperation for main arm'
+        ),
+        DeclareLaunchArgument(
+            'controller_type',
+            default_value='xboxone',
+            description='Controller type (xboxone, ps4, etc.)'
+        ),
+        DeclareLaunchArgument(
+            'robot_model',
+            default_value='wx200',
+            description='Main arm robot model'
+        ),
+        DeclareLaunchArgument(
+            'enable_monitor',
+            default_value='false',
+            description='Enable Motor Monitoring for Main Arm'
+        ),
+
+        # Side arm arguments
+        DeclareLaunchArgument(
+            'enable_side_arm',
+            default_value='true',
+            description='Enable side arm control'
+        ),
+        DeclareLaunchArgument(
+            'side_arm_sim',
+            default_value='false',
+            description='Run side arm in pure simulation mode (no serial bridge)'
+        ),
+        DeclareLaunchArgument(
+            'side_arm_test_mode',
+            default_value='false',
+            description='Run side arm in test mode (simulated movements alongside hardware)'
+        ),
+        DeclareLaunchArgument(
+            'arm_config',
+            default_value=default_arm_config,
+            description='Path or filename of side arm YAML config (e.g., side_arm_v2.yaml)'
+        ),
+        DeclareLaunchArgument(
+            'serial_port',
+            default_value=os.environ.get('SIDE_ARM_PORT', '/dev/ttyUSB0'),
+            description='Serial port for side arm ESP32 connection (or set SIDE_ARM_PORT env var)'
+        ),
+        DeclareLaunchArgument(
+            'use_joint_sliders',
+            default_value='false',
+            description='Use joint_state_publisher_gui for manual side arm control via sliders'
+        ),
+
+        # Visualization arguments
+        DeclareLaunchArgument(
+            'enable_visualization',
+            default_value='true',
+            description='Enable side arm RViz visualization marker'
+        ),
+        DeclareLaunchArgument(
+            'use_rviz',
+            default_value='true',
+            description='Launch RViz for main arm visualization'
+        ),
+
+        # Vision/perception arguments
+        DeclareLaunchArgument(
+            'vision_test_mode',
+            default_value='false',
+            description='Use simulated loop detections instead of camera'
+        ),
+        DeclareLaunchArgument(
+            'use_real_camera',
+            default_value='false',
+            description='Use real USB camera with YOLO detection'
+        ),
+        DeclareLaunchArgument(
+            'camera_index',
+            default_value='4',
+            description='USB camera index for YOLO detector'
+        ),
+        DeclareLaunchArgument(
+            'camera_display',
+            default_value='true',
+            description='Show YOLO detection window'
+        ),
+        DeclareLaunchArgument(
+            'assumed_depth',
+            default_value='0.22',
+            description='Assumed depth from camera to loop plane (meters)'
+        ),
+        DeclareLaunchArgument(
+            'enable_loop_visualization',
+            default_value='true',
+            description='Enable loop detection visualization in RViz'
+        ),
+
+        # Use OpaqueFunction to load config at launch time
+        OpaqueFunction(function=launch_setup),
     ])
