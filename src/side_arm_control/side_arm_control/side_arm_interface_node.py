@@ -153,29 +153,46 @@ class SideArmInterfaceNode(Node):
             f'Invert: X={self.invert_x}, Y={self.invert_y}, Z={self.invert_z}'
         )
 
-    def _world_to_arm_coords(self, world_x_mm: float, world_y_mm: float, world_z_mm: float):
+    def _target_to_carriage_coords(self, target_x_mm: float, target_y_mm: float, target_z_mm: float):
         """
-        Convert world-frame position (in mm) to side arm carriage coordinates.
+        Convert target position (in side_arm_origin frame, mm) to arm carriage coordinates.
 
-        For inverted axes: arm_pos = hook_offset - world_pos
-        For normal axes:   arm_pos = world_pos - hook_offset
+        The hook_offset values represent where the hook tip is (in side_arm_origin frame)
+        when the arm carriage is at position (0, 0, 0).
+
+        To reach a target position with the hook:
+        - For inverted axes: carriage_pos = hook_offset - target_pos
+        - For normal axes:   carriage_pos = target_pos - hook_offset
+
+        Args:
+            target_x_mm: Target X position in side_arm_origin frame (mm)
+            target_y_mm: Target Y position in side_arm_origin frame (mm)
+            target_z_mm: Target Z position in side_arm_origin frame (mm)
+
+        Returns:
+            (carriage_x, carriage_y, carriage_z): Required carriage position (mm)
         """
         if self.invert_x:
-            arm_x = self.hook_offset_x - world_x_mm
+            carriage_x = self.hook_offset_x - target_x_mm
         else:
-            arm_x = world_x_mm - self.hook_offset_x
+            carriage_x = target_x_mm - self.hook_offset_x
 
         if self.invert_y:
-            arm_y = self.hook_offset_y - world_y_mm
+            carriage_y = self.hook_offset_y - target_y_mm
         else:
-            arm_y = world_y_mm - self.hook_offset_y
+            carriage_y = target_y_mm - self.hook_offset_y
 
         if self.invert_z:
-            arm_z = self.hook_offset_z - world_z_mm
+            carriage_z = self.hook_offset_z - target_z_mm
         else:
-            arm_z = world_z_mm - self.hook_offset_z
+            carriage_z = target_z_mm - self.hook_offset_z
 
-        return arm_x, arm_y, arm_z
+        return carriage_x, carriage_y, carriage_z
+
+    # Keep old name as alias for compatibility
+    def _world_to_arm_coords(self, world_x_mm: float, world_y_mm: float, world_z_mm: float):
+        """Deprecated: Use _target_to_carriage_coords instead."""
+        return self._target_to_carriage_coords(world_x_mm, world_y_mm, world_z_mm)
 
     def _state_callback(self, msg: SideArmState):
         """Track current position from coordinate node."""
@@ -462,22 +479,53 @@ class SideArmInterfaceNode(Node):
                 rclpy.time.Time(),
                 timeout=rclpy.duration.Duration(seconds=1.0)
             )
+
+            # Log the transform for debugging
+            t = transform.transform.translation
+            r = transform.transform.rotation
+            self.get_logger().info(
+                f'TF {source_frame} -> {self.side_arm_frame}: '
+                f'trans=({t.x:.3f}, {t.y:.3f}, {t.z:.3f}), '
+                f'rot=({r.x:.3f}, {r.y:.3f}, {r.z:.3f}, {r.w:.3f})'
+            )
+
             transformed_pose = tf2_geometry_msgs.do_transform_pose_stamped(loop_pose, transform)
             transformed_pos = transformed_pose.pose.position
 
-            # Convert from meters to mm and then to arm coordinates
-            world_x_mm = transformed_pos.x * 1000.0
-            world_y_mm = transformed_pos.y * 1000.0
-            world_z_mm = transformed_pos.z * 1000.0
+            # Position in side_arm_origin frame (after TF transform)
+            # NOTE: These are in side_arm_origin frame, not world frame!
+            sa_frame_x_mm = transformed_pos.x * 1000.0
+            sa_frame_y_mm = transformed_pos.y * 1000.0
+            sa_frame_z_mm = transformed_pos.z * 1000.0
 
+            self.get_logger().info(
+                f'Loop in world: ({loop_pos.x*1000:.1f}, {loop_pos.y*1000:.1f}, {loop_pos.z*1000:.1f}) mm'
+            )
+            self.get_logger().info(
+                f'Loop in {self.side_arm_frame}: ({sa_frame_x_mm:.1f}, {sa_frame_y_mm:.1f}, {sa_frame_z_mm:.1f}) mm'
+            )
+
+            # Convert side_arm_origin position to arm carriage coordinates
+            # The hook_offset values represent hook position when carriage is at (0,0,0)
             target_x_mm, target_y_mm, target_z_mm = self._world_to_arm_coords(
-                world_x_mm, world_y_mm, world_z_mm
+                sa_frame_x_mm, sa_frame_y_mm, sa_frame_z_mm
             )
 
             self.get_logger().info(
-                f'World (mm): ({world_x_mm:.1f}, {world_y_mm:.1f}, {world_z_mm:.1f}) -> '
-                f'Arm: ({target_x_mm:.1f}, {target_y_mm:.1f}, {target_z_mm:.1f}) mm'
+                f'Hook offsets: ({self.hook_offset_x:.1f}, {self.hook_offset_y:.1f}, {self.hook_offset_z:.1f}) mm, '
+                f'Invert: X={self.invert_x}, Y={self.invert_y}, Z={self.invert_z}'
             )
+            self.get_logger().info(
+                f'Target arm carriage: ({target_x_mm:.1f}, {target_y_mm:.1f}, {target_z_mm:.1f}) mm'
+            )
+
+            # Sanity check: warn if carriage position seems out of bounds
+            if target_x_mm < 0 or target_x_mm > 300:
+                self.get_logger().warn(f'Target X ({target_x_mm:.1f}mm) outside workspace [0, 300]!')
+            if target_y_mm < 0 or target_y_mm > 200:
+                self.get_logger().warn(f'Target Y ({target_y_mm:.1f}mm) outside workspace [0, 200]!')
+            if target_z_mm < 0 or target_z_mm > 150:
+                self.get_logger().warn(f'Target Z ({target_z_mm:.1f}mm) outside workspace [0, 150]!')
 
         except TransformException as e:
             self.get_logger().error(f'TF transform failed: {e}')
