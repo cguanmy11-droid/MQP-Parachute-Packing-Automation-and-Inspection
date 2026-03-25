@@ -72,9 +72,11 @@ interface_node:
   hook_offset_y_mm: 210.0  # TODO: Calibrate for V2
   hook_offset_z_mm: -156.0 # TODO: Calibrate for V2
 
-  invert_x: false
-  invert_y: false
-  invert_z: false
+  # Motor direction inversions - V2 is rotated 180° from V1
+  # Adjust these based on observed motion direction
+  invert_x: true   # X motor direction flipped due to 180° rotation
+  invert_y: false  # Y should be same (vertical)
+  invert_z: true   # Z motor direction flipped due to 180° rotation
 
   approach_offset_z: 50.0
   insert_depth_z: 30.0
@@ -126,13 +128,13 @@ joint_state_publisher:
 # =============================================================================
 # TF TRANSFORM
 # =============================================================================
-# TODO: Set V2 arm mounting position
+# V2 arm mounted on opposite side (negative Y), facing toward +Y
 tf_transform:
-  x: 0.37    # TODO: Set V2 position
-  y: 0.41
+  x: 0.37
+  y: -0.41   # Opposite side (negative Y)
   z: -0.26
   roll: 1.5708
   pitch: 0.0
-  yaw: 3.1416
+  yaw: 0.0   # Rotated 180° from V1 - hook points toward +Y
   parent_frame: "world"
   child_frame: "side_arm_origin"

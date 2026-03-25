@@ -146,12 +146,12 @@
     </visual>
   </link>
 
-  <!-- Prismatic joint for X movement (0 to 0.3m) - mirrored axis -->
+  <!-- Prismatic joint for X movement (0 to 0.3m) -->
   <joint name="${prefix}joint_x" type="prismatic">
     <parent link="${prefix}x_rail_link"/>
     <child link="${prefix}x_carriage_link"/>
     <origin xyz="0 0 0" rpy="0 0 0"/>
-    <axis xyz="1 0 0"/>  <!-- Positive X for mirrored side -->
+    <axis xyz="-1 0 0"/>  <!-- Same as V1 - config inversions handle mirroring -->
     <limit lower="0.0" upper="0.3" effort="10" velocity="0.1"/>
   </joint>
 
