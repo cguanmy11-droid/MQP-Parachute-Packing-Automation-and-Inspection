@@ -284,11 +284,12 @@ def launch_setup(context, *args, **kwargs):
         package='side_arm_motor_control_bridge',
         executable='serial_bridge',
         name='side_arm_serial_bridge',
+        namespace=arm_namespace,  # Use namespace from config
         parameters=[{
             'serial_port': LaunchConfiguration('serial_port'),
             'baud_rate': serial_config.get('baud_rate', 115200),
-            'command_topic': '/side_arm/command',
-            'state_topic': '/side_arm/state',
+            'command_topic': 'command',  # Relative topic for namespace support
+            'state_topic': 'state',      # Relative topic for namespace support
             'state_request_hz': serial_config.get('state_request_hz', 10.0),
             'auto_request_state': serial_config.get('auto_request_state', True),
         }],
@@ -313,6 +314,7 @@ def launch_setup(context, *args, **kwargs):
         package='side_arm_control',
         executable='coordinate_node',
         name='side_arm_coordinate_node',
+        namespace=arm_namespace,  # Use namespace from config
         parameters=[{
             'simulation_mode': side_arm_simulation_enabled,  # Enable simulation when sim or test mode
             'sim_speed_mm_per_sec': coord_config.get('sim_speed_mm_per_sec', 50.0),
@@ -338,6 +340,7 @@ def launch_setup(context, *args, **kwargs):
         package='side_arm_control',
         executable='side_arm_interface_node',
         name='side_arm_interface_node',
+        namespace=arm_namespace,  # Use namespace from config
         parameters=[{
             'test_mode': side_arm_simulation_enabled,
             'side_arm_frame': side_arm_frame_name,  # TF frame name with prefix
@@ -366,6 +369,7 @@ def launch_setup(context, *args, **kwargs):
         package='side_arm_control',
         executable='side_arm_visualizer',
         name='side_arm_visualizer',
+        namespace=arm_namespace,  # Use namespace from config
         output='screen',
         parameters=[{
             # Hook mesh orientation (from config)
