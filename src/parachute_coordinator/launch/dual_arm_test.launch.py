@@ -184,6 +184,31 @@ def generate_launch_description():
         description='Enable loop detection visualization in RViz'
     )
 
+    # Side camera perception arguments
+    enable_side_cam_arg = DeclareLaunchArgument(
+        'enable_side_cam',
+        default_value='false',
+        description='Enable side camera YOLO detection pipeline'
+    )
+
+    side_cam_device_arg = DeclareLaunchArgument(
+        'side_cam_device',
+        default_value='0',
+        description='Side camera device index'
+    )
+
+    side_cam_conf_arg = DeclareLaunchArgument(
+        'side_cam_conf',
+        default_value='0.5',
+        description='Side camera YOLO confidence threshold'
+    )
+
+    side_cam_depth_arg = DeclareLaunchArgument(
+        'side_cam_depth',
+        default_value='0.22',
+        description='Assumed depth from side camera to loop plane (meters)'
+    )
+
     # Top camera loop state arguments
     enable_top_cam_arg = DeclareLaunchArgument(
         'enable_top_cam',
@@ -193,7 +218,7 @@ def generate_launch_description():
 
     top_cam_device_arg = DeclareLaunchArgument(
         'top_cam_device',
-        default_value='/dev/video0',
+        default_value='/dev/video4',
         description='Top camera device path'
     )
 
@@ -621,6 +646,43 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('vision_test_mode'))
     )
 
+    # ==================== SIDE CAMERA PERCEPTION ====================
+
+    side_cam_yolo = Node(
+        package='yolo_detect_ros',
+        executable='yolo_detector',
+        name='yolo_detector',
+        output='screen',
+        parameters=[{
+            'camera_index': LaunchConfiguration('side_cam_device'),
+            'conf_threshold': LaunchConfiguration('side_cam_conf'),
+            'iou_threshold': 0.5,
+            'frame_rate': 30.0,
+            'camera_frame_id': 'camera_frame',
+            'centers_topic': '/yolo/centers',
+            'display': True,
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_side_cam'))
+    )
+
+    side_cam_to_3d = Node(
+        package='parachute_perception',
+        executable='camera_to_3d_node',
+        name='camera_to_3d_node',
+        output='screen',
+        parameters=[{
+            'image_width': 640,
+            'image_height': 480,
+            'camera_fov_horizontal': 80.0,
+            'assumed_depth': LaunchConfiguration('side_cam_depth'),
+            'input_topic': '/yolo/centers',
+            'output_topic': '/detected_loops',
+            'camera_frame_id': 'camera_frame',
+            'base_confidence': 0.85,
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_side_cam'))
+    )
+
     # ==================== TOP CAMERA LOOP STATE ====================
 
     # Ensure user site-packages are visible for ultralytics
@@ -666,6 +728,10 @@ def generate_launch_description():
         use_rviz_arg,
         vision_test_mode_arg,
         enable_loop_visualization_arg,
+        enable_side_cam_arg,
+        side_cam_device_arg,
+        side_cam_conf_arg,
+        side_cam_depth_arg,
         enable_top_cam_arg,
         top_cam_device_arg,
         top_cam_det_weights_arg,
@@ -704,6 +770,10 @@ def generate_launch_description():
         loop_ground_truth,
         loop_visualizer,
         detection_simulator,
+
+        # Side camera perception
+        side_cam_yolo,
+        side_cam_to_3d,
 
         # Top camera loop state
         top_cam_loop_state,

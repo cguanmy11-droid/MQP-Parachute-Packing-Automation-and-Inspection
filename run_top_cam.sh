@@ -9,4 +9,4 @@ source /home/zheren/MQP_ws/install/setup.bash
 ros2 launch top_cam_loop_state top_cam_loop_state.launch.py \
     det_weights:=$DET \
     cls_weights:=$CLS \
-    camera_index:=/dev/video0
+    camera_index:=/dev/video4
