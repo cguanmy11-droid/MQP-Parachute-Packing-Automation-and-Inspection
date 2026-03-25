@@ -14,8 +14,17 @@ side_arm:
   arm_id: "v1"
   description: "Side Arm Version 1 - Original gantry configuration"
 
-  # URDF file to use (relative to side_arm_control/urdf/)
-  urdf_file: "side_arm.urdf"
+  # URDF/Xacro file to use (relative to side_arm_control/urdf/)
+  urdf_file: "side_arm.urdf.xacro"
+
+  # Frame prefix for TF frames and joint names (for multi-arm setups)
+  # Examples: "" (no prefix), "left_", "right_"
+  # With prefix="left_", frames become: left_side_arm_origin, left_hook_link, etc.
+  frame_prefix: ""
+
+  # Namespace for topics/services (for multi-arm setups)
+  # Examples: "side_arm", "side_arm_left", "side_arm_right"
+  namespace: "side_arm"
 
 # =============================================================================
 # HARDWARE COMMUNICATION
@@ -68,6 +77,10 @@ workspace:
 # when the arm carriage is at position (0, 0, 0).
 # Calibrated from: ros2 run tf2_ros tf2_echo side_arm_origin hook_link
 interface_node:
+  # TF frame name for this arm (must match prefix + "side_arm_origin")
+  # With frame_prefix="left_", this becomes "left_side_arm_origin"
+  side_arm_frame: "side_arm_origin"
+
   # Hook offset from origin when homed (mm)
   # Values from TF when arm is homed: (0.010, 0.210, -0.156) meters
   hook_offset_x_mm: 10.0

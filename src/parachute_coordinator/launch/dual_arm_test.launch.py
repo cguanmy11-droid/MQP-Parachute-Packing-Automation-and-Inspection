@@ -101,16 +101,28 @@ def generate_launch_description():
     arm_config_file = os.environ.get('SIDE_ARM_CONFIG', default_arm_config)
     side_arm_config = load_side_arm_config(arm_config_file)
 
-    # Extract URDF filename from config
-    urdf_filename = side_arm_config.get('side_arm', {}).get('urdf_file', 'side_arm.urdf')
+    # Extract URDF/xacro filename and frame prefix from config
+    side_arm_identity = side_arm_config.get('side_arm', {})
+    urdf_filename = side_arm_identity.get('urdf_file', 'side_arm.urdf.xacro')
+    frame_prefix = side_arm_identity.get('frame_prefix', '')
+    arm_namespace = side_arm_identity.get('namespace', 'side_arm')
+
     side_arm_urdf_path = os.path.join(
         get_package_share_directory('side_arm_control'),
         'urdf',
         urdf_filename
     )
 
-    with open(side_arm_urdf_path, 'r') as f:
-        side_arm_urdf = f.read()
+    # Process xacro with prefix parameter
+    if urdf_filename.endswith('.xacro'):
+        import xacro
+        side_arm_urdf = xacro.process_file(
+            side_arm_urdf_path,
+            mappings={'prefix': frame_prefix}
+        ).toxml()
+    else:
+        with open(side_arm_urdf_path, 'r') as f:
+            side_arm_urdf = f.read()
 
     # Extract config sections for easier access
     serial_config = side_arm_config.get('serial_bridge', {})
@@ -451,18 +463,22 @@ def generate_launch_description():
     )
 
     # Side arm interface node (high-level actions/services)
+    # Construct the frame name with prefix
+    side_arm_frame_name = f"{frame_prefix}side_arm_origin"
+
     side_arm_interface = Node(
         package='side_arm_control',
         executable='side_arm_interface_node',
         name='side_arm_interface_node',
         parameters=[{
             'test_mode': side_arm_simulation_enabled,
+            'side_arm_frame': side_arm_frame_name,  # TF frame name with prefix
             'approach_offset_z': interface_config.get('approach_offset_z', 50.0),
             'insert_depth_z': interface_config.get('insert_depth_z', 30.0),
-            'hook_offset_x_mm': interface_config.get('hook_offset_x_mm', 350.0),
-            'hook_offset_y_mm': interface_config.get('hook_offset_y_mm', 180.0),
-            'hook_offset_z_mm': interface_config.get('hook_offset_z_mm', -10.0),
-            'invert_x': interface_config.get('invert_x', True),
+            'hook_offset_x_mm': interface_config.get('hook_offset_x_mm', 10.0),
+            'hook_offset_y_mm': interface_config.get('hook_offset_y_mm', 210.0),
+            'hook_offset_z_mm': interface_config.get('hook_offset_z_mm', -156.0),
+            'invert_x': interface_config.get('invert_x', False),
             'invert_y': interface_config.get('invert_y', False),
             'invert_z': interface_config.get('invert_z', False),
             'enable_vision_servo': interface_config.get('enable_vision_servo', True),
@@ -526,16 +542,16 @@ def generate_launch_description():
 
     # ==================== SIDE ARM URDF ====================
 
-    # Side arm robot state publisher (publishes URDF to /side_arm/robot_description)
+    # Side arm robot state publisher (publishes URDF to /{namespace}/robot_description)
     side_arm_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
         name='side_arm_robot_state_publisher',
-        namespace='side_arm',
+        namespace=arm_namespace,
         parameters=[{'robot_description': side_arm_urdf}],
         remappings=[
-            ('/side_arm/tf', '/tf'),
-            ('/side_arm/tf_static', '/tf_static'),
+            (f'/{arm_namespace}/tf', '/tf'),
+            (f'/{arm_namespace}/tf_static', '/tf_static'),
         ],
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
@@ -545,7 +561,7 @@ def generate_launch_description():
         package='joint_state_publisher_gui',
         executable='joint_state_publisher_gui',
         name='side_arm_joint_gui',
-        namespace='side_arm',
+        namespace=arm_namespace,
         condition=IfCondition(
             PythonExpression([
                 "'", LaunchConfiguration('enable_side_arm'), "' == 'true' and '",
@@ -559,8 +575,9 @@ def generate_launch_description():
         package='side_arm_control',
         executable='side_arm_joint_state_publisher',
         name='side_arm_joint_state_publisher',
-        namespace='side_arm',
+        namespace=arm_namespace,
         parameters=[{
+            'joint_prefix': frame_prefix,  # Prefix for joint names
             'servo_scale': joint_pub_config.get('servo_scale', 0.001),
             'publish_rate': joint_pub_config.get('publish_rate', 50.0),
             'test_mode': side_arm_simulation_enabled,
@@ -624,6 +641,7 @@ def generate_launch_description():
     )
 
     # Side arm origin TF (position from config)
+    # Uses frame_prefix for the child frame name
     side_arm_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
@@ -636,7 +654,7 @@ def generate_launch_description():
             '--pitch', str(tf_config.get('pitch', 0)),
             '--yaw', str(tf_config.get('yaw', 3.1416)),
             '--frame-id', tf_config.get('parent_frame', 'world'),
-            '--child-frame-id', tf_config.get('child_frame', 'side_arm_origin')
+            '--child-frame-id', side_arm_frame_name  # Uses prefix from config
         ],
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )

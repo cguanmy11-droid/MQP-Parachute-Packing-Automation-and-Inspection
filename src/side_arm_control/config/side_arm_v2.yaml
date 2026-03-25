@@ -10,11 +10,16 @@
 # =============================================================================
 side_arm:
   arm_id: "v2"
-  description: "Side Arm Version 2 - [TODO: Add description]"
+  description: "Side Arm Version 2 - Framed gantry with dual Y-axis steppers"
 
-  # URDF file to use (create side_arm_v2.urdf when ready)
-  # For now, falls back to v1 URDF
-  urdf_file: "side_arm.urdf"  # TODO: Change to "side_arm_v2.urdf"
+  # URDF/Xacro file to use (V2-specific URDF with frame structure)
+  urdf_file: "side_arm_v2.urdf.xacro"
+
+  # Frame prefix for TF frames (for multi-arm setups)
+  frame_prefix: ""  # TODO: Set to "right_" for dual arm setup
+
+  # Namespace for topics/services
+  namespace: "side_arm"  # TODO: Set to "side_arm_right" for dual arm setup
 
 # =============================================================================
 # HARDWARE COMMUNICATION
@@ -33,7 +38,8 @@ serial_bridge:
 coordinate_node:
   # Stepper motor calibration - ADJUST FOR V2 HARDWARE
   steps_per_mm_horizontal: 300.0  # TODO: Calibrate
-  steps_per_mm_vertical: 100.0    # TODO: Calibrate
+  # V2 uses dual steppers for Y-axis - may have different ratio
+  steps_per_mm_vertical: 100.0    # TODO: Calibrate for dual stepper setup
 
   # DC motor calibration
   dc_mm_per_second: 4.0   # TODO: Calibrate
@@ -47,10 +53,10 @@ coordinate_node:
 # =============================================================================
 # WORKSPACE LIMITS
 # =============================================================================
-# TODO: Measure V2 arm travel limits
+# V2 has increased Y range due to dual stepper motors
 workspace:
   max_x_mm: 300.0  # TODO: Verify
-  max_y_mm: 200.0  # TODO: Verify
+  max_y_mm: 350.0  # Increased range with dual steppers
   max_z_mm: 150.0  # TODO: Verify
 
 # =============================================================================
@@ -59,6 +65,9 @@ workspace:
 # TODO: Calibrate hook offsets for V2 arm using:
 #   ros2 run tf2_ros tf2_echo side_arm_origin hook_link
 interface_node:
+  # TF frame name (must match frame_prefix + "side_arm_origin")
+  side_arm_frame: "side_arm_origin"  # TODO: Update if using prefix
+
   hook_offset_x_mm: 10.0   # TODO: Calibrate for V2
   hook_offset_y_mm: 210.0  # TODO: Calibrate for V2
   hook_offset_z_mm: -156.0 # TODO: Calibrate for V2
@@ -110,7 +119,7 @@ joint_state_publisher:
   servo_scale: 0.001
   publish_rate: 50.0
   test_x: 0.15
-  test_y: 0.10
+  test_y: 0.175  # Mid-range for V2's larger Y travel
   test_z: 0.05
   test_servo: 0.0
 
