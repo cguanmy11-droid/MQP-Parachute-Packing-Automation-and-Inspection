@@ -5,7 +5,7 @@
   Version 2 differences from V1:
   - Frame structure around the carriage
   - Dual stepper motors for Y-axis (larger Y range)
-  - Mirrored orientation (opposite side mounting)
+  - Moving crossbar that travels with Y carriage
 
   Axes:
   - X axis: Horizontal movement (belt drive, 0-300mm)
@@ -102,10 +102,27 @@
     <origin xyz="0.35 0 0" rpy="0 0 0"/>
   </joint>
 
-  <!-- Top frame crossbar -->
+  <!-- Bottom frame crossbar (fixed) -->
+  <link name="${prefix}frame_bottom_bar">
+    <visual>
+      <origin xyz="0.20 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.40 0.025 0.025"/>
+      </geometry>
+      <material name="frame_silver"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}frame_left_to_bottom" type="fixed">
+    <parent link="${prefix}frame_left_rail"/>
+    <child link="${prefix}frame_bottom_bar"/>
+    <origin xyz="0 -0.01 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Top frame crossbar (fixed) -->
   <link name="${prefix}frame_top_bar">
     <visual>
-      <origin xyz="0.15 0 0" rpy="0 0 0"/>
+      <origin xyz="0.20 0 0" rpy="0 0 0"/>
       <geometry>
         <box size="0.40 0.025 0.025"/>
       </geometry>
@@ -116,7 +133,42 @@
   <joint name="${prefix}frame_left_to_top" type="fixed">
     <parent link="${prefix}frame_left_rail"/>
     <child link="${prefix}frame_top_bar"/>
-    <origin xyz="0.05 0.375 0" rpy="0 0 0"/>
+    <origin xyz="0 0.375 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ==================== STEPPER MOTORS (at base of frame) ==================== -->
+  <!-- Stepper motor 1 (left side, bottom) -->
+  <link name="${prefix}stepper_left">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.042 0.042 0.04"/>
+      </geometry>
+      <material name="motor_black"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}frame_to_stepper_left" type="fixed">
+    <parent link="${prefix}frame_left_rail"/>
+    <child link="${prefix}stepper_left"/>
+    <origin xyz="0 -0.04 -0.03" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Stepper motor 2 (right side, bottom) -->
+  <link name="${prefix}stepper_right">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.042 0.042 0.04"/>
+      </geometry>
+      <material name="motor_black"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}frame_to_stepper_right" type="fixed">
+    <parent link="${prefix}frame_right_rail"/>
+    <child link="${prefix}stepper_right"/>
+    <origin xyz="0 -0.04 -0.03" rpy="0 0 0"/>
   </joint>
 
   <!-- ==================== X-AXIS (HORIZONTAL) ==================== -->
@@ -156,10 +208,10 @@
   </joint>
 
   <!-- ==================== Y-AXIS (VERTICAL - DUAL STEPPER) ==================== -->
-  <!-- Y rail with dual stepper motor representation -->
+  <!-- Y rail attached to X carriage -->
   <link name="${prefix}y_rail_link">
     <visual>
-      <origin xyz="0 0.1 0" rpy="0 0 0"/>
+      <origin xyz="0 0.175 0" rpy="0 0 0"/>
       <geometry>
         <box size="0.004 0.38 0.02"/>
       </geometry>
@@ -171,40 +223,6 @@
     <parent link="${prefix}x_carriage_link"/>
     <child link="${prefix}y_rail_link"/>
     <origin xyz="0 0.02 0" rpy="0 0 0"/>
-  </joint>
-
-  <!-- Stepper motor 1 (bottom) -->
-  <link name="${prefix}y_stepper_1">
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <box size="0.042 0.042 0.04"/>
-      </geometry>
-      <material name="motor_black"/>
-    </visual>
-  </link>
-
-  <joint name="${prefix}y_rail_to_stepper1" type="fixed">
-    <parent link="${prefix}y_rail_link"/>
-    <child link="${prefix}y_stepper_1"/>
-    <origin xyz="-0.03 -0.02 0" rpy="0 0 0"/>
-  </joint>
-
-  <!-- Stepper motor 2 (top) -->
-  <link name="${prefix}y_stepper_2">
-    <visual>
-      <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry>
-        <box size="0.042 0.042 0.04"/>
-      </geometry>
-      <material name="motor_black"/>
-    </visual>
-  </link>
-
-  <joint name="${prefix}y_rail_to_stepper2" type="fixed">
-    <parent link="${prefix}y_rail_link"/>
-    <child link="${prefix}y_stepper_2"/>
-    <origin xyz="-0.03 0.35 0" rpy="0 0 0"/>
   </joint>
 
   <link name="${prefix}y_carriage_link">
@@ -224,6 +242,24 @@
     <origin xyz="0 0 0" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <limit lower="0.0" upper="0.35" effort="10" velocity="0.05"/>
+  </joint>
+
+  <!-- ==================== MOVING CROSSBAR (travels with Y) ==================== -->
+  <!-- This crossbar moves up/down with the Y carriage -->
+  <link name="${prefix}moving_crossbar">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.38 0.03 0.02"/>
+      </geometry>
+      <material name="frame_silver"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}y_carriage_to_crossbar" type="fixed">
+    <parent link="${prefix}y_carriage_link"/>
+    <child link="${prefix}moving_crossbar"/>
+    <origin xyz="0.14 0 0" rpy="0 0 0"/>
   </joint>
 
   <!-- ==================== Z-AXIS (DEPTH) ==================== -->
