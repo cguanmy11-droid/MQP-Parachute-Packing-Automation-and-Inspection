@@ -7,24 +7,32 @@ Launches the complete parachute packing system:
 - Both side arms (left V1, right V2)
 - Frame model
 - Vision/perception nodes
-- State machine coordinator
+- State machine coordinator (dual arm alternating)
+- Target selector
 
 Usage:
-    # Full system in simulation
-    ros2 launch parachute_coordinator full_system.launch.py sim:=true
+    # Full system in simulation with test loops
+    ros2 launch parachute_coordinator full_system.launch.py sim:=true vision_test:=true
 
     # Full system on hardware
     ros2 launch parachute_coordinator full_system.launch.py
 
     # With vision test mode (simulated loops)
     ros2 launch parachute_coordinator full_system.launch.py sim:=true vision_test:=true
+
+    # Start the stowing sequence (both arms alternate):
+    ros2 topic pub --once /stow/command std_msgs/String "data: start"
+
+    # Pause/resume:
+    ros2 topic pub --once /stow/command std_msgs/String "data: pause"
+    ros2 topic pub --once /stow/command std_msgs/String "data: resume"
 """
 
 import os
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, TimerAction
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition
@@ -219,6 +227,7 @@ def launch_setup(context, *args, **kwargs):
     enable_left = LaunchConfiguration('enable_left').perform(context).lower() == 'true'
     enable_right = LaunchConfiguration('enable_right').perform(context).lower() == 'true'
     vision_test = LaunchConfiguration('vision_test').perform(context).lower() == 'true'
+    enable_coordinator = LaunchConfiguration('enable_coordinator').perform(context).lower() == 'true'
 
     config_dir = os.path.join(
         get_package_share_directory('side_arm_control'),
@@ -401,6 +410,42 @@ def launch_setup(context, *args, **kwargs):
         }],
     ))
 
+    # ==================== TARGET SELECTOR & COORDINATOR ====================
+    if enable_coordinator:
+        # Provides /request_next_target service - delayed to allow TF tree setup
+        nodes.append(TimerAction(
+            period=2.0,
+            actions=[Node(
+                package='parachute_perception',
+                executable='target_selector_node',
+                name='target_selector_node',
+                output='screen',
+                parameters=[{
+                    'use_test_loops': vision_test,
+                    'selection_strategy': 'leftmost',
+                    'stow_proximity_threshold': 0.01,
+                }]
+            )]
+        ))
+
+        # State machine - orchestrates dual arm alternating stow sequence
+        # Delayed start to allow arm systems to initialize
+        nodes.append(TimerAction(
+            period=3.0,
+            actions=[Node(
+                package='parachute_coordinator',
+                executable='packing_coordinator_node',
+                name='packing_coordinator_node',
+                output='screen',
+                parameters=[{
+                    'test_mode': False,
+                    'stow_pattern': 'square_stow',
+                    'action_timeout': 30.0,
+                    'expected_loop_count': 0,
+                }]
+            )]
+        ))
+
     return nodes
 
 
@@ -430,6 +475,11 @@ def generate_launch_description():
             'vision_test',
             default_value='false',
             description='Enable vision test mode (simulated loops)'
+        ),
+        DeclareLaunchArgument(
+            'enable_coordinator',
+            default_value='true',
+            description='Enable state machine coordinator (set false for manual testing)'
         ),
         OpaqueFunction(function=launch_setup),
     ])
