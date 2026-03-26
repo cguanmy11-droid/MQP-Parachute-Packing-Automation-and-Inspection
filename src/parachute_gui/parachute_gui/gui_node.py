@@ -89,10 +89,24 @@ class ROSBridge(QObject):
         self.target_loop_updated.emit(msg.loop_id)
 
     def _on_arm_status(self, msg: HookStatus, arm: str):
+        # Map state constants to readable names
+        state_names = {
+            0: 'IDLE',
+            1: 'MOVING',
+            2: 'INSERTED',
+            3: 'HANDOFF',
+            4: 'STOW_READY',
+            5: 'RETRACTING',
+            6: 'ERROR',
+        }
         status = {
             'arm': arm,
-            'state': msg.state,
-            'angle': msg.current_angle,
+            'state': state_names.get(msg.state, f'UNKNOWN({msg.state})'),
+            'is_inserted': msg.is_inserted,
+            'is_retracted': msg.is_retracted,
+            'x': msg.position.x,
+            'y': msg.position.y,
+            'z': msg.position.z,
         }
         if arm == 'left':
             self.left_arm_status.emit(status)

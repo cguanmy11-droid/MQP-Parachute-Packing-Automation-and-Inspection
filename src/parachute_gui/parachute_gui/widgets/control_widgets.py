@@ -352,9 +352,8 @@ class ArmControlWidget(QWidget):
         """Update arm state display from HookStatus message."""
         arm = status.get('arm', 'left')
         state = status.get('state', '---')
-        angle = status.get('angle', 0.0)
 
         self._arm_status[arm] = status
 
         label = self._left_state_label if arm == 'left' else self._right_state_label
-        label.setText(f'{state} ({angle:.0f}°)')
+        label.setText(state)
