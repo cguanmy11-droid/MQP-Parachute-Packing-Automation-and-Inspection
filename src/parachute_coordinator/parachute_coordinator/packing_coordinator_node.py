@@ -71,11 +71,18 @@ class PackingCoordinatorNode(Node):
         self.declare_parameter('pattern_dir', '')
         self.declare_parameter('action_timeout', 30.0)
         self.declare_parameter('expected_loop_count', 0)  # 0 = skip count verification
+        # Dual arm configuration - set both to True for alternating mode
+        # Set only one to True for single-arm backwards compatibility
+        self.declare_parameter('enable_left_arm', True)
+        self.declare_parameter('enable_right_arm', True)
 
         self.test_mode = self.get_parameter('test_mode').value
         self.current_pattern = self.get_parameter('stow_pattern').value
         self.action_timeout = self.get_parameter('action_timeout').value
         self.expected_loop_count = self.get_parameter('expected_loop_count').value
+        self.enable_left_arm = self.get_parameter('enable_left_arm').value
+        self.enable_right_arm = self.get_parameter('enable_right_arm').value
+        self.dual_arm_mode = self.enable_left_arm and self.enable_right_arm
 
         # ==================== STATE MACHINE ====================
         config_path = os.path.join(
@@ -120,7 +127,14 @@ class PackingCoordinatorNode(Node):
         self._active_goal_handle = None
 
         # Dual arm tracking - alternates between 'left' and 'right'
-        self.current_arm = 'left'  # Start with left arm
+        # Start with whichever arm is enabled (prefer left if both)
+        if self.enable_left_arm:
+            self.current_arm = 'left'
+        elif self.enable_right_arm:
+            self.current_arm = 'right'
+        else:
+            self.get_logger().error('No arms enabled! Set enable_left_arm or enable_right_arm')
+            self.current_arm = 'left'  # Fallback
         self._left_arm_homed = False
         self._right_arm_homed = False
 
@@ -143,30 +157,38 @@ class PackingCoordinatorNode(Node):
             callback_group=self._cb_group
         )
 
-        # Dual arm rotate hook clients
-        self.left_rotate_client = self.create_client(
-            RotateHook, '/side_arm_left/rotate_hook',
-            callback_group=self._cb_group
-        )
-        self.right_rotate_client = self.create_client(
-            RotateHook, '/side_arm_right/rotate_hook',
-            callback_group=self._cb_group
-        )
-        # Legacy alias for compatibility
-        self.rotate_client = self.left_rotate_client
+        # Dual arm rotate hook clients (only create for enabled arms)
+        self.left_rotate_client = None
+        self.right_rotate_client = None
+        if self.enable_left_arm:
+            self.left_rotate_client = self.create_client(
+                RotateHook, '/side_arm_left/rotate_hook',
+                callback_group=self._cb_group
+            )
+        if self.enable_right_arm:
+            self.right_rotate_client = self.create_client(
+                RotateHook, '/side_arm_right/rotate_hook',
+                callback_group=self._cb_group
+            )
+        # Legacy alias for compatibility (use whichever is available)
+        self.rotate_client = self.left_rotate_client or self.right_rotate_client
 
         # ==================== ACTION CLIENTS ====================
-        # Dual arm insert hook clients
-        self.left_hook_client = ActionClient(
-            self, InsertHook, '/side_arm_left/insert_hook',
-            callback_group=self._cb_group
-        )
-        self.right_hook_client = ActionClient(
-            self, InsertHook, '/side_arm_right/insert_hook',
-            callback_group=self._cb_group
-        )
-        # Legacy alias for compatibility
-        self.hook_action_client = self.left_hook_client
+        # Dual arm insert hook clients (only create for enabled arms)
+        self.left_hook_client = None
+        self.right_hook_client = None
+        if self.enable_left_arm:
+            self.left_hook_client = ActionClient(
+                self, InsertHook, '/side_arm_left/insert_hook',
+                callback_group=self._cb_group
+            )
+        if self.enable_right_arm:
+            self.right_hook_client = ActionClient(
+                self, InsertHook, '/side_arm_right/insert_hook',
+                callback_group=self._cb_group
+            )
+        # Legacy alias for compatibility (use whichever is available)
+        self.hook_action_client = self.left_hook_client or self.right_hook_client
 
         self.arm_action_client = ActionClient(
             self, ExecuteTrajectory, '/main_arm/execute_trajectory',
@@ -178,30 +200,35 @@ class PackingCoordinatorNode(Node):
             String, '/stow/command',
             self._command_callback, 10
         )
-        # Dual arm status subscribers
-        self.left_hook_status_sub = self.create_subscription(
-            HookStatus, '/side_arm_left/status',
-            lambda msg: self._hook_status_callback(msg, 'left'), 10
-        )
-        self.right_hook_status_sub = self.create_subscription(
-            HookStatus, '/side_arm_right/status',
-            lambda msg: self._hook_status_callback(msg, 'right'), 10
-        )
-        # Dual arm state subscribers
-        self.left_state_sub = self.create_subscription(
-            SideArmState, '/side_arm_left/parsed_state',
-            lambda msg: self._side_arm_state_callback(msg, 'left'), 10
-        )
-        self.right_state_sub = self.create_subscription(
-            SideArmState, '/side_arm_right/parsed_state',
-            lambda msg: self._side_arm_state_callback(msg, 'right'), 10
-        )
+        # Dual arm status subscribers (only subscribe to enabled arms)
+        if self.enable_left_arm:
+            self.left_hook_status_sub = self.create_subscription(
+                HookStatus, '/side_arm_left/status',
+                lambda msg: self._hook_status_callback(msg, 'left'), 10
+            )
+            self.left_state_sub = self.create_subscription(
+                SideArmState, '/side_arm_left/parsed_state',
+                lambda msg: self._side_arm_state_callback(msg, 'left'), 10
+            )
+        if self.enable_right_arm:
+            self.right_hook_status_sub = self.create_subscription(
+                HookStatus, '/side_arm_right/status',
+                lambda msg: self._hook_status_callback(msg, 'right'), 10
+            )
+            self.right_state_sub = self.create_subscription(
+                SideArmState, '/side_arm_right/parsed_state',
+                lambda msg: self._side_arm_state_callback(msg, 'right'), 10
+            )
 
         # ==================== PUBLISHERS ====================
         self.status_pub = self.create_publisher(String, '/stow/status', 10)
-        # Dual arm command publishers
-        self.left_cmd_pub = self.create_publisher(String, '/side_arm_left/command', 10)
-        self.right_cmd_pub = self.create_publisher(String, '/side_arm_right/command', 10)
+        # Dual arm command publishers (only create for enabled arms)
+        self.left_cmd_pub = None
+        self.right_cmd_pub = None
+        if self.enable_left_arm:
+            self.left_cmd_pub = self.create_publisher(String, '/side_arm_left/command', 10)
+        if self.enable_right_arm:
+            self.right_cmd_pub = self.create_publisher(String, '/side_arm_right/command', 10)
         # Current arm publisher (for GUI)
         self.current_arm_pub = self.create_publisher(String, '/coordinator/current_arm', 10)
         self.status_timer = self.create_timer(1.0, self._publish_status)
@@ -209,9 +236,11 @@ class PackingCoordinatorNode(Node):
         # ==================== SERVICE CHECK ====================
         self._check_services()
 
+        arm_mode = 'DUAL (alternating)' if self.dual_arm_mode else f'SINGLE ({self.current_arm})'
         self.get_logger().info('=' * 50)
         self.get_logger().info('PACKING COORDINATOR')
         self.get_logger().info(f'  State: {self.sm.state_name}')
+        self.get_logger().info(f'  Arm mode: {arm_mode}')
         self.get_logger().info(f'  Pattern: {self.current_pattern}')
         self.get_logger().info(f'  Available: {self.pattern_manager.list_patterns()}')
         self.get_logger().info('  Publish to /stow/command to control')
@@ -223,26 +252,31 @@ class PackingCoordinatorNode(Node):
 
     def _check_services(self):
         """Check which services and actions are available (non-blocking)."""
-        services = {
-            '/request_next_target': self.target_client,
-            '/side_arm_left/rotate_hook': self.left_rotate_client,
-            '/side_arm_right/rotate_hook': self.right_rotate_client,
-            '/capture_loops': self.capture_client,
-        }
-        actions = {
-            '/side_arm_left/insert_hook': self.left_hook_client,
-            '/side_arm_right/insert_hook': self.right_hook_client,
-            '/main_arm/execute_trajectory': self.arm_action_client,
-        }
+        services = {'/request_next_target': self.target_client}
+        if self.left_rotate_client:
+            services['/side_arm_left/rotate_hook'] = self.left_rotate_client
+        if self.right_rotate_client:
+            services['/side_arm_right/rotate_hook'] = self.right_rotate_client
+        services['/capture_loops'] = self.capture_client
 
-        self.get_logger().info('Checking services (dual arm mode)...')
+        actions = {}
+        if self.left_hook_client:
+            actions['/side_arm_left/insert_hook'] = self.left_hook_client
+        if self.right_hook_client:
+            actions['/side_arm_right/insert_hook'] = self.right_hook_client
+        actions['/main_arm/execute_trajectory'] = self.arm_action_client
+
+        mode = 'dual arm' if self.dual_arm_mode else f'single arm ({self.current_arm})'
+        self.get_logger().info(f'Checking services ({mode} mode)...')
         for name, client in services.items():
-            ready = client.wait_for_service(timeout_sec=2.0)
-            self.get_logger().info(f'  {name}: {"✓" if ready else "✗"}')
+            if client:
+                ready = client.wait_for_service(timeout_sec=2.0)
+                self.get_logger().info(f'  {name}: {"✓" if ready else "✗"}')
 
         for name, client in actions.items():
-            ready = client.wait_for_server(timeout_sec=2.0)
-            self.get_logger().info(f'  {name}: {"✓" if ready else "✗"}')
+            if client:
+                ready = client.wait_for_server(timeout_sec=2.0)
+                self.get_logger().info(f'  {name}: {"✓" if ready else "✗"}')
 
     # ================================================================
     #  DUAL ARM HELPERS
@@ -250,18 +284,36 @@ class PackingCoordinatorNode(Node):
 
     def get_current_hook_client(self) -> ActionClient:
         """Get the insert_hook action client for the current arm."""
-        return self.left_hook_client if self.current_arm == 'left' else self.right_hook_client
+        if self.current_arm == 'left' and self.left_hook_client:
+            return self.left_hook_client
+        elif self.current_arm == 'right' and self.right_hook_client:
+            return self.right_hook_client
+        # Fallback to whichever is available
+        return self.left_hook_client or self.right_hook_client
 
     def get_current_rotate_client(self):
         """Get the rotate_hook service client for the current arm."""
-        return self.left_rotate_client if self.current_arm == 'left' else self.right_rotate_client
+        if self.current_arm == 'left' and self.left_rotate_client:
+            return self.left_rotate_client
+        elif self.current_arm == 'right' and self.right_rotate_client:
+            return self.right_rotate_client
+        # Fallback to whichever is available
+        return self.left_rotate_client or self.right_rotate_client
 
     def get_current_cmd_pub(self):
         """Get the command publisher for the current arm."""
-        return self.left_cmd_pub if self.current_arm == 'left' else self.right_cmd_pub
+        if self.current_arm == 'left' and self.left_cmd_pub:
+            return self.left_cmd_pub
+        elif self.current_arm == 'right' and self.right_cmd_pub:
+            return self.right_cmd_pub
+        # Fallback to whichever is available
+        return self.left_cmd_pub or self.right_cmd_pub
 
     def switch_arm(self):
-        """Switch to the other arm for the next operation."""
+        """Switch to the other arm for the next operation (only in dual arm mode)."""
+        if not self.dual_arm_mode:
+            # Single arm mode - no switching
+            return
         old_arm = self.current_arm
         self.current_arm = 'right' if self.current_arm == 'left' else 'left'
         self.get_logger().info(f'Switched arm: {old_arm} → {self.current_arm}')

@@ -118,6 +118,8 @@ def generate_launch_description():
     )
 
     # ==================== INCLUDE DUAL ARM SYSTEM ====================
+    # Uses side_arm_left.yaml config for compatibility with coordinator's
+    # /side_arm_left/* namespace convention
 
     dual_arm_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -133,6 +135,7 @@ def generate_launch_description():
             'enable_side_arm': 'true',
             'side_arm_sim': LaunchConfiguration('side_arm_sim'),
             'side_arm_test_mode': LaunchConfiguration('side_arm_test_mode'),
+            'arm_config': 'side_arm_left.yaml',  # Use left arm namespace for coordinator compatibility
             'enable_teleop': 'false',
             'use_rviz': LaunchConfiguration('use_rviz'),
             'vision_test_mode': LaunchConfiguration('vision_test_mode'),
@@ -166,6 +169,7 @@ def generate_launch_description():
 
     # State machine coordinator - orchestrates the stowing sequence
     # Delayed start to allow arm systems to initialize
+    # Single arm mode (left only) for backwards compatibility with dual_arm_test.launch.py
     packing_coordinator_node = Node(
         package='parachute_coordinator',
         executable='packing_coordinator_node',
@@ -176,6 +180,8 @@ def generate_launch_description():
             'stow_pattern': LaunchConfiguration('stow_pattern'),
             'action_timeout': LaunchConfiguration('action_timeout'),
             'expected_loop_count': LaunchConfiguration('expected_loop_count'),
+            'enable_left_arm': True,
+            'enable_right_arm': False,  # Single arm mode
         }]
     )
 

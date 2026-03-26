@@ -442,6 +442,8 @@ def launch_setup(context, *args, **kwargs):
                     'stow_pattern': 'square_stow',
                     'action_timeout': 30.0,
                     'expected_loop_count': 0,
+                    'enable_left_arm': enable_left,
+                    'enable_right_arm': enable_right,
                 }]
             )]
         ))
