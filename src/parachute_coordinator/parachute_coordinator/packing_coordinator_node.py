@@ -119,7 +119,12 @@ class PackingCoordinatorNode(Node):
         self._error_message = ''
         self._active_goal_handle = None
 
-        # Side arm homing tracking
+        # Dual arm tracking - alternates between 'left' and 'right'
+        self.current_arm = 'left'  # Start with left arm
+        self._left_arm_homed = False
+        self._right_arm_homed = False
+
+        # Side arm homing tracking (legacy, now per-arm)
         self._side_arm_is_homed = False
         self._has_homed_once = False  # Only home once at startup
         self._homing_timer = None
@@ -133,20 +138,36 @@ class PackingCoordinatorNode(Node):
             RequestNextTarget, '/request_next_target',
             callback_group=self._cb_group
         )
-        self.rotate_client = self.create_client(
-            RotateHook, '/side_arm/rotate_hook',
-            callback_group=self._cb_group
-        )
         self.capture_client = self.create_client(
             CaptureLoops, '/capture_loops',
             callback_group=self._cb_group
         )
 
-        # ==================== ACTION CLIENTS ====================
-        self.hook_action_client = ActionClient(
-            self, InsertHook, '/side_arm/insert_hook',
+        # Dual arm rotate hook clients
+        self.left_rotate_client = self.create_client(
+            RotateHook, '/side_arm_left/rotate_hook',
             callback_group=self._cb_group
         )
+        self.right_rotate_client = self.create_client(
+            RotateHook, '/side_arm_right/rotate_hook',
+            callback_group=self._cb_group
+        )
+        # Legacy alias for compatibility
+        self.rotate_client = self.left_rotate_client
+
+        # ==================== ACTION CLIENTS ====================
+        # Dual arm insert hook clients
+        self.left_hook_client = ActionClient(
+            self, InsertHook, '/side_arm_left/insert_hook',
+            callback_group=self._cb_group
+        )
+        self.right_hook_client = ActionClient(
+            self, InsertHook, '/side_arm_right/insert_hook',
+            callback_group=self._cb_group
+        )
+        # Legacy alias for compatibility
+        self.hook_action_client = self.left_hook_client
+
         self.arm_action_client = ActionClient(
             self, ExecuteTrajectory, '/main_arm/execute_trajectory',
             callback_group=self._cb_group
@@ -157,18 +178,32 @@ class PackingCoordinatorNode(Node):
             String, '/stow/command',
             self._command_callback, 10
         )
-        self.hook_status_sub = self.create_subscription(
-            HookStatus, '/side_arm/status',
-            self._hook_status_callback, 10
+        # Dual arm status subscribers
+        self.left_hook_status_sub = self.create_subscription(
+            HookStatus, '/side_arm_left/status',
+            lambda msg: self._hook_status_callback(msg, 'left'), 10
         )
-        self.side_arm_state_sub = self.create_subscription(
-            SideArmState, '/side_arm/parsed_state',
-            self._side_arm_state_callback, 10
+        self.right_hook_status_sub = self.create_subscription(
+            HookStatus, '/side_arm_right/status',
+            lambda msg: self._hook_status_callback(msg, 'right'), 10
+        )
+        # Dual arm state subscribers
+        self.left_state_sub = self.create_subscription(
+            SideArmState, '/side_arm_left/parsed_state',
+            lambda msg: self._side_arm_state_callback(msg, 'left'), 10
+        )
+        self.right_state_sub = self.create_subscription(
+            SideArmState, '/side_arm_right/parsed_state',
+            lambda msg: self._side_arm_state_callback(msg, 'right'), 10
         )
 
         # ==================== PUBLISHERS ====================
         self.status_pub = self.create_publisher(String, '/stow/status', 10)
-        self.side_arm_cmd_pub = self.create_publisher(String, '/side_arm/command', 10)
+        # Dual arm command publishers
+        self.left_cmd_pub = self.create_publisher(String, '/side_arm_left/command', 10)
+        self.right_cmd_pub = self.create_publisher(String, '/side_arm_right/command', 10)
+        # Current arm publisher (for GUI)
+        self.current_arm_pub = self.create_publisher(String, '/coordinator/current_arm', 10)
         self.status_timer = self.create_timer(1.0, self._publish_status)
 
         # ==================== SERVICE CHECK ====================
@@ -190,15 +225,17 @@ class PackingCoordinatorNode(Node):
         """Check which services and actions are available (non-blocking)."""
         services = {
             '/request_next_target': self.target_client,
-            '/side_arm/rotate_hook': self.rotate_client,
+            '/side_arm_left/rotate_hook': self.left_rotate_client,
+            '/side_arm_right/rotate_hook': self.right_rotate_client,
             '/capture_loops': self.capture_client,
         }
         actions = {
-            '/side_arm/insert_hook': self.hook_action_client,
+            '/side_arm_left/insert_hook': self.left_hook_client,
+            '/side_arm_right/insert_hook': self.right_hook_client,
             '/main_arm/execute_trajectory': self.arm_action_client,
         }
 
-        self.get_logger().info('Checking services...')
+        self.get_logger().info('Checking services (dual arm mode)...')
         for name, client in services.items():
             ready = client.wait_for_service(timeout_sec=2.0)
             self.get_logger().info(f'  {name}: {"✓" if ready else "✗"}')
@@ -206,6 +243,29 @@ class PackingCoordinatorNode(Node):
         for name, client in actions.items():
             ready = client.wait_for_server(timeout_sec=2.0)
             self.get_logger().info(f'  {name}: {"✓" if ready else "✗"}')
+
+    # ================================================================
+    #  DUAL ARM HELPERS
+    # ================================================================
+
+    def get_current_hook_client(self) -> ActionClient:
+        """Get the insert_hook action client for the current arm."""
+        return self.left_hook_client if self.current_arm == 'left' else self.right_hook_client
+
+    def get_current_rotate_client(self):
+        """Get the rotate_hook service client for the current arm."""
+        return self.left_rotate_client if self.current_arm == 'left' else self.right_rotate_client
+
+    def get_current_cmd_pub(self):
+        """Get the command publisher for the current arm."""
+        return self.left_cmd_pub if self.current_arm == 'left' else self.right_cmd_pub
+
+    def switch_arm(self):
+        """Switch to the other arm for the next operation."""
+        old_arm = self.current_arm
+        self.current_arm = 'right' if self.current_arm == 'left' else 'left'
+        self.get_logger().info(f'Switched arm: {old_arm} → {self.current_arm}')
+        self.current_arm_pub.publish(String(data=self.current_arm))
 
     # ================================================================
     #  OPERATOR COMMANDS
@@ -283,39 +343,71 @@ class PackingCoordinatorNode(Node):
     #  SUBSCRIBER CALLBACKS
     # ================================================================
 
-    def _hook_status_callback(self, msg: HookStatus):
-        """Monitor side arm hook status."""
+    def _hook_status_callback(self, msg: HookStatus, arm: str):
+        """Monitor side arm hook status for specified arm."""
         # Could be used for safety monitoring during HANDOFF/RETRACT
         pass
 
-    def _side_arm_state_callback(self, msg: SideArmState):
-        """Track side arm homing status."""
-        self._side_arm_is_homed = msg.is_homed
+    def _side_arm_state_callback(self, msg: SideArmState, arm: str):
+        """Track side arm homing status for specified arm."""
+        if arm == 'left':
+            self._left_arm_homed = msg.is_homed
+        else:
+            self._right_arm_homed = msg.is_homed
+        # Legacy compatibility
+        self._side_arm_is_homed = self._left_arm_homed and self._right_arm_homed
 
-    def _home_side_arm(self, timeout: float = 60.0) -> bool:
-        """Home the side arm and wait for completion."""
-        self.get_logger().info('Homing side arm (HOME_ALL)...')
+    def _home_both_arms(self, timeout: float = 60.0) -> bool:
+        """Home both side arms and wait for completion."""
+        self.get_logger().info('Homing both side arms (HOME_ALL)...')
 
-        # Send HOME_ALL command
+        # Send HOME_ALL command to both arms
         cmd = String()
         cmd.data = 'HOME_ALL'
-        self.side_arm_cmd_pub.publish(cmd)
+        self.left_cmd_pub.publish(cmd)
+        self.right_cmd_pub.publish(cmd)
 
-        # Wait for is_homed to become True
+        # Wait for both arms to be homed
         start_time = time.time()
         while time.time() - start_time < timeout:
             rclpy.spin_once(self, timeout_sec=0.1)
-            if self._side_arm_is_homed:
-                self.get_logger().info(f'Side arm homed in {time.time() - start_time:.1f}s')
+            if self._left_arm_homed and self._right_arm_homed:
+                self.get_logger().info(f'Both arms homed in {time.time() - start_time:.1f}s')
                 self._has_homed_once = True
                 return True
 
             # Log progress every 10 seconds
             elapsed = time.time() - start_time
             if int(elapsed) % 10 == 0 and int(elapsed) > 0:
-                self.get_logger().info(f'  Still homing... ({elapsed:.0f}s)')
+                left_status = '✓' if self._left_arm_homed else '...'
+                right_status = '✓' if self._right_arm_homed else '...'
+                self.get_logger().info(f'  Homing: left={left_status}, right={right_status} ({elapsed:.0f}s)')
 
-        self.get_logger().error(f'Side arm homing timeout after {timeout}s')
+        self.get_logger().error(f'Arm homing timeout after {timeout}s')
+        return False
+
+    def _home_side_arm(self, timeout: float = 60.0) -> bool:
+        """Home the current side arm only (for single-arm fallback)."""
+        arm = self.current_arm
+        self.get_logger().info(f'Homing {arm} arm (HOME_ALL)...')
+
+        cmd = String()
+        cmd.data = 'HOME_ALL'
+        self.get_current_cmd_pub().publish(cmd)
+
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            is_homed = self._left_arm_homed if arm == 'left' else self._right_arm_homed
+            if is_homed:
+                self.get_logger().info(f'{arm.capitalize()} arm homed in {time.time() - start_time:.1f}s')
+                return True
+
+            elapsed = time.time() - start_time
+            if int(elapsed) % 10 == 0 and int(elapsed) > 0:
+                self.get_logger().info(f'  Still homing {arm}... ({elapsed:.0f}s)')
+
+        self.get_logger().error(f'{arm.capitalize()} arm homing timeout after {timeout}s')
         return False
 
     # ================================================================
@@ -527,7 +619,7 @@ class PackingCoordinatorNode(Node):
         self._transition('positioned')
 
     def on_enter_insert(self, state: StowState, event: str):
-        """Entered INSERT — send hook through the target loop."""
+        """Entered INSERT — send hook through the target loop using current arm."""
         retry = self.sm.retry_count
         if retry > 0:
             config = self.sm.get_state_config(StowState.INSERT)
@@ -537,16 +629,17 @@ class PackingCoordinatorNode(Node):
             )
             # TODO: Apply position offset to target loop
 
-        self.get_logger().info('[INSERT] Inserting hook through loop...')
+        self.get_logger().info(f'[INSERT] Using {self.current_arm} arm to insert hook...')
 
-        if not self.hook_action_client.server_is_ready():
-            self._enter_error('timeout', 'Hook action server not available')
+        hook_client = self.get_current_hook_client()
+        if not hook_client.server_is_ready():
+            self._enter_error('timeout', f'{self.current_arm} hook action server not available')
             return
 
         goal = InsertHook.Goal()
         goal.target_loop = self.current_target_loop
 
-        send_future = self.hook_action_client.send_goal_async(
+        send_future = hook_client.send_goal_async(
             goal, feedback_callback=self._on_insert_feedback
         )
         send_future.add_done_callback(self._on_insert_goal_response)
@@ -589,17 +682,18 @@ class PackingCoordinatorNode(Node):
             self._transition('collision')  # will retry with offset
 
     def on_enter_handoff(self, state: StowState, event: str):
-        """Entered HANDOFF — rotate hook and execute stow trajectory."""
-        self.get_logger().info('[HANDOFF] Rotating hook to 90°...')
+        """Entered HANDOFF — rotate hook and execute stow trajectory using current arm."""
+        self.get_logger().info(f'[HANDOFF] Rotating {self.current_arm} hook to 90°...')
 
-        if not self.rotate_client.service_is_ready():
-            self._enter_error('timeout', 'Rotate service not available')
+        rotate_client = self.get_current_rotate_client()
+        if not rotate_client.service_is_ready():
+            self._enter_error('timeout', f'{self.current_arm} rotate service not available')
             return
 
         request = RotateHook.Request()
         request.angle_degrees = 90.0
 
-        future = self.rotate_client.call_async(request)
+        future = rotate_client.call_async(request)
         future.add_done_callback(self._on_pre_stow_rotate_done)
 
     def _on_pre_stow_rotate_done(self, future):
@@ -686,13 +780,14 @@ class PackingCoordinatorNode(Node):
             self._enter_error('trajectory_failure', result.message)
 
     def on_enter_retract(self, state: StowState, event: str):
-        """Entered RETRACT — rotate hook again, then withdraw."""
-        self.get_logger().info('[RETRACT] Rotating hook to capture line...')
+        """Entered RETRACT — rotate hook again, then withdraw using current arm."""
+        self.get_logger().info(f'[RETRACT] Rotating {self.current_arm} hook to capture line...')
 
+        rotate_client = self.get_current_rotate_client()
         request = RotateHook.Request()
         request.angle_degrees = 90.0  # Second 90° rotation to capture
 
-        future = self.rotate_client.call_async(request)
+        future = rotate_client.call_async(request)
         future.add_done_callback(self._on_capture_rotate_done)
 
     def _on_capture_rotate_done(self, future):
@@ -706,14 +801,15 @@ class PackingCoordinatorNode(Node):
             self._enter_error('excessive_force', f'Rotation error: {e}')
             return
 
-        self.get_logger().info('[RETRACT] Retracting hook...')
+        self.get_logger().info(f'[RETRACT] Retracting {self.current_arm} hook...')
 
         # TODO: Send retraction command (reversed insertion path)
         # For now, rotate hook back to neutral as a placeholder
+        rotate_client = self.get_current_rotate_client()
         request = RotateHook.Request()
         request.angle_degrees = 0.0
 
-        future = self.rotate_client.call_async(request)
+        future = rotate_client.call_async(request)
         future.add_done_callback(self._on_retract_done)
 
     def _on_retract_done(self, future):
@@ -730,18 +826,21 @@ class PackingCoordinatorNode(Node):
 
     def on_enter_release(self, state: StowState, event: str):
         """Entered RELEASE — verify stow and prepare for next loop."""
-        self.get_logger().info('[RELEASE] Verifying stow quality...')
+        self.get_logger().info(f'[RELEASE] {self.current_arm} arm: Verifying stow quality...')
 
         # TODO: Vision verification of stow quality
         # For now, assume success
 
         self.completed_loops += 1
         self.get_logger().info(
-            f'[RELEASE] Loop {self.completed_loops}/{self.total_loops} stowed'
+            f'[RELEASE] Loop {self.completed_loops}/{self.total_loops} stowed by {self.current_arm} arm'
         )
 
         # Reset for next cycle
         self.current_target_loop = None
+
+        # Switch to the other arm for the next loop (alternating pattern)
+        self.switch_arm()
 
         # TODO: Return arms to ready positions
 
