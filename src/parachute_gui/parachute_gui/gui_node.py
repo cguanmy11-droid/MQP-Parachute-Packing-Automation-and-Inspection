@@ -2,10 +2,13 @@
 gui_node.py — ROS2 bridge for operator GUI.
 
 Subscriptions:
-  /coordinator/state   String        - state name (may include " (PAUSED)")
-  /coordinator/error   String        - error messages
-  /detected_loops      DetectedLoops - all perception detections
-  /target_loop         DetectedLoop  - current target selected by coordinator
+  /coordinator/state       String        - state name (may include " (PAUSED)")
+  /coordinator/error       String        - error messages
+  /coordinator/current_arm String        - current arm being used (left/right)
+  /detected_loops          DetectedLoops - all perception detections
+  /target_loop             DetectedLoop  - current target selected by coordinator
+  /side_arm_left/status    HookStatus    - left arm status
+  /side_arm_right/status   HookStatus    - right arm status
 
 Publishers:
   /stow/command        String        - start|pause|resume|retry|skip|abort|home
@@ -16,7 +19,7 @@ import threading
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String, Bool
-from parachute_interfaces.msg import DetectedLoops, DetectedLoop
+from parachute_interfaces.msg import DetectedLoops, DetectedLoop, HookStatus
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
@@ -24,9 +27,12 @@ from PyQt5.QtCore import QObject, pyqtSignal
 class ROSBridge(QObject):
     state_changed         = pyqtSignal(str)
     error_received        = pyqtSignal(str)
+    current_arm_changed   = pyqtSignal(str)    # 'left' or 'right'
     loops_updated         = pyqtSignal(list)   # list of dicts
     target_loop_updated   = pyqtSignal(int)    # loop_id of current target
     joystick_mode_changed = pyqtSignal(bool)
+    left_arm_status       = pyqtSignal(dict)   # left arm status dict
+    right_arm_status      = pyqtSignal(dict)   # right arm status dict
 
     def __init__(self):
         super().__init__()
@@ -38,9 +44,18 @@ class ROSBridge(QObject):
         self._node.create_subscription(
             String, '/coordinator/error', self._on_error, 10)
         self._node.create_subscription(
+            String, '/coordinator/current_arm', self._on_current_arm, 10)
+        self._node.create_subscription(
             DetectedLoops, '/detected_loops', self._on_loops, 10)
         self._node.create_subscription(
             DetectedLoop, '/target_loop', self._on_target_loop, 10)
+        # Dual arm status subscriptions
+        self._node.create_subscription(
+            HookStatus, '/side_arm_left/status',
+            lambda msg: self._on_arm_status(msg, 'left'), 10)
+        self._node.create_subscription(
+            HookStatus, '/side_arm_right/status',
+            lambda msg: self._on_arm_status(msg, 'right'), 10)
 
         self._cmd_pub = self._node.create_publisher(String, '/stow/command', 10)
         self._joy_pub = self._node.create_publisher(Bool, '/joystick_enabled', 10)
@@ -57,6 +72,9 @@ class ROSBridge(QObject):
     def _on_error(self, msg):
         self.error_received.emit(msg.data)
 
+    def _on_current_arm(self, msg):
+        self.current_arm_changed.emit(msg.data)
+
     def _on_loops(self, msg: DetectedLoops):
         loops = sorted([{
             'id':         l.loop_id,
@@ -69,6 +87,17 @@ class ROSBridge(QObject):
 
     def _on_target_loop(self, msg: DetectedLoop):
         self.target_loop_updated.emit(msg.loop_id)
+
+    def _on_arm_status(self, msg: HookStatus, arm: str):
+        status = {
+            'arm': arm,
+            'state': msg.state,
+            'angle': msg.current_angle,
+        }
+        if arm == 'left':
+            self.left_arm_status.emit(status)
+        else:
+            self.right_arm_status.emit(status)
 
     # ── GUI → ROS2 ────────────────────────────────────────────────────────────
 

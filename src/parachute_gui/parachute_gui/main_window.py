@@ -93,6 +93,18 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
+        # Current arm indicator
+        self._arm_badge = QLabel('ARM: LEFT')
+        self._arm_badge.setFont(QFont('Courier New', 11, QFont.Bold))
+        self._arm_badge.setStyleSheet('''
+            color: #00b4d8;
+            background: #0d2137;
+            border: 1px solid #00b4d8;
+            border-radius: 4px;
+            padding: 4px 12px;
+        ''')
+        layout.addWidget(self._arm_badge)
+
         self._state_badge = QLabel('STATE: IDLE')
         self._state_badge.setFont(QFont('Courier New', 11, QFont.Bold))
         self._state_badge.setStyleSheet('''
@@ -139,6 +151,9 @@ class MainWindow(QMainWindow):
         self._bridge.loops_updated.connect(self._loop_widget.update_loops)
         self._bridge.target_loop_updated.connect(self._loop_widget.set_target_loop)
         self._bridge.joystick_mode_changed.connect(self._arm_widget.set_joystick_state)
+        self._bridge.current_arm_changed.connect(self._on_arm_changed)
+        self._bridge.left_arm_status.connect(self._arm_widget.update_arm_status)
+        self._bridge.right_arm_status.connect(self._arm_widget.update_arm_status)
 
         # GUI → ROS2
         self._arm_widget.command_requested.connect(self._bridge.send_command)
@@ -151,6 +166,28 @@ class MainWindow(QMainWindow):
         self._state_widget.set_state(state)
         self._arm_widget.update_state(state)
         self._log_message(f'State → {state}', color='#00b4d8')
+
+    def _on_arm_changed(self, arm: str):
+        self._arm_badge.setText(f'ARM: {arm.upper()}')
+        # Color coding: left=cyan, right=magenta
+        if arm == 'left':
+            self._arm_badge.setStyleSheet('''
+                color: #00b4d8;
+                background: #0d2137;
+                border: 1px solid #00b4d8;
+                border-radius: 4px;
+                padding: 4px 12px;
+            ''')
+        else:
+            self._arm_badge.setStyleSheet('''
+                color: #e040fb;
+                background: #2d0d37;
+                border: 1px solid #e040fb;
+                border-radius: 4px;
+                padding: 4px 12px;
+            ''')
+        self._arm_widget.set_current_arm(arm)
+        self._log_message(f'Active arm → {arm}', color='#69f000')
 
     def _on_error(self, error: str):
         self._log_message(f'ERROR: {error}', color='#e94560')

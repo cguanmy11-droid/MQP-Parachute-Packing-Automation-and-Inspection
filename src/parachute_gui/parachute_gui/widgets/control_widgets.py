@@ -126,6 +126,8 @@ class ArmControlWidget(QWidget):
         super().__init__(parent)
         self._joystick_on = False
         self._paused = False
+        self._current_arm = 'left'
+        self._arm_status = {'left': {}, 'right': {}}
         self._build_ui()
 
     def _build_ui(self):
@@ -137,6 +139,36 @@ class ArmControlWidget(QWidget):
         header.setFont(QFont('Courier New', 11, QFont.Bold))
         header.setStyleSheet('color: #00b4d8;')
         layout.addWidget(header)
+
+        # ── Dual arm status ─────────────────────────────────────────────────
+        arm_status_layout = QHBoxLayout()
+
+        self._left_arm_indicator = QLabel('LEFT')
+        self._left_arm_indicator.setAlignment(Qt.AlignCenter)
+        self._left_arm_indicator.setStyleSheet(self._arm_indicator_style('left', True))
+        arm_status_layout.addWidget(self._left_arm_indicator)
+
+        self._right_arm_indicator = QLabel('RIGHT')
+        self._right_arm_indicator.setAlignment(Qt.AlignCenter)
+        self._right_arm_indicator.setStyleSheet(self._arm_indicator_style('right', False))
+        arm_status_layout.addWidget(self._right_arm_indicator)
+
+        layout.addLayout(arm_status_layout)
+
+        # Arm state labels
+        arm_state_layout = QHBoxLayout()
+        self._left_state_label = QLabel('state: ---')
+        self._left_state_label.setStyleSheet('color: #666; font-size: 9px; font-family: Courier New;')
+        self._left_state_label.setAlignment(Qt.AlignCenter)
+        arm_state_layout.addWidget(self._left_state_label)
+
+        self._right_state_label = QLabel('state: ---')
+        self._right_state_label.setStyleSheet('color: #666; font-size: 9px; font-family: Courier New;')
+        self._right_state_label.setAlignment(Qt.AlignCenter)
+        arm_state_layout.addWidget(self._right_state_label)
+        layout.addLayout(arm_state_layout)
+
+        layout.addWidget(self._separator())
 
         # ── Joystick toggle ──────────────────────────────────────────────────
         self._joystick_btn = QPushButton('⊙  Enable Joystick Control')
@@ -276,3 +308,53 @@ class ArmControlWidget(QWidget):
             padding: 10px; font-family: Courier New; font-size: 11px;
         }
         QPushButton:hover { background: #1e2d50; color: #eaeaea; }'''
+
+    def _arm_indicator_style(self, arm: str, is_active: bool) -> str:
+        if arm == 'left':
+            if is_active:
+                return '''QLabel {
+                    background: #0d2137; color: #00b4d8;
+                    border: 2px solid #00b4d8; border-radius: 6px;
+                    padding: 6px; font-family: Courier New;
+                    font-size: 10px; font-weight: bold;
+                }'''
+            return '''QLabel {
+                background: #16213e; color: #444;
+                border: 1px solid #0f3460; border-radius: 6px;
+                padding: 6px; font-family: Courier New; font-size: 10px;
+            }'''
+        else:  # right
+            if is_active:
+                return '''QLabel {
+                    background: #2d0d37; color: #e040fb;
+                    border: 2px solid #e040fb; border-radius: 6px;
+                    padding: 6px; font-family: Courier New;
+                    font-size: 10px; font-weight: bold;
+                }'''
+            return '''QLabel {
+                background: #16213e; color: #444;
+                border: 1px solid #0f3460; border-radius: 6px;
+                padding: 6px; font-family: Courier New; font-size: 10px;
+            }'''
+
+    def set_current_arm(self, arm: str):
+        """Update visual indicator for which arm is active."""
+        self._current_arm = arm
+        self._left_arm_indicator.setStyleSheet(
+            self._arm_indicator_style('left', arm == 'left'))
+        self._right_arm_indicator.setStyleSheet(
+            self._arm_indicator_style('right', arm == 'right'))
+        # Add active marker
+        self._left_arm_indicator.setText('▶ LEFT' if arm == 'left' else 'LEFT')
+        self._right_arm_indicator.setText('▶ RIGHT' if arm == 'right' else 'RIGHT')
+
+    def update_arm_status(self, status: dict):
+        """Update arm state display from HookStatus message."""
+        arm = status.get('arm', 'left')
+        state = status.get('state', '---')
+        angle = status.get('angle', 0.0)
+
+        self._arm_status[arm] = status
+
+        label = self._left_state_label if arm == 'left' else self._right_state_label
+        label.setText(f'{state} ({angle:.0f}°)')
