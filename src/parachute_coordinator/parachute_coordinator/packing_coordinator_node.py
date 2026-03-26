@@ -545,11 +545,17 @@ class PackingCoordinatorNode(Node):
             self._capture_loops_after_homing()
             return
 
-        # Send HOME_ALL command
-        self.get_logger().info('[HOMING] Sending HOME_ALL command...')
+        # Send HOME_ALL command to current arm
+        self.get_logger().info(f'[HOMING] Sending HOME_ALL command to {self.current_arm} arm...')
         cmd = String()
         cmd.data = 'HOME_ALL'
-        self.side_arm_cmd_pub.publish(cmd)
+        cmd_pub = self.get_current_cmd_pub()
+        if cmd_pub:
+            cmd_pub.publish(cmd)
+        else:
+            self.get_logger().error('[HOMING] No command publisher available!')
+            self._transition('error')
+            return
 
         # Start a timer to check homing status
         self._homing_start_time = time.time()
