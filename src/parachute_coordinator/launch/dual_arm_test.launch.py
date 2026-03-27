@@ -135,6 +135,10 @@ def launch_setup(context, *args, **kwargs):
     joint_pub_config = side_arm_config.get('joint_state_publisher', {})
     tf_config = side_arm_config.get('tf_transform', {})
 
+    # Camera frame name from config (supports prefixed frames like left_camera_frame)
+    camera_frame_id = viz_config.get('camera_frame_id', 'camera_frame')
+    print(f"[dual_arm_test] Using camera frame: {camera_frame_id}")
+
     # ==================== MAIN ARM NODES ====================
 
     # Interbotix arm control (hardware or sim)
@@ -581,8 +585,8 @@ def launch_setup(context, *args, **kwargs):
         output='screen',
         parameters=[{
             'marker_scale': 0.015,
-            'input_frame_id': 'camera_frame',  # Frame detections arrive in
-            'output_frame_id': 'world',        # Frame to publish markers in
+            'input_frame_id': camera_frame_id,  # Frame detections arrive in (from config)
+            'output_frame_id': 'world',         # Frame to publish markers in
             'grid_enabled': True,
             'grid_size_x': 0.4,
             'grid_size_y': 0.3,
@@ -599,7 +603,7 @@ def launch_setup(context, *args, **kwargs):
         name='detection_simulator_node',
         output='screen',
         parameters=[{
-            'camera_frame_id': 'camera_frame',
+            'camera_frame_id': camera_frame_id,  # From config
             'world_frame_id': 'world',
             # Camera FOV - set wide for testing, narrow later to match real camera
             'camera_fov_horizontal': 80.0,  # degrees
@@ -631,7 +635,7 @@ def launch_setup(context, *args, **kwargs):
             'conf_threshold': 0.5,
             'iou_threshold': 0.5,
             'frame_rate': 30.0,
-            'camera_frame_id': 'camera_frame',
+            'camera_frame_id': camera_frame_id,  # From config
             'centers_topic': '/yolo/centers',
             'display': LaunchConfiguration('camera_display'),
         }],
@@ -654,7 +658,7 @@ def launch_setup(context, *args, **kwargs):
             # Topics
             'input_topic': '/yolo/centers',
             'output_topic': '/detected_loops',
-            'camera_frame_id': 'camera_frame',
+            'camera_frame_id': camera_frame_id,  # From config
             # Detection confidence
             'base_confidence': 0.85,
         }],

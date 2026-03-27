@@ -406,8 +406,19 @@ class PackingCoordinatorNode(Node):
             self._left_arm_homed = msg.is_homed
         else:
             self._right_arm_homed = msg.is_homed
-        # Legacy compatibility
-        self._side_arm_is_homed = self._left_arm_homed and self._right_arm_homed
+        # Check homing based on which arms are enabled
+        self._update_homing_status()
+
+    def _update_homing_status(self):
+        """Update overall homing status based on enabled arms."""
+        if self.dual_arm_mode:
+            self._side_arm_is_homed = self._left_arm_homed and self._right_arm_homed
+        elif self.enable_left_arm:
+            self._side_arm_is_homed = self._left_arm_homed
+        elif self.enable_right_arm:
+            self._side_arm_is_homed = self._right_arm_homed
+        else:
+            self._side_arm_is_homed = True  # No arms enabled, consider "homed"
 
     def _home_both_arms(self, timeout: float = 60.0) -> bool:
         """Home both side arms and wait for completion."""
@@ -926,7 +937,7 @@ class PackingCoordinatorNode(Node):
         self.get_logger().error('  Commands: retry | skip | abort')
         self.get_logger().error('=' * 50)
 
-        self.error_pub.publish(String(data=msg))
+        self.error_pub.publish(String(data=self._error_message))
 
 def main(args=None):
     rclpy.init(args=args)
