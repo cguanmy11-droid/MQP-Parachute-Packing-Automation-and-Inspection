@@ -11,7 +11,7 @@ using namespace side_arm;
 constexpr unsigned long STATE_INTERVAL_MS = 100;
 constexpr size_t MAX_CMD_LEN = 96;
 constexpr long HOMING_TRAVEL_STEPS = 40000;
-constexpr float INSTANT_ACCEL = 1e6F;
+constexpr float INSTANT_ACCEL = 1e3F;
 
 AccelStepper stepper1(AccelStepper::DRIVER, STEPPER1_STEP, STEPPER1_DIR);
 AccelStepper stepper2(AccelStepper::DRIVER, STEPPER2_STEP, STEPPER2_DIR);
