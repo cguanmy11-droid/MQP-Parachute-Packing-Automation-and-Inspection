@@ -363,18 +363,18 @@ def launch_setup(context, *args, **kwargs):
         # Left side (positive Y ~0.15) - 5 loops for left arm
         # Right side (negative Y ~-0.15) - 5 loops for right arm
         static_loop_positions = [
-            # Left side loops (positive Y, for left arm)
-            0.25, 0.15, -0.02,   # Loop 0
-            0.29, 0.15, 0.00,    # Loop 1
-            0.33, 0.15, -0.01,   # Loop 2
-            0.37, 0.15, 0.01,    # Loop 3
-            0.40, 0.15, -0.02,   # Loop 4
-            # Right side loops (negative Y, for right arm)
-            0.25, -0.15, -0.02,  # Loop 5
-            0.29, -0.15, 0.00,   # Loop 6
-            0.33, -0.15, -0.01,  # Loop 7
-            0.37, -0.15, 0.01,   # Loop 8
-            0.40, -0.15, -0.02,  # Loop 9
+            # Left side loops (positive Y, for left arm) - straight line
+            0.25, 0.15, -0.015,  # Loop 0
+            0.29, 0.15, -0.015,  # Loop 1
+            0.33, 0.15, -0.015,  # Loop 2
+            0.37, 0.15, -0.015,  # Loop 3
+            0.40, 0.15, -0.015,  # Loop 4
+            # Right side loops (negative Y, for right arm) - straight line
+            0.25, -0.15, -0.015, # Loop 5
+            0.29, -0.15, -0.015, # Loop 6
+            0.33, -0.15, -0.015, # Loop 7
+            0.37, -0.15, -0.015, # Loop 8
+            0.40, -0.15, -0.015, # Loop 9
         ]
 
         nodes.append(Node(
