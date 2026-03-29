@@ -61,6 +61,16 @@ coordinate_node:
   # Simulation motion speed (mm/sec)
   sim_speed_mm_per_sec: 50.0
 
+  # Homing position - V1 homes to origin (0, 0, 0)
+  home_x_mm: 0.0
+  home_y_mm: 0.0
+  home_z_mm: 0.0
+
+  # Position invert - V1 steps increase from 0
+  position_invert_x: false
+  position_invert_y: false
+  position_invert_z: false
+
 # =============================================================================
 # WORKSPACE LIMITS
 # =============================================================================

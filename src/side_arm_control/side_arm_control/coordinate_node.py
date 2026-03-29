@@ -63,6 +63,18 @@ class SideArmCoordinateNode(Node):
         self.declare_parameter('max_y_mm', 200.0)
         self.declare_parameter('max_z_mm', 150.0)
 
+        # Home position - where the carriage is after homing (limit switch position)
+        # V1: homes to (0, 0, 0), V2: homes to (max_x, 0, 0)
+        self.declare_parameter('home_x_mm', 0.0)
+        self.declare_parameter('home_y_mm', 0.0)
+        self.declare_parameter('home_z_mm', 0.0)
+
+        # Position invert - whether steps add or subtract from home position
+        # V1: false (steps increase position from 0), V2: true (steps decrease from max)
+        self.declare_parameter('position_invert_x', False)
+        self.declare_parameter('position_invert_y', False)
+        self.declare_parameter('position_invert_z', False)
+
         # Simulation speed (mm/s for simulated motion)
         self.declare_parameter('sim_speed_mm_per_sec', 50.0)
 
@@ -157,6 +169,16 @@ class SideArmCoordinateNode(Node):
         self.max_y_mm = self.get_parameter('max_y_mm').value
         self.max_z_mm = self.get_parameter('max_z_mm').value
 
+        # Home position (where carriage is after homing)
+        self.home_x_mm = self.get_parameter('home_x_mm').value
+        self.home_y_mm = self.get_parameter('home_y_mm').value
+        self.home_z_mm = self.get_parameter('home_z_mm').value
+
+        # Position invert flags
+        self.position_invert_x = self.get_parameter('position_invert_x').value
+        self.position_invert_y = self.get_parameter('position_invert_y').value
+        self.position_invert_z = self.get_parameter('position_invert_z').value
+
     def _raw_state_callback(self, msg: String):
         """Parse raw STATE JSON from ESP32."""
         data = msg.data.strip()
@@ -173,30 +195,42 @@ class SideArmCoordinateNode(Node):
             with self._state_lock:
                 self._current_state = state
 
-                # Convert step positions to mm
+                # Convert step positions to mm (relative to home position)
                 s1 = int(state.get('s1', 0))  # Vertical (stepper1)
                 s2 = int(state.get('s2', 0))  # Horizontal (stepper2)
 
-                self._position_y_mm = s1 / self.steps_per_mm_vertical
-                self._position_x_mm = s2 / self.steps_per_mm_horizontal
+                # Calculate position: home + steps (or home - steps if inverted)
+                step_x_mm = s2 / self.steps_per_mm_horizontal
+                step_y_mm = s1 / self.steps_per_mm_vertical
+
+                if self.position_invert_x:
+                    self._position_x_mm = self.home_x_mm - step_x_mm
+                else:
+                    self._position_x_mm = self.home_x_mm + step_x_mm
+
+                if self.position_invert_y:
+                    self._position_y_mm = self.home_y_mm - step_y_mm
+                else:
+                    self._position_y_mm = self.home_y_mm + step_y_mm
 
                 # Check homing status (all limits triggered and positions zeroed)
                 l1 = bool(int(state.get('l1', 0)))  # Depth limit
                 l2 = bool(int(state.get('l2', 0)))  # Horizontal limit
                 l3 = bool(int(state.get('l3', 0)))  # Vertical limit
 
-                # Reset Z position to 0 when depth limit is hit
+                # Reset Z position to home when depth limit is hit
                 if l1:
-                    self._position_z_mm = 0.0
+                    self._position_z_mm = self.home_z_mm
                     self._dc_move_start = None
                     self._dc_target_z_mm = None
-                    self._dc_start_z_mm = 0.0
+                    self._dc_start_z_mm = self.home_z_mm
                     self._dc_duration = 0.0
                     self._dc_direction = 0
 
-                # Consider homed if all positions are at zero (after limits hit)
+                # Consider homed if step counts are zero (at limit switches) and depth limit hit
                 if s1 == 0 and s2 == 0 and l1:
                     self._is_homed = True
+                    # Position is now at home values (already calculated above)
 
         except Exception as e:
             self.get_logger().warn(f'Failed to parse state: {e}')

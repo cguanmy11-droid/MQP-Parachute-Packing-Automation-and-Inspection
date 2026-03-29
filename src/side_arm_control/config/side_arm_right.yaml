@@ -41,12 +41,22 @@ coordinate_node:
   default_speed_vertical: 500.0
   sim_speed_mm_per_sec: 50.0
 
+  # Homing position - V2 homes to max X (carriage at far end)
+  home_x_mm: 340.0
+  home_y_mm: 0.0
+  home_z_mm: 0.0
+
+  # Position invert - V2 steps decrease from max X
+  position_invert_x: true
+  position_invert_y: false
+  position_invert_z: true
+
 # =============================================================================
 # WORKSPACE LIMITS
 # =============================================================================
 # V2 has increased Y range due to dual stepper motors
 workspace:
-  max_x_mm: 300.0
+  max_x_mm: 340.0
   max_y_mm: 350.0
   max_z_mm: 150.0
 
