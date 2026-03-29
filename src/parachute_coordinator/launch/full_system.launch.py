@@ -116,6 +116,14 @@ def create_side_arm_nodes(arm_name: str, config_path: str, sim_mode: bool):
             'max_x_mm': workspace_cfg.get('max_x_mm', 300.0),
             'max_y_mm': workspace_cfg.get('max_y_mm', 200.0),
             'max_z_mm': workspace_cfg.get('max_z_mm', 150.0),
+            # Homing position (V1 defaults to 0, V2 homes to max_x)
+            'home_x_mm': coord_cfg.get('home_x_mm', 0.0),
+            'home_y_mm': coord_cfg.get('home_y_mm', 0.0),
+            'home_z_mm': coord_cfg.get('home_z_mm', 0.0),
+            # Position invert flags (V2 inverts X and Z)
+            'position_invert_x': coord_cfg.get('position_invert_x', False),
+            'position_invert_y': coord_cfg.get('position_invert_y', False),
+            'position_invert_z': coord_cfg.get('position_invert_z', False),
         }],
         output='screen',
     ))

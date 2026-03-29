@@ -103,3 +103,159 @@ For running using the dual arm launch and in simulation
   ros2 run side_arm_control manual_jog
 
   # Send Coordinate
+
+
+---
+
+# Full System Launch Commands
+
+The full system includes: main arm (WX200), side arms, vision, and state machine coordinator.
+
+## Quick Reference
+
+| Launch File | Use Case |
+|-------------|----------|
+| `full_system.launch.py` | Complete system with state machine (production/demo) |
+| `dual_side_arm.launch.py` | Both side arms only, no main arm |
+| `dual_arm_test.launch.py` | Single side arm + main arm testing |
+
+---
+
+## Full System (State Machine + All Arms)
+
+### Simulation with both side arms and vision test loops
+```bash
+ros2 launch parachute_coordinator full_system.launch.py sim:=true vision_test:=true
+```
+
+### Simulation with RIGHT arm only (V2 - homes to X=340)
+```bash
+ros2 launch parachute_coordinator full_system.launch.py sim:=true enable_left:=false enable_right:=true vision_test:=true
+```
+
+### Simulation with LEFT arm only (V1 - homes to X=0)
+```bash
+ros2 launch parachute_coordinator full_system.launch.py sim:=true enable_left:=true enable_right:=false vision_test:=true
+```
+
+### Hardware mode (all systems real)
+```bash
+ros2 launch parachute_coordinator full_system.launch.py sim:=false
+```
+
+### Start the stowing sequence (after launch)
+```bash
+ros2 topic pub --once /stow/command std_msgs/String "data: start"
+```
+
+### Pause/Resume stowing
+```bash
+ros2 topic pub --once /stow/command std_msgs/String "data: pause"
+ros2 topic pub --once /stow/command std_msgs/String "data: resume"
+```
+
+### Full System Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| sim | true | Simulation mode (no hardware) |
+| enable_main_arm | true | Enable WX200 main arm |
+| enable_left | true | Enable left side arm (V1) |
+| enable_right | true | Enable right side arm (V2) |
+| vision_test | false | Use simulated loop targets |
+| enable_coordinator | true | Enable state machine |
+
+---
+
+## Dual Side Arm Only (No Main Arm)
+
+### Both arms in simulation
+```bash
+ros2 launch parachute_coordinator dual_side_arm.launch.py sim:=true
+```
+
+### Right arm only (V2)
+```bash
+ros2 launch parachute_coordinator dual_side_arm.launch.py sim:=true enable_left:=false
+```
+
+### Left arm only (V1)
+```bash
+ros2 launch parachute_coordinator dual_side_arm.launch.py sim:=true enable_right:=false
+```
+
+### Hardware mode
+```bash
+ros2 launch parachute_coordinator dual_side_arm.launch.py sim:=false
+```
+
+---
+
+## Single Side Arm Testing (dual_arm_test)
+
+### Side arm simulation only (no main arm)
+```bash
+ros2 launch parachute_coordinator dual_arm_test.launch.py side_arm_sim:=true enable_main_arm:=false
+```
+
+### Side arm with V2 config
+```bash
+ros2 launch parachute_coordinator dual_arm_test.launch.py side_arm_sim:=true enable_main_arm:=false arm_config:=side_arm_right.yaml
+```
+
+### Side arm with vision test
+```bash
+ros2 launch parachute_coordinator dual_arm_test.launch.py side_arm_sim:=true enable_main_arm:=false vision_test_mode:=true
+```
+
+---
+
+## Side Arm Configurations
+
+| Config File | Arm | Homing Position | Notes |
+|-------------|-----|-----------------|-------|
+| side_arm_v1.yaml | V1 | X=0, Y=0, Z=0 | Original gantry |
+| side_arm_left.yaml | Left (V1) | X=0, Y=0, Z=0 | Positive Y side |
+| side_arm_v2.yaml | V2 | X=340, Y=0, Z=0 | Framed gantry, inverted X/Z |
+| side_arm_right.yaml | Right (V2) | X=340, Y=0, Z=0 | Negative Y side |
+
+---
+
+## Manual Side Arm Control
+
+### Move to position (simulation or hardware)
+```bash
+ros2 service call /side_arm_right/move_to_position parachute_interfaces/srv/MoveToPosition \
+  "{x_mm: 100.0, y_mm: 50.0, z_mm: 20.0, speed_scale: 0.5}"
+```
+
+### Home the arm
+```bash
+ros2 topic pub --once /side_arm_right/command std_msgs/String "data: HOME_ALL"
+```
+
+### Check arm state
+```bash
+ros2 topic echo /side_arm_right/parsed_state
+```
+
+---
+
+## Troubleshooting
+
+### Rebuild after changes
+```bash
+cd ~/coding_projects/MQP-Parachute-Packing-Automation-and-Inspection
+colcon build --packages-select side_arm_control parachute_coordinator
+source install/setup.bash
+```
+
+### Check if nodes are running
+```bash
+ros2 node list
+```
+
+### View TF tree
+```bash
+ros2 run tf2_tools view_frames
+```
