@@ -124,6 +124,7 @@ The full system includes: main arm (WX200), side arms, vision, and state machine
 ## Full System (State Machine + All Arms)
 
 ### Simulation with both side arms and vision test loops
+10 test loops: 5 on left side (Y=0.15), 5 on right side (Y=-0.15)
 ```bash
 ros2 launch parachute_coordinator full_system.launch.py sim:=true vision_test:=true
 ```

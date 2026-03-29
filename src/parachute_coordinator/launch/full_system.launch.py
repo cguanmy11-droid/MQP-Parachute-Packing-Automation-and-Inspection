@@ -359,7 +359,24 @@ def launch_setup(context, *args, **kwargs):
 
     # ==================== VISION NODES ====================
     if vision_test:
-        # Loop ground truth (simulated loops)
+        # Loop ground truth (simulated loops on both sides)
+        # Left side (positive Y ~0.15) - 5 loops for left arm
+        # Right side (negative Y ~-0.15) - 5 loops for right arm
+        static_loop_positions = [
+            # Left side loops (positive Y, for left arm)
+            0.25, 0.15, -0.02,   # Loop 0
+            0.29, 0.15, 0.00,    # Loop 1
+            0.33, 0.15, -0.01,   # Loop 2
+            0.37, 0.15, 0.01,    # Loop 3
+            0.40, 0.15, -0.02,   # Loop 4
+            # Right side loops (negative Y, for right arm)
+            0.25, -0.15, -0.02,  # Loop 5
+            0.29, -0.15, 0.00,   # Loop 6
+            0.33, -0.15, -0.01,  # Loop 7
+            0.37, -0.15, 0.01,   # Loop 8
+            0.40, -0.15, -0.02,  # Loop 9
+        ]
+
         nodes.append(Node(
             package='parachute_perception',
             executable='loop_ground_truth_node',
@@ -368,12 +385,10 @@ def launch_setup(context, *args, **kwargs):
             parameters=[{
                 'frame_id': 'world',
                 'publish_rate': 10.0,
-                'pattern': 'line',
-                'num_loops': 5,
+                'pattern': 'static',
+                'num_loops': 10,
                 'loop_radius': 0.015,
-                'x_min': 0.25, 'x_max': 0.40,
-                'y_min': 0.148, 'y_max': 0.152,
-                'z_min': -0.04, 'z_max': 0.01,
+                'static_positions': static_loop_positions,
                 'marker_color_r': 0.2,
                 'marker_color_g': 0.4,
                 'marker_color_b': 0.9,
