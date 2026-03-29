@@ -53,7 +53,7 @@ import os
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction, OpaqueFunction, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition, UnlessCondition
@@ -76,15 +76,18 @@ def launch_setup(context, *args, **kwargs):
         'dual_arm.rviz'
     )
 
-    # Load frame URDF
-    frame_urdf_path = os.path.join(
-        get_package_share_directory('main_arm_control'),
-        'urdf',
-        'framemodel.urdf'
-    )
-
-    with open(frame_urdf_path, 'r') as f:
-        frame_urdf = f.read()
+    # Load frame URDF (optional — only needed when main arm is enabled)
+    frame_urdf = ''
+    try:
+        frame_urdf_path = os.path.join(
+            get_package_share_directory('main_arm_control'),
+            'urdf',
+            'framemodel.urdf'
+        )
+        with open(frame_urdf_path, 'r') as f:
+            frame_urdf = f.read()
+    except Exception:
+        pass  # main_arm_control not built — main arm nodes will be skipped
 
     # =============================================================================
     # SIDE ARM CONFIGURATION
@@ -138,6 +141,62 @@ def launch_setup(context, *args, **kwargs):
     # Camera frame name from config (supports prefixed frames like left_camera_frame)
     camera_frame_id = viz_config.get('camera_frame_id', 'camera_frame')
     print(f"[dual_arm_test] Using camera frame: {camera_frame_id}")
+
+    # Side camera perception arguments
+    enable_side_cam_arg = DeclareLaunchArgument(
+        'enable_side_cam',
+        default_value='false',
+        description='Enable side camera YOLO detection pipeline'
+    )
+
+    side_cam_device_arg = DeclareLaunchArgument(
+        'side_cam_device',
+        default_value='0',
+        description='Side camera device index'
+    )
+
+    side_cam_conf_arg = DeclareLaunchArgument(
+        'side_cam_conf',
+        default_value='0.5',
+        description='Side camera YOLO confidence threshold'
+    )
+
+    side_cam_depth_arg = DeclareLaunchArgument(
+        'side_cam_depth',
+        default_value='0.22',
+        description='Assumed depth from side camera to loop plane (meters)'
+    )
+
+    # Top camera loop state arguments
+    enable_top_cam_arg = DeclareLaunchArgument(
+        'enable_top_cam',
+        default_value='false',
+        description='Enable top camera YOLO loop state detection'
+    )
+
+    top_cam_device_arg = DeclareLaunchArgument(
+        'top_cam_device',
+        default_value='/dev/video4',
+        description='Top camera device path'
+    )
+
+    top_cam_det_weights_arg = DeclareLaunchArgument(
+        'top_cam_det_weights',
+        default_value=os.path.join(
+            os.path.expanduser('~'),
+            'MQP_ws/MQP-Parachute-Packing-Automation-and-Inspection/src/top_cam_yolo/runs/detect/runs/detect/yolo26m_holes_all_aug/weights/best.pt'
+        ),
+        description='Top camera YOLO detection weights'
+    )
+
+    top_cam_cls_weights_arg = DeclareLaunchArgument(
+        'top_cam_cls_weights',
+        default_value=os.path.join(
+            os.path.expanduser('~'),
+            'MQP_ws/MQP-Parachute-Packing-Automation-and-Inspection/src/top_cam_yolo/runs/classify/runs/classify/yolo26m_cls_custom_aug/weights/best.pt'
+        ),
+        description='Top camera YOLO classification weights'
+    )
 
     # ==================== MAIN ARM NODES ====================
 
@@ -633,6 +692,70 @@ def launch_setup(context, *args, **kwargs):
         condition=IfCondition(LaunchConfiguration('vision_test_mode'))
     )
 
+    # ==================== SIDE CAMERA PERCEPTION ====================
+
+    side_cam_yolo = Node(
+        package='yolo_detect_ros',
+        executable='yolo_detector',
+        name='yolo_detector',
+        output='screen',
+        parameters=[{
+            'camera_index': LaunchConfiguration('side_cam_device'),
+            'conf_threshold': LaunchConfiguration('side_cam_conf'),
+            'iou_threshold': 0.5,
+            'frame_rate': 30.0,
+            'camera_frame_id': 'camera_frame',
+            'centers_topic': '/yolo/centers',
+            'display': True,
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_side_cam'))
+    )
+
+    side_cam_to_3d = Node(
+        package='parachute_perception',
+        executable='camera_to_3d_node',
+        name='camera_to_3d_node',
+        output='screen',
+        parameters=[{
+            'image_width': 640,
+            'image_height': 480,
+            'camera_fov_horizontal': 80.0,
+            'assumed_depth': LaunchConfiguration('side_cam_depth'),
+            'input_topic': '/yolo/centers',
+            'output_topic': '/detected_loops',
+            'camera_frame_id': 'camera_frame',
+            'base_confidence': 0.85,
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_side_cam'))
+    )
+
+    # ==================== TOP CAMERA LOOP STATE ====================
+
+    # Ensure user site-packages are visible for ultralytics
+    _user_site = os.path.expanduser("~/.local/lib/python3.12/site-packages")
+    _extra_path = _user_site if os.path.isdir(_user_site) else ""
+    _existing_pythonpath = os.environ.get("PYTHONPATH", "")
+    _merged_pythonpath = f"{_extra_path}:{_existing_pythonpath}" if _extra_path else _existing_pythonpath
+
+    top_cam_env = SetEnvironmentVariable("PYTHONPATH", _merged_pythonpath)
+
+    top_cam_loop_state = Node(
+        package='top_cam_loop_state',
+        executable='loop_state_node',
+        name='top_cam_loop_state',
+        output='screen',
+        parameters=[{
+            'camera_index': LaunchConfiguration('top_cam_device'),
+            'det_weights': LaunchConfiguration('top_cam_det_weights'),
+            'cls_weights': LaunchConfiguration('top_cam_cls_weights'),
+            'conf_threshold': 0.35,
+            'iou_threshold': 0.45,
+            'frame_rate': 30.0,
+            'display': True,
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_top_cam'))
+    )
+
     # ==================== REAL CAMERA NODES ====================
     # YOLO detector (real USB camera)
     yolo_detector = Node(
@@ -679,6 +802,15 @@ def launch_setup(context, *args, **kwargs):
     # Return list of nodes (arguments are declared in generate_launch_description)
 
     return [
+        enable_side_cam_arg,
+        side_cam_device_arg,
+        side_cam_conf_arg,
+        side_cam_depth_arg,
+        enable_top_cam_arg,
+        top_cam_device_arg,
+        top_cam_det_weights_arg,
+        top_cam_cls_weights_arg,
+        top_cam_env,
         joy_node,
 
         # Main arm nodes
@@ -715,6 +847,13 @@ def launch_setup(context, *args, **kwargs):
         loop_ground_truth,
         loop_visualizer,
         detection_simulator,
+
+        # Side camera perception
+        side_cam_yolo,
+        side_cam_to_3d,
+
+        # Top camera loop state
+        top_cam_loop_state,
 
         # Real camera nodes
         yolo_detector,

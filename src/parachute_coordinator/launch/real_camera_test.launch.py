@@ -46,13 +46,20 @@ Usage:
     ros2 service call /load_calibration std_srvs/srv/Trigger
 """
 
+import os
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+# Ensure user site-packages are visible (ROS 2 disables them by default)
+_user_site = os.path.expanduser("~/.local/lib/python3.12/site-packages")
+_extra_path = _user_site if os.path.isdir(_user_site) else ""
+
 
 def generate_launch_description():
+    existing_pythonpath = os.environ.get("PYTHONPATH", "")
+    merged_pythonpath = f"{_extra_path}:{existing_pythonpath}" if _extra_path else existing_pythonpath
     # ==================== ARGUMENTS ====================
 
     # Camera settings
@@ -232,6 +239,7 @@ def generate_launch_description():
     # ==================== LAUNCH ====================
 
     return LaunchDescription([
+        SetEnvironmentVariable("PYTHONPATH", merged_pythonpath),
         # Arguments
         camera_index_arg,
         display_arg,
