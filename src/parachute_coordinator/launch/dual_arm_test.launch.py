@@ -167,6 +167,12 @@ def launch_setup(context, *args, **kwargs):
         description='Assumed depth from side camera to loop plane (meters)'
     )
 
+    side_cam_display_arg = DeclareLaunchArgument(
+        'side_cam_display',
+        default_value='false',
+        description='Show side camera cv2 window (set false when using GUI)'
+    )
+
     # Top camera loop state arguments
     enable_top_cam_arg = DeclareLaunchArgument(
         'enable_top_cam',
@@ -196,6 +202,12 @@ def launch_setup(context, *args, **kwargs):
             'MQP_ws/MQP-Parachute-Packing-Automation-and-Inspection/src/top_cam_yolo/runs/classify/runs/classify/yolo26m_cls_custom_aug/weights/best.pt'
         ),
         description='Top camera YOLO classification weights'
+    )
+
+    top_cam_display_arg = DeclareLaunchArgument(
+        'top_cam_display',
+        default_value='false',
+        description='Show top camera cv2 window (set false when using GUI)'
     )
 
     # ==================== MAIN ARM NODES ====================
@@ -706,7 +718,9 @@ def launch_setup(context, *args, **kwargs):
             'frame_rate': 30.0,
             'camera_frame_id': 'camera_frame',
             'centers_topic': '/yolo/centers',
-            'display': True,
+            'image_topic': '/yolo/image',
+            'publish_image': True,
+            'display': LaunchConfiguration('side_cam_display'),
         }],
         condition=IfCondition(LaunchConfiguration('enable_side_cam'))
     )
@@ -751,7 +765,9 @@ def launch_setup(context, *args, **kwargs):
             'conf_threshold': 0.35,
             'iou_threshold': 0.45,
             'frame_rate': 30.0,
-            'display': True,
+            'display': LaunchConfiguration('top_cam_display'),
+            'publish_image': True,
+            'image_topic': '/top_cam/image',
         }],
         condition=IfCondition(LaunchConfiguration('enable_top_cam'))
     )
@@ -806,10 +822,12 @@ def launch_setup(context, *args, **kwargs):
         side_cam_device_arg,
         side_cam_conf_arg,
         side_cam_depth_arg,
+        side_cam_display_arg,
         enable_top_cam_arg,
         top_cam_device_arg,
         top_cam_det_weights_arg,
         top_cam_cls_weights_arg,
+        top_cam_display_arg,
         top_cam_env,
         joy_node,
 
