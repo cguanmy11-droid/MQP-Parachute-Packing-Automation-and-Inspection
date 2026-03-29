@@ -9,6 +9,8 @@ Subscriptions:
   /target_loop             DetectedLoop  - current target selected by coordinator
   /side_arm_left/status    HookStatus    - left arm status
   /side_arm_right/status   HookStatus    - right arm status
+  /yolo/image              Image         - side camera feed with YOLO annotations
+  /top_cam/image           Image         - top camera feed (if available)
 
 Publishers:
   /stow/command        String        - start|pause|resume|retry|skip|abort|home
@@ -19,6 +21,7 @@ import threading
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String, Bool
+from sensor_msgs.msg import Image
 from parachute_interfaces.msg import DetectedLoops, DetectedLoop, HookStatus
 
 from PyQt5.QtCore import QObject, pyqtSignal
@@ -33,6 +36,8 @@ class ROSBridge(QObject):
     joystick_mode_changed = pyqtSignal(bool)
     left_arm_status       = pyqtSignal(dict)   # left arm status dict
     right_arm_status      = pyqtSignal(dict)   # right arm status dict
+    side_camera_image     = pyqtSignal(object) # dict with image data
+    top_camera_image      = pyqtSignal(object) # dict with image data
 
     def __init__(self):
         super().__init__()
@@ -56,6 +61,14 @@ class ROSBridge(QObject):
         self._node.create_subscription(
             HookStatus, '/side_arm_right/status',
             lambda msg: self._on_arm_status(msg, 'right'), 10)
+
+        # Camera image subscriptions
+        self._node.create_subscription(
+            Image, '/yolo/image',
+            lambda msg: self._on_camera_image(msg, 'side'), 10)
+        self._node.create_subscription(
+            Image, '/top_cam/image',
+            lambda msg: self._on_camera_image(msg, 'top'), 10)
 
         self._cmd_pub = self._node.create_publisher(String, '/stow/command', 10)
         self._joy_pub = self._node.create_publisher(Bool, '/joystick_enabled', 10)
@@ -112,6 +125,19 @@ class ROSBridge(QObject):
             self.left_arm_status.emit(status)
         else:
             self.right_arm_status.emit(status)
+
+    def _on_camera_image(self, msg: Image, camera: str):
+        """Convert ROS Image message to dict for GUI display."""
+        image_data = {
+            'width': msg.width,
+            'height': msg.height,
+            'encoding': msg.encoding,
+            'data': bytes(msg.data),
+        }
+        if camera == 'side':
+            self.side_camera_image.emit(image_data)
+        else:
+            self.top_camera_image.emit(image_data)
 
     # ── GUI → ROS2 ────────────────────────────────────────────────────────────
 

@@ -14,6 +14,7 @@ Architecture: inference runs in a background thread so the display
 
 ROS 2 Publications:
   /top_cam/loop_states  (parachute_interfaces/LoopStateArray)
+  /top_cam/image        (sensor_msgs/Image) - annotated camera feed
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ except ImportError as exc:
     raise RuntimeError("ultralytics not found. Run: pip install ultralytics") from exc
 
 from parachute_interfaces.msg import LoopState, LoopStateArray
+from sensor_msgs.msg import Image
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +277,8 @@ class TopCamLoopStateNode(Node):
         self.declare_parameter("cls_w",          256)
         self.declare_parameter("display",        True)
         self.declare_parameter("output_topic",   "/top_cam/loop_states")
+        self.declare_parameter("image_topic",    "/top_cam/image")
+        self.declare_parameter("publish_image",  True)
 
         cam_raw      = self.get_parameter("camera_index").value
         # Support both device path ("/dev/video2") and integer index
@@ -293,8 +297,10 @@ class TopCamLoopStateNode(Node):
         frame_rate   = self.get_parameter("frame_rate").value
         cls_h        = self.get_parameter("cls_h").value
         cls_w        = self.get_parameter("cls_w").value
-        self.display = self.get_parameter("display").value
-        out_topic    = self.get_parameter("output_topic").value
+        self.display       = self.get_parameter("display").value
+        out_topic          = self.get_parameter("output_topic").value
+        image_topic        = self.get_parameter("image_topic").value
+        self.publish_image = self.get_parameter("publish_image").value
 
         try:
             import torch
@@ -337,6 +343,7 @@ class TopCamLoopStateNode(Node):
         )
 
         self.pub = self.create_publisher(LoopStateArray, out_topic, 10)
+        self.image_pub = self.create_publisher(Image, image_topic, 10)
 
         self._prev_states: Dict[str, str] = {}
         self._last_display: Optional[np.ndarray] = None
@@ -400,7 +407,7 @@ class TopCamLoopStateNode(Node):
             self._fps_value = 0.9 * self._fps_value + 0.1 * (1.0 / dt)
         self._fps_tick_prev = now
 
-        if self.display and self._last_display is not None:
+        if self._last_display is not None:
             img_w = self._last_display.shape[1]
             # Display FPS (top-right)
             cv2.putText(self._last_display, f"Display: {self._fps_value:.1f} FPS",
@@ -410,10 +417,34 @@ class TopCamLoopStateNode(Node):
             cv2.putText(self._last_display, f"Infer:   {self._worker.infer_fps:.1f} FPS",
                         (img_w - 180, 38),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1, cv2.LINE_AA)
-            cv2.imshow("Top Cam Loop State", self._last_display)
-            if cv2.waitKey(1) & 0xFF == 27:
-                self.get_logger().info("ESC — shutting down.")
-                rclpy.shutdown()
+
+            # Publish annotated image to ROS2
+            if self.publish_image:
+                img_msg = self._cv2_to_imgmsg(self._last_display)
+                img_msg.header.stamp = self.get_clock().now().to_msg()
+                img_msg.header.frame_id = "top_camera"
+                self.image_pub.publish(img_msg)
+
+            if self.display:
+                cv2.imshow("Top Cam Loop State", self._last_display)
+                if cv2.waitKey(1) & 0xFF == 27:
+                    self.get_logger().info("ESC — shutting down.")
+                    rclpy.shutdown()
+
+    # ------------------------------------------------------------------
+    def _cv2_to_imgmsg(self, cv_image: np.ndarray) -> Image:
+        """Convert OpenCV image to ROS Image message (without cv_bridge)."""
+        msg = Image()
+        msg.height = cv_image.shape[0]
+        msg.width = cv_image.shape[1]
+        if len(cv_image.shape) == 3:
+            msg.encoding = 'bgr8'
+            msg.step = cv_image.shape[1] * 3
+        else:
+            msg.encoding = 'mono8'
+            msg.step = cv_image.shape[1]
+        msg.data = cv_image.tobytes()
+        return msg
 
     # ------------------------------------------------------------------
     def _print_states(self, loop_states: List[LoopState]) -> None:

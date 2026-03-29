@@ -4,14 +4,15 @@ main_window.py
 Top-level Qt window. Wires GUI widgets ↔ ROSBridge.
 
 Layout:
-  ┌─────────────────────────────────────────────────────────┐
-  │  PARACHUTE PACKING OPERATOR CONSOLE          [state tag]│
-  ├──────────────────┬──────────────────┬───────────────────┤
-  │  State Machine   │  Loop Selector   │  Arm Control      │
-  │  (diagram)       │  (buttons)       │  (joystick/cmds)  │
-  ├──────────────────┴──────────────────┴───────────────────┤
-  │  Error / Message Log                                    │
-  └─────────────────────────────────────────────────────────┘
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │  PARACHUTE PACKING OPERATOR CONSOLE                    [state tag] │
+  ├──────────────────┬──────────────────┬───────────────────┬──────────┤
+  │  State Machine   │  Loop Selector   │  Arm Control      │  Side    │
+  │  (diagram)       │  (buttons)       │  (joystick/cmds)  │  Camera  │
+  ├──────────────────┴──────────────────┴───────────────────┼──────────┤
+  │  Error / Message Log                                    │  Top     │
+  │                                                         │  Camera  │
+  └─────────────────────────────────────────────────────────┴──────────┘
 """
 
 import sys
@@ -25,6 +26,7 @@ from PyQt5.QtGui import QFont, QColor, QPalette
 from parachute_gui.gui_node import ROSBridge
 from parachute_gui.widgets.state_machine_widget import StateMachineWidget
 from parachute_gui.widgets.control_widgets import LoopSelectorWidget, ArmControlWidget
+from parachute_gui.widgets.camera_widget import CameraWidget
 
 # Max log lines shown
 MAX_LOG_LINES = 200
@@ -37,7 +39,7 @@ class MainWindow(QMainWindow):
         self._log_lines = []
 
         self.setWindowTitle('Parachute Packing Operator Console')
-        self.resize(1200, 750)
+        self.resize(1600, 800)
         self.setStyleSheet('background-color: #1a1a2e; color: #eaeaea;')
 
         self._build_ui()
@@ -55,9 +57,17 @@ class MainWindow(QMainWindow):
         # Header bar
         main_layout.addWidget(self._build_header())
 
-        # Three-panel content area
+        # Main content: left panels + right camera column
         content = QHBoxLayout()
         content.setSpacing(8)
+
+        # Left side: control panels
+        left_panels = QVBoxLayout()
+        left_panels.setSpacing(8)
+
+        # Top row: state, loops, arm control
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
 
         self._state_widget = StateMachineWidget()
         self._state_widget.setMinimumWidth(320)
@@ -72,12 +82,35 @@ class MainWindow(QMainWindow):
             w.setStyleSheet(w.styleSheet() + '''
                 border: 1px solid #0f3460; border-radius: 8px;
             ''')
-            content.addWidget(w)
+            top_row.addWidget(w)
 
-        main_layout.addLayout(content, stretch=4)
+        left_panels.addLayout(top_row, stretch=3)
 
         # Log panel
-        main_layout.addWidget(self._build_log_panel(), stretch=1)
+        left_panels.addWidget(self._build_log_panel(), stretch=1)
+
+        content.addLayout(left_panels, stretch=3)
+
+        # Right side: camera feeds
+        camera_panel = QVBoxLayout()
+        camera_panel.setSpacing(8)
+
+        self._side_camera = CameraWidget("Side Camera (Loop Detection)")
+        self._side_camera.setStyleSheet('''
+            border: 1px solid #0f3460; border-radius: 8px;
+        ''')
+
+        self._top_camera = CameraWidget("Top Camera (Stow Verification)")
+        self._top_camera.setStyleSheet('''
+            border: 1px solid #0f3460; border-radius: 8px;
+        ''')
+
+        camera_panel.addWidget(self._side_camera, stretch=1)
+        camera_panel.addWidget(self._top_camera, stretch=1)
+
+        content.addLayout(camera_panel, stretch=2)
+
+        main_layout.addLayout(content, stretch=1)
 
     def _build_header(self) -> QWidget:
         bar = QWidget()
@@ -150,10 +183,15 @@ class MainWindow(QMainWindow):
         self._bridge.error_received.connect(self._on_error)
         self._bridge.loops_updated.connect(self._loop_widget.update_loops)
         self._bridge.target_loop_updated.connect(self._loop_widget.set_target_loop)
+        self._bridge.target_loop_updated.connect(self._side_camera.set_target_loop)
         self._bridge.joystick_mode_changed.connect(self._arm_widget.set_joystick_state)
         self._bridge.current_arm_changed.connect(self._on_arm_changed)
         self._bridge.left_arm_status.connect(self._arm_widget.update_arm_status)
         self._bridge.right_arm_status.connect(self._arm_widget.update_arm_status)
+
+        # Camera feeds
+        self._bridge.side_camera_image.connect(self._side_camera.update_image)
+        self._bridge.top_camera_image.connect(self._top_camera.update_image)
 
         # GUI → ROS2
         self._arm_widget.command_requested.connect(self._bridge.send_command)
