@@ -68,13 +68,13 @@ interface_node:
 
   # Hook offset from origin when homed (mm) - TODO: Calibrate for V2
   hook_offset_x_mm: 10.0
-  hook_offset_y_mm: 210.0
+  hook_offset_y_mm: 115.0
   hook_offset_z_mm: -156.0
 
   # Motor direction inversions - V2 is rotated 180° from V1
-  invert_x: true
+  invert_x: false
   invert_y: false
-  invert_z: true
+  invert_z: false
 
   approach_offset_z: 50.0
   insert_depth_z: 30.0

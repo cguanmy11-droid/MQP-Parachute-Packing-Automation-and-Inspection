@@ -47,7 +47,7 @@ coordinate_node:
   home_z_mm: 0.0
 
   # Position invert - V1 steps increase from 0
-  position_invert_x: false
+  position_invert_x: true
   position_invert_y: false
   position_invert_z: false
 

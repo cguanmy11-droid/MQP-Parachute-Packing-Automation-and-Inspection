@@ -174,7 +174,7 @@
   <!-- ==================== X-AXIS (HORIZONTAL) ==================== -->
   <link name="${prefix}x_rail_link">
     <visual>
-      <origin xyz="0.15 0 0" rpy="0 0 0"/>
+      <origin xyz="0.15 0 0" rpy="0 0 0"/>  <!-- was 0.15 0 0 -->
       <geometry>
         <box size="0.32 0.02 0.02"/>
       </geometry>
@@ -256,10 +256,17 @@
     </visual>
   </link>
 
-  <joint name="${prefix}y_carriage_to_crossbar" type="fixed">
+  <!-- <joint name="${prefix}y_carriage_to_crossbar" type="fixed">
     <parent link="${prefix}y_carriage_link"/>
     <child link="${prefix}moving_crossbar"/>
     <origin xyz="0.14 0 0" rpy="0 0 0"/>
+  </joint> -->
+  <joint name="${prefix}y_carriage_to_crossbar" type="prismatic">
+    <parent link="${prefix}frame_left_rail"/>
+    <child link="${prefix}moving_crossbar"/>
+    <origin xyz="0.14 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="0.0" upper="0.35" effort="10" velocity="0.05"/>
   </joint>
 
   <!-- ==================== Z-AXIS (DEPTH) ==================== -->
