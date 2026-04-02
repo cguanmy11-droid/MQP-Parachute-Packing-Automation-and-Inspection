@@ -358,25 +358,34 @@ def launch_setup(context, *args, **kwargs):
         nodes.extend(create_side_arm_nodes('right', right_config, sim_mode))
 
     # ==================== VISION NODES ====================
-    if vision_test:
-        # Loop ground truth (simulated loops on both sides)
-        # Left side (positive Y ~0.15) - 5 loops for left arm
-        # Right side (negative Y ~-0.15) - 5 loops for right arm
-        static_loop_positions = [
-            # Left side loops (positive Y, for left arm) - straight line
-            0.25, 0.15, -0.015,  # Loop 0
-            0.29, 0.15, -0.015,  # Loop 1
-            0.33, 0.15, -0.015,  # Loop 2
-            0.37, 0.15, -0.015,  # Loop 3
-            0.40, 0.15, -0.015,  # Loop 4
-            # Right side loops (negative Y, for right arm) - straight line
-            0.25, -0.15, -0.015, # Loop 5
-            0.29, -0.15, -0.015, # Loop 6
-            0.33, -0.15, -0.015, # Loop 7
-            0.37, -0.15, -0.015, # Loop 8
-            0.40, -0.15, -0.015, # Loop 9
-        ]
 
+    # Read camera config from each arm's yaml
+    left_config = load_config(os.path.join(config_dir, 'side_arm_left.yaml'))
+    right_config = load_config(os.path.join(config_dir, 'side_arm_right.yaml'))
+    left_camera_frame = left_config.get('visualizer', {}).get('camera_frame_id', 'left_camera_frame')
+    right_camera_frame = right_config.get('visualizer', {}).get('camera_frame_id', 'right_camera_frame')
+
+    # Read vision args
+    vision_test = LaunchConfiguration('vision_test').perform(context).lower() == 'true'
+    use_real_camera = LaunchConfiguration('use_real_camera').perform(context).lower() == 'true'
+    enable_side_cam = LaunchConfiguration('enable_side_cam').perform(context).lower() == 'true'
+    enable_top_cam = LaunchConfiguration('enable_top_cam').perform(context).lower() == 'true'
+
+    # ---- Simulated ground truth loops (both sides) ----
+    static_loop_positions = [
+        0.25,  0.15, -0.015,  # Left loops 0-4
+        0.29,  0.15, -0.015,
+        0.33,  0.15, -0.015,
+        0.37,  0.15, -0.015,
+        0.40,  0.15, -0.015,
+        0.25, -0.15, -0.015,  # Right loops 5-9
+        0.29, -0.15, -0.015,
+        0.33, -0.15, -0.015,
+        0.37, -0.15, -0.015,
+        0.40, -0.15, -0.015,
+    ]
+
+    if vision_test:
         nodes.append(Node(
             package='parachute_perception',
             executable='loop_ground_truth_node',
@@ -396,27 +405,32 @@ def launch_setup(context, *args, **kwargs):
             }],
         ))
 
-        # Detection simulator
-        nodes.append(Node(
-            package='parachute_perception',
-            executable='detection_simulator_node',
-            name='detection_simulator_node',
-            output='screen',
-            parameters=[{
-                'camera_frame_id': 'camera_frame',
-                'world_frame_id': 'world',
-                'camera_fov_horizontal': 80.0,
-                'camera_fov_vertical': 80.0,
-                'max_detection_range': 1.0,
-                'min_detection_range': 0.01,
-                'detection_noise_stddev': 0.00003,
-                'confidence_base': 0.90,
-                'publish_rate': 5.0,
-                'debug_bypass_fov': True,
-            }],
-        ))
+        # One detection simulator per arm (each uses its own camera frame)
+        for cam_frame, arm_ns in [
+            (left_camera_frame, 'side_arm_left'),
+            (right_camera_frame, 'side_arm_right'),
+        ]:
+            nodes.append(Node(
+                package='parachute_perception',
+                executable='detection_simulator_node',
+                name=f'detection_simulator_{arm_ns}',
+                output='screen',
+                parameters=[{
+                    'camera_frame_id': cam_frame,
+                    'world_frame_id': 'world',
+                    'camera_fov_horizontal': 80.0,
+                    'camera_fov_vertical': 80.0,
+                    'max_detection_range': 1.0,
+                    'min_detection_range': 0.01,
+                    'detection_noise_stddev': 0.00003,
+                    'confidence_base': 0.90,
+                    'publish_rate': 5.0,
+                    'debug_bypass_fov': True,
+                    'output_topic': f'/{arm_ns}/detected_loops',
+                }],
+            ))
 
-    # Loop visualizer (always on)
+    # ---- Loop visualizer (always on) ----
     nodes.append(Node(
         package='parachute_perception',
         executable='loop_visualizer_node',
@@ -424,7 +438,7 @@ def launch_setup(context, *args, **kwargs):
         output='screen',
         parameters=[{
             'marker_scale': 0.015,
-            'input_frame_id': 'camera_frame',
+            'input_topic': '/side_arm_left/detected_loops',  # primary for viz
             'output_frame_id': 'world',
             'grid_enabled': True,
             'grid_size_x': 0.4,
@@ -432,6 +446,68 @@ def launch_setup(context, *args, **kwargs):
             'grid_offset_z': 0.15,
         }],
     ))
+
+    # ---- Real cameras (one per arm) ----
+    if use_real_camera:
+        for cam_idx_arg, cam_frame, arm_ns in [
+            ('left_camera_index',  left_camera_frame,  'side_arm_left'),
+            ('right_camera_index', right_camera_frame, 'side_arm_right'),
+        ]:
+            nodes.append(Node(
+                package='yolo_detect_ros',
+                executable='yolo_detector',
+                name=f'yolo_detector_{arm_ns}',
+                output='screen',
+                parameters=[{
+                    'camera_index': LaunchConfiguration(cam_idx_arg),
+                    'conf_threshold': 0.5,
+                    'iou_threshold': 0.5,
+                    'frame_rate': 30.0,
+                    'camera_frame_id': cam_frame,
+                    'centers_topic': f'/{arm_ns}/yolo/centers',
+                    'display': LaunchConfiguration('camera_display'),
+                }],
+            ))
+            nodes.append(Node(
+                package='parachute_perception',
+                executable='camera_to_3d_node',
+                name=f'camera_to_3d_{arm_ns}',
+                output='screen',
+                parameters=[{
+                    'image_width': 640,
+                    'image_height': 480,
+                    'camera_fov_horizontal': 80.0,
+                    'assumed_depth': LaunchConfiguration('assumed_depth'),
+                    'input_topic': f'/{arm_ns}/yolo/centers',
+                    'output_topic': f'/{arm_ns}/detected_loops',
+                    'camera_frame_id': cam_frame,
+                    'base_confidence': 0.85,
+                }],
+            ))
+
+    # ---- Top camera ----
+    if enable_top_cam:
+        _user_site = os.path.expanduser('~/.local/lib/python3.12/site-packages')
+        _extra_path = _user_site if os.path.isdir(_user_site) else ''
+        _merged = f"{_extra_path}:{os.environ.get('PYTHONPATH', '')}" if _extra_path else os.environ.get('PYTHONPATH', '')
+        nodes.append(SetEnvironmentVariable('PYTHONPATH', _merged))
+        nodes.append(Node(
+            package='top_cam_loop_state',
+            executable='loop_state_node',
+            name='top_cam_loop_state',
+            output='screen',
+            parameters=[{
+                'camera_index': LaunchConfiguration('top_cam_device'),
+                'det_weights': LaunchConfiguration('top_cam_det_weights'),
+                'cls_weights': LaunchConfiguration('top_cam_cls_weights'),
+                'conf_threshold': 0.35,
+                'iou_threshold': 0.45,
+                'frame_rate': 30.0,
+                'display': LaunchConfiguration('top_cam_display'),
+                'publish_image': True,
+                'image_topic': '/top_cam/image',
+            }],
+        ))
 
     # ==================== TARGET SELECTOR & COORDINATOR ====================
     if enable_coordinator:
@@ -506,5 +582,32 @@ def generate_launch_description():
             default_value='true',
             description='Enable state machine coordinator (set false for manual testing)'
         ),
+        # Adding vision launch args
+        DeclareLaunchArgument('use_real_camera', default_value='false',
+            description='Use real USB cameras with YOLO detection'),
+        DeclareLaunchArgument('left_camera_index', default_value='0',
+            description='Left arm camera device index'),
+        DeclareLaunchArgument('right_camera_index', default_value='2',
+            description='Right arm camera device index'),
+        DeclareLaunchArgument('camera_display', default_value='false',
+            description='Show YOLO detection windows'),
+        DeclareLaunchArgument('assumed_depth', default_value='0.22',
+            description='Assumed depth camera to loop plane (meters)'),
+        DeclareLaunchArgument('enable_side_cam', default_value='false',
+            description='Enable side camera pipeline'),
+        DeclareLaunchArgument('enable_top_cam', default_value='false',
+            description='Enable top camera loop state detection'),
+        DeclareLaunchArgument('top_cam_device', default_value='/dev/video4',
+            description='Top camera device path'),
+        DeclareLaunchArgument('top_cam_det_weights',
+            default_value=os.path.join(os.path.expanduser('~'),
+                'MQP_ws/MQP-Parachute-Packing-Automation-and-Inspection/src/top_cam_yolo/runs/detect/runs/detect/yolo26m_holes_all_aug/weights/best.pt'),
+            description='Top camera detection weights'),
+        DeclareLaunchArgument('top_cam_cls_weights',
+            default_value=os.path.join(os.path.expanduser('~'),
+                'MQP_ws/MQP-Parachute-Packing-Automation-and-Inspection/src/top_cam_yolo/runs/classify/runs/classify/yolo26m_cls_custom_aug/weights/best.pt'),
+            description='Top camera classification weights'),
+        DeclareLaunchArgument('top_cam_display', default_value='false',
+            description='Show top camera window'),
         OpaqueFunction(function=launch_setup),
     ])

@@ -22,7 +22,7 @@ Usage:
 
 import rclpy
 from rclpy.node import Node
-from parachute_interfaces.msg import DetectedLoops, DetectedLoop
+from parachute_interfaces.msg import DetectedLoops, DetectedLoop, LoopGroundTruth
 from parachute_interfaces.srv import RequestNextTarget, CaptureLoops
 from geometry_msgs.msg import Pose, PoseStamped, Point, Quaternion
 from std_msgs.msg import String
@@ -44,6 +44,7 @@ class TargetSelectorNode(Node):
         self.selection_strategy = self.get_parameter('selection_strategy').value
         self.proximity_threshold = self.get_parameter('stow_proximity_threshold').value
         self.output_frame = self.get_parameter('output_frame').value
+        self._next_side = 'left'
 
         # ==================== TF2 ====================
         self.tf_buffer = tf2_ros.Buffer()
@@ -68,6 +69,12 @@ class TargetSelectorNode(Node):
             self._command_callback, 10
         )
 
+        # Always subscribe to ground truth (used in test mode)
+        self.ground_truth_sub = self.create_subscription(
+            LoopGroundTruth, '/loop_ground_truth',
+            self._ground_truth_callback, 10
+        )
+
         # ==================== SERVICES ====================
         self.target_service = self.create_service(
             RequestNextTarget, '/request_next_target',
@@ -85,40 +92,59 @@ class TargetSelectorNode(Node):
 
         # ==================== TEST LOOPS ====================
         if self.use_test_loops:
-            self._generate_test_loops()
+            self.get_logger().info('Test mode: using /loop_ground_truth as source')
 
         mode = 'TEST LOOPS' if self.use_test_loops else 'DETECTION'
         self.get_logger().info(
-            f'Target Selector initialized ({mode}, '
-            f'strategy={self.selection_strategy}, '
-            f'{len(self.current_loops)} loops)'
+            f'Target Selector initialized ({mode}, strategy={self.selection_strategy})'
         )
 
-    def _generate_test_loops(self):
-        """Generate hardcoded test loops for development without perception."""
-        self.current_loops = []
-        # 5 loops spaced along X axis, matching ground truth defaults
-        test_positions = [
-            (0.25, 0.15, -0.02),
-            (0.29, 0.15, 0.00),
-            (0.33, 0.15, -0.01),
-            (0.37, 0.15, 0.01),
-            (0.41, 0.15, -0.02),
-        ]
+    # def _generate_test_loops(self):
+    #     """Generate hardcoded test loops for development without perception."""
+    #     self.current_loops = []
+    #     test_positions = [
+    #         # Left side (positive Y)
+    #         (0.25,  0.15, -0.02),
+    #         (0.29,  0.15,  0.00),
+    #         (0.33,  0.15, -0.01),
+    #         (0.37,  0.15,  0.01),
+    #         (0.41,  0.15, -0.02),
+    #         # Right side (negative Y)
+    #         (0.25, -0.15, -0.02),
+    #         (0.29, -0.15,  0.00),
+    #         (0.33, -0.15, -0.01),
+    #         (0.37, -0.15,  0.01),
+    #         (0.41, -0.15, -0.02),
+    #     ]
+    #     for i, (x, y, z) in enumerate(test_positions):
+    #         loop = DetectedLoop()
+    #         loop.loop_id = i
+    #         loop.confidence = 1.0
+    #         loop.pose = PoseStamped()
+    #         loop.pose.header.frame_id = 'world'
+    #         loop.pose.pose.position = Point(x=x, y=y, z=z)
+    #         loop.pose.pose.orientation = Quaternion(w=1.0)
+    #         self.current_loops.append(loop)
 
-        for i, (x, y, z) in enumerate(test_positions):
+    #     self.get_logger().info(f'Generated {len(self.current_loops)} test loops (5L + 5R)')
+
+    def _ground_truth_callback(self, msg):
+        """Use ground truth positions as test loops (single source of truth)."""
+        if not self.use_test_loops:
+            return
+        if self._is_locked:
+            return
+        
+        self.current_loops = []
+        for i, pos in enumerate(msg.positions):
             loop = DetectedLoop()
-            loop.loop_id = i
+            loop.loop_id = msg.loop_ids[i] if i < len(msg.loop_ids) else i
             loop.confidence = 1.0
             loop.pose = PoseStamped()
-            loop.pose.header.frame_id = 'world'
-            loop.pose.pose.position = Point(x=x, y=y, z=z)
+            loop.pose.header.frame_id = msg.header.frame_id or 'world'
+            loop.pose.pose.position = Point(x=pos.x, y=pos.y, z=pos.z)
             loop.pose.pose.orientation = Quaternion(w=1.0)
             self.current_loops.append(loop)
-
-        self.get_logger().info(
-            f'Generated {len(self.current_loops)} test loops'
-        )
 
     def _transform_to_output_frame(self, pose_stamped: PoseStamped) -> PoseStamped:
         """Transform a pose to the output frame (world)."""
@@ -183,6 +209,12 @@ class TargetSelectorNode(Node):
             self.stowed_positions.clear()
             self._generate_test_loops()
             self.get_logger().info('Test loops regenerated')
+        elif cmd == 'reset_targets':
+            self.stowed_positions.clear()
+            self._is_locked = False
+            self._locked_loops.clear()
+            self._next_side = 'left'  # add this line
+            self.get_logger().info('Stowed positions cleared, loops unlocked')
 
     def _capture_loops_callback(self, request, response):
         """
@@ -274,49 +306,50 @@ class TargetSelectorNode(Node):
                 return True
         return False
 
-    def _select_target(self, loops: list[DetectedLoop]) -> DetectedLoop | None:
-        """Select next target from available loops using configured strategy."""
-        # Use locked loops if captured, otherwise use provided loops
+    def _select_target(self, loops: list[DetectedLoop], preferred_side: str = None) -> DetectedLoop | None:
+        """Select next target. preferred_side: 'left' (Y>=0), 'right' (Y<0), or None for any."""
         source_loops = self._locked_loops if self._is_locked else loops
-
-        # Filter out already-stowed loops
         available = [l for l in source_loops if not self._is_already_stowed(l)]
 
         if not available:
             return None
 
+        # Filter by side if requested
+        if preferred_side == 'left':
+            side_loops = [l for l in available if l.pose.pose.position.y >= 0]
+            available = side_loops if side_loops else available  # fall back to any
+        elif preferred_side == 'right':
+            side_loops = [l for l in available if l.pose.pose.position.y < 0]
+            available = side_loops if side_loops else available
+
         if self.selection_strategy == 'rightmost':
             return max(available, key=lambda l: l.pose.pose.position.x)
-        elif self.selection_strategy == 'leftmost':
-            return min(available, key=lambda l: l.pose.pose.position.x)
-        elif self.selection_strategy == 'nearest':
-            # Nearest to side arm origin (lowest X typically)
+        elif self.selection_strategy in ('leftmost', 'nearest'):
             return min(available, key=lambda l: l.pose.pose.position.x)
         else:
-            self.get_logger().warn(
-                f'Unknown strategy: {self.selection_strategy}, using rightmost'
-            )
+            self.get_logger().warn(f'Unknown strategy: {self.selection_strategy}, using rightmost')
             return max(available, key=lambda l: l.pose.pose.position.x)
 
     def _request_target_callback(self, request, response):
         """Service callback — select and return next loop to stow."""
-        target = self._select_target(self.current_loops)
+        # Try preferred side first, fall back to other side
+        target = self._select_target(self.current_loops, preferred_side=self._next_side)
+
+        if target is None:
+            # Try other side before giving up
+            other_side = 'right' if self._next_side == 'left' else 'left'
+            target = self._select_target(self.current_loops, preferred_side=other_side)
 
         if target is None:
             response.target_available = False
             response.target_loop = DetectedLoop()
-
-            if not self.current_loops:
-                response.message = 'No loops detected'
-                self.get_logger().warn('No loops available')
-            else:
-                response.message = (
-                    f'All {len(self.current_loops)} loops already stowed'
-                )
-                self.get_logger().info(response.message)
+            response.message = f'All {len(self.current_loops)} loops already stowed'
+            self.get_logger().info(response.message)
             return response
 
-        # Mark as stowed (coordinator will call again for the next one)
+        # Alternate side for next call
+        self._next_side = 'right' if self._next_side == 'left' else 'left'
+
         self.stowed_positions.append(Point(
             x=target.pose.pose.position.x,
             y=target.pose.pose.position.y,
@@ -325,19 +358,17 @@ class TargetSelectorNode(Node):
 
         response.target_available = True
         response.target_loop = target
-        response.message = f'Selected {target.loop_id}'
-
-        # Also publish for visualization
+        response.message = f'Selected loop {target.loop_id}'
         self.target_pub.publish(target)
 
         remaining = len(self.current_loops) - len(self.stowed_positions)
         pos = target.pose.pose.position
+        side = 'LEFT' if pos.y >= 0 else 'RIGHT'
         self.get_logger().info(
-            f'Target: {target.loop_id} at '
+            f'Target: loop {target.loop_id} [{side}] at '
             f'({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f}) '
             f'[{remaining} remaining]'
         )
-
         return response
 
 

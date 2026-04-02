@@ -148,7 +148,7 @@ class SideArmCoordinateNode(Node):
                 f'  Simulation speed: {self.sim_speed_mm_per_sec} mm/s'
             )
             # In simulation mode, initialize as homed
-            self._is_homed = True
+            self._is_homed = False # changed from true
 
     def _load_parameters(self):
         """Load ROS parameters into instance variables."""
@@ -269,7 +269,7 @@ class SideArmCoordinateNode(Node):
             msg.x_mm = float(self._position_x_mm)
             msg.y_mm = float(self._position_y_mm)
             msg.z_mm = float(self._position_z_mm)
-            msg.is_homed = self._is_homed or self.simulation_mode  # Always homed in sim
+            msg.is_homed = self._is_homed # or self.simulation_mode  # Always homed in sim (jk)
 
         self._state_pub.publish(msg)
 
@@ -415,9 +415,9 @@ class SideArmCoordinateNode(Node):
                     self._sim_start_x_mm = self._position_x_mm
                     self._sim_start_y_mm = self._position_y_mm
                     self._sim_start_z_mm = self._position_z_mm
-                    self._sim_target_x_mm = 0.0
-                    self._sim_target_y_mm = 0.0
-                    self._sim_target_z_mm = 0.0
+                    self._sim_target_x_mm = self.home_x_mm # change this to home position
+                    self._sim_target_y_mm = self.home_y_mm
+                    self._sim_target_z_mm = self.home_z_mm
                     self._sim_move_start = time.time()
                     self._is_homed = True
                     self.get_logger().info('[SIM] Homing all axes to (0, 0, 0)')
@@ -427,7 +427,7 @@ class SideArmCoordinateNode(Node):
                     self._sim_start_z_mm = self._position_z_mm
                     self._sim_target_x_mm = self._position_x_mm
                     self._sim_target_y_mm = self._position_y_mm
-                    self._sim_target_z_mm = 0.0
+                    self._sim_target_z_mm = self.home_z_mm
                     self._sim_move_start = time.time()
                     self.get_logger().info('[SIM] Homing Z axis')
                 elif cmd_upper == 'HOME,1':  # Stepper1 (Y)
@@ -435,7 +435,7 @@ class SideArmCoordinateNode(Node):
                     self._sim_start_y_mm = self._position_y_mm
                     self._sim_start_z_mm = self._position_z_mm
                     self._sim_target_x_mm = self._position_x_mm
-                    self._sim_target_y_mm = 0.0
+                    self._sim_target_y_mm = self.home_y_mm
                     self._sim_target_z_mm = self._position_z_mm
                     self._sim_move_start = time.time()
                     self.get_logger().info('[SIM] Homing Y axis')
@@ -443,7 +443,7 @@ class SideArmCoordinateNode(Node):
                     self._sim_start_x_mm = self._position_x_mm
                     self._sim_start_y_mm = self._position_y_mm
                     self._sim_start_z_mm = self._position_z_mm
-                    self._sim_target_x_mm = 0.0
+                    self._sim_target_x_mm = self.home_x_mm
                     self._sim_target_y_mm = self._position_y_mm
                     self._sim_target_z_mm = self._position_z_mm
                     self._sim_move_start = time.time()
