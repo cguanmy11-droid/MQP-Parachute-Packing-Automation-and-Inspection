@@ -255,6 +255,7 @@ def launch_setup(context, *args, **kwargs):
         executable='rviz2',
         name='rviz2',
         arguments=['-d', rviz_config],
+        ros_arguments=['--log-level', 'warn'],
         output='screen',
     ))
 
@@ -431,21 +432,25 @@ def launch_setup(context, *args, **kwargs):
             ))
 
     # ---- Loop visualizer (always on) ----
-    nodes.append(Node(
-        package='parachute_perception',
-        executable='loop_visualizer_node',
-        name='loop_visualizer_node',
-        output='screen',
-        parameters=[{
-            'marker_scale': 0.015,
-            'input_topic': '/side_arm_left/detected_loops',  # primary for viz
-            'output_frame_id': 'world',
-            'grid_enabled': True,
-            'grid_size_x': 0.4,
-            'grid_size_y': 0.3,
-            'grid_offset_z': 0.15,
-        }],
-    ))
+    for arm_ns in ['side_arm_left', 'side_arm_right']:
+        nodes.append(Node(
+            package='parachute_perception',
+            executable='loop_visualizer_node',
+            name=f'loop_visualizer_{arm_ns}',
+            output='screen',
+            parameters=[{
+                'marker_scale': 0.015,
+                'input_topic': f'/{arm_ns}/detected_loops',
+                'target_topic': f'/{arm_ns}/target_loop',
+                'output_frame_id': 'world',
+                'grid_enabled': True,
+                'grid_size_x': 0.4,
+                'grid_size_y': 0.3,
+                'grid_offset_z': 0.15,
+                'markers_topic': f'/{arm_ns}/detected_loop_markers',
+                'grid_topic': f'/{arm_ns}/camera_fov_grid',
+            }],
+        ))
 
     # ---- Real cameras (one per arm) ----
     if use_real_camera:
@@ -523,7 +528,11 @@ def launch_setup(context, *args, **kwargs):
                     'use_test_loops': vision_test,
                     'selection_strategy': 'leftmost',
                     'stow_proximity_threshold': 0.01,
-                }]
+                }],
+                remappings=[
+                    ('/detected_loops', '/side_arm_right/detected_loops'),
+                    ('/target_loop', '/side_arm_right/target_loop'),
+                ]
             )]
         ))
 

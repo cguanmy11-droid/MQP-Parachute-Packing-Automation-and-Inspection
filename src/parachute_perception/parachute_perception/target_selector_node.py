@@ -61,7 +61,7 @@ class TargetSelectorNode(Node):
 
         # ==================== SUBSCRIBERS ====================
         self.loop_sub = self.create_subscription(
-            DetectedLoops, '/detected_loops',
+            DetectedLoops, '/side_arm_right/detected_loops', # change back or to var name
             self._loops_callback, 10
         )
         self.cmd_sub = self.create_subscription(
@@ -87,7 +87,7 @@ class TargetSelectorNode(Node):
 
         # ==================== PUBLISHER ====================
         self.target_pub = self.create_publisher(
-            DetectedLoop, '/target_loop', 10
+            DetectedLoop, '/target_loop', 10 # change back or to var name
         )
 
         # ==================== TEST LOOPS ====================

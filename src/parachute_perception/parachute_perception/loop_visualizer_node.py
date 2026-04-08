@@ -49,21 +49,26 @@ class LoopVisualizerNode(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Publisher for RViz markers
-        self.marker_pub = self.create_publisher(MarkerArray, '/detected_loop_markers', 10)
-        self.grid_pub = self.create_publisher(MarkerArray, '/camera_fov_grid', 10)
+        self.declare_parameter('markers_topic', '/detected_loop_markers')
+        self.declare_parameter('grid_topic', '/camera_fov_grid')
+
+        self.marker_pub = self.create_publisher(MarkerArray, self.get_parameter('markers_topic').value, 10)
+        self.grid_pub = self.create_publisher(MarkerArray, self.get_parameter('grid_topic').value, 10)
 
         # Subscriber for detected loops
+        self.declare_parameter('input_topic', '/detected_loops')
+        self.declare_parameter('target_topic', '/target_loop')
+
         self.loops_sub = self.create_subscription(
             DetectedLoops,
-            '/detected_loops',
+            self.get_parameter('input_topic').value,
             self.loops_callback,
             10
         )
-
         self.target_sub = self.create_subscription(
-            DetectedLoop, 
-            '/target_loop', 
-            self.target_loop_callback, 
+            DetectedLoop,
+            self.get_parameter('target_topic').value,
+            self.target_loop_callback,
             10
         )
 

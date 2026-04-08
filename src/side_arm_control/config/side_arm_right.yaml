@@ -24,7 +24,7 @@ side_arm:
 # HARDWARE COMMUNICATION
 # =============================================================================
 serial_bridge:
-  serial_port: "/dev/ttyUSB1"
+  serial_port: "/dev/ttyUSB0"
   baud_rate: 115200
   state_request_hz: 10.0
   auto_request_state: true
@@ -42,7 +42,7 @@ coordinate_node:
   sim_speed_mm_per_sec: 50.0
 
   # Homing position - V2 homes to max X (carriage at far end)
-  home_x_mm: 340.0
+  home_x_mm: 310.0
   home_y_mm: 0.0
   home_z_mm: 0.0
 
@@ -56,7 +56,7 @@ coordinate_node:
 # =============================================================================
 # V2 has increased Y range due to dual stepper motors
 workspace:
-  max_x_mm: 340.0
+  max_x_mm: 310.0
   max_y_mm: 350.0
   max_z_mm: 150.0
 

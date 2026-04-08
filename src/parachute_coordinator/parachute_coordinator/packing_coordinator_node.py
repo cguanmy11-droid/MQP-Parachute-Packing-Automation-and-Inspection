@@ -42,7 +42,7 @@ from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from ament_index_python.packages import get_package_share_directory
 
-from parachute_interfaces.srv import RequestNextTarget, RotateHook, CaptureLoops
+from parachute_interfaces.srv import RequestNextTarget, RotateHook, CaptureLoops, MoveToWorldPose
 from parachute_interfaces.action import InsertHook, ExecuteTrajectory
 from parachute_interfaces.msg import HookStatus, SideArmState
 from geometry_msgs.msg import Pose, Point
@@ -173,6 +173,18 @@ class PackingCoordinatorNode(Node):
         # Legacy alias for compatibility (use whichever is available)
         self.rotate_client = self.left_rotate_client or self.right_rotate_client
 
+        self.left_world_move_client = None
+        self.right_world_move_client = None
+
+        if self.enable_left_arm:
+            self.left_world_move_client = self.create_client(
+                MoveToWorldPose, '/side_arm_left/move_to_world_pose')
+        if self.enable_right_arm:
+            self.right_world_move_client = self.create_client(
+                MoveToWorldPose, '/side_arm_right/move_to_world_pose')
+
+        self.world_move_client = self.left_world_move_client or self.right_world_move_client
+
         # ==================== ACTION CLIENTS ====================
         # Dual arm insert hook clients (only create for enabled arms)
         self.left_hook_client = None
@@ -257,6 +269,10 @@ class PackingCoordinatorNode(Node):
             services['/side_arm_left/rotate_hook'] = self.left_rotate_client
         if self.right_rotate_client:
             services['/side_arm_right/rotate_hook'] = self.right_rotate_client
+        if self.left_world_move_client:
+            services['/side_arm_left/move_to_world_pose'] = self.left_world_move_client
+        if self.right_world_move_client:
+            services['/side_arm_right/move_to_world_pose'] = self.right_world_move_client
         services['/capture_loops'] = self.capture_client
 
         actions = {}
@@ -318,6 +334,14 @@ class PackingCoordinatorNode(Node):
         self.current_arm = 'right' if self.current_arm == 'left' else 'left'
         self.get_logger().info(f'Switched arm: {old_arm} → {self.current_arm}')
         self.current_arm_pub.publish(String(data=self.current_arm))
+    
+    def get_current_world_move_client(self):
+        """Get the move_to_world_pose service client for the current arm."""
+        if self.current_arm == 'left' and self.left_world_move_client:
+            return self.left_world_move_client
+        elif self.current_arm == 'right' and self.right_world_move_client:
+            return self.right_world_move_client
+        return self.left_world_move_client or self.right_world_move_client
 
     # ================================================================
     #  OPERATOR COMMANDS
@@ -547,59 +571,54 @@ class PackingCoordinatorNode(Node):
         self.get_logger().info('System ready. Send "start" to begin.')
 
     def on_enter_homing(self, state: StowState, event: str):
-        """Entered HOMING — home the side arm."""
+        """Send HOME_ALL to both enabled arms and start polling for completion."""
         self.get_logger().info('[HOMING] Starting side arm homing sequence...')
 
-        # Check if already homed (skip homing but still capture loops)
         if self._side_arm_is_homed and self._has_homed_once:
-            self.get_logger().info('[HOMING] Side arm already homed, skipping to capture')
+            self.get_logger().info('[HOMING] Arms already homed, skipping to capture')
             self._capture_loops_after_homing()
             return
 
-        # Send HOME_ALL command to current arm
-        self.get_logger().info(f'[HOMING] Sending HOME_ALL command to {self.current_arm} arm...')
         cmd = String()
         cmd.data = 'HOME_ALL'
-        cmd_pub = self.get_current_cmd_pub()
-        if cmd_pub:
-            cmd_pub.publish(cmd)
-        else:
-            self.get_logger().error('[HOMING] No command publisher available!')
-            self._transition('error')
-            return
 
-        # Start a timer to check homing status
+        # Fix: use left_cmd_pub not _left_cmd_pub
+        if self.enable_left_arm and self.left_cmd_pub:
+            self.left_cmd_pub.publish(cmd)
+        if self.enable_right_arm and self.right_cmd_pub:
+            self.right_cmd_pub.publish(cmd)
+
         self._homing_start_time = time.time()
         self._homing_timer = self.create_timer(0.5, self._check_homing_status)
 
     def _check_homing_status(self):
-        """Timer callback to check if homing is complete."""
-        timeout = 60.0  # seconds
+        """Poll homed state every 0.5s; transition to capture when both arms report homed."""
+        timeout = 60.0
+        elapsed = time.time() - self._homing_start_time
 
-        if self._side_arm_is_homed:
-            # Homing complete
+        # Fix: use _left_arm_homed not _left_arm_is_homed
+        left_done = not self.enable_left_arm or self._left_arm_homed
+        right_done = not self.enable_right_arm or self._right_arm_homed
+
+        if left_done and right_done:
             self._homing_timer.cancel()
             self._homing_timer = None
             self._has_homed_once = True
-            elapsed = time.time() - self._homing_start_time
-            self.get_logger().info(f'[HOMING] Side arm homed in {elapsed:.1f}s')
-
-            # Capture loop positions after homing
+            self.get_logger().info(f'[HOMING] Both arms homed in {elapsed:.1f}s')
             self._capture_loops_after_homing()
             return
 
-        # Check timeout
-        elapsed = time.time() - self._homing_start_time
         if elapsed >= timeout:
             self._homing_timer.cancel()
             self._homing_timer = None
-            self.get_logger().error(f'[HOMING] Timeout after {timeout}s')
-            self._enter_error('homing_failed', 'Side arm homing timeout')
+            self._enter_error('homing_failed', 'Homing timeout')
             return
 
-        # Log progress every 10 seconds
         if int(elapsed) % 10 == 0 and int(elapsed) > 0:
-            self.get_logger().info(f'[HOMING] Still homing... ({elapsed:.0f}s)')
+            left_status = '✓' if self._left_arm_homed else '...'
+            right_status = '✓' if self._right_arm_homed else '...'
+            self.get_logger().info(
+                f'[HOMING] L:{left_status} R:{right_status} ({elapsed:.0f}s)')
 
     def _capture_loops_after_homing(self):
         """Capture and lock loop positions after homing completes."""
@@ -658,7 +677,7 @@ class PackingCoordinatorNode(Node):
         future.add_done_callback(self._on_target_response)
 
     def _on_target_response(self, future):
-        """Callback when target selection completes."""
+        """Route selected loop to the correct arm by world Y sign, then command move."""
         try:
             response = future.result()
         except Exception as e:
@@ -666,26 +685,50 @@ class PackingCoordinatorNode(Node):
             return
 
         if not response.target_available:
-            self.get_logger().info('[AT_LOOP] No more targets available')
+            self.get_logger().info('[AT_LOOP] No more targets — sequence complete')
             self._transition('no_targets')
             return
 
         self.current_target_loop = response.target_loop
         pos = self.current_target_loop.pose.pose.position
+
+        # Route by Y sign: positive Y = left side, negative Y = right side
+        self.current_arm = 'left' if pos.y >= 0 else 'right'
         self.get_logger().info(
-            f'[AT_LOOP] Target: Loop {self.current_target_loop.loop_id} '
-            f'at ({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f})'
+            f'[AT_LOOP] Loop {self.current_target_loop.loop_id} '
+            f'at ({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f}) -> {self.current_arm} arm'
         )
 
-        # TODO: Command both arms to position at target
-        # For now, go straight to INSERT (assumes arms are positioned)
-        # Eventually:
-        #   1. Command side arm to approach position
-        #   2. Command main arm to stow-ready config
-        #   3. Wait for both to report success
-        #   4. Then transition 'positioned'
+        client = self.get_current_world_move_client()
+        if not client or not client.service_is_ready():
+            self._enter_error('ik_failure', f'{self.current_arm} move_to_world_pose not ready')
+            return
 
-        self._transition('positioned')
+        req = MoveToWorldPose.Request()
+        req.target_pose = self.current_target_loop.pose
+        req.target_pose.header.frame_id = 'world'
+        req.speed_scale = 0.5
+
+        future = client.call_async(req)
+        future.add_done_callback(self._on_arm_positioned)
+
+    def _on_arm_positioned(self, future):
+        """Transition to INSERT once the arm confirms it reached the target position."""
+        try:
+            result = future.result()
+        except Exception as e:
+            self._enter_error('ik_failure', f'Move failed: {e}')
+            return
+
+        if result.success:
+            self.get_logger().info(
+                f'[AT_LOOP] {self.current_arm} arm positioned at '
+                f'({result.final_x_mm:.1f}, {result.final_y_mm:.1f}, '
+                f'{result.final_z_mm:.1f})mm'
+            )
+            self._transition('positioned')
+        else:
+            self._enter_error('ik_failure', result.message)
 
     def on_enter_insert(self, state: StowState, event: str):
         """Entered INSERT — send hook through the target loop using current arm."""
