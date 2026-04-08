@@ -21,7 +21,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ArmStatus.msg"
   "msg/SideArmState.msg"
   "msg/LoopState.msg"
-  "msg/LoopStateArray.msg"
+  "msg/LoopStateArray.msg"  
   "srv/VerifyHookInsertion.srv"
   "srv/RequestNextTarget.srv"
   "srv/PlanToHook.srv"

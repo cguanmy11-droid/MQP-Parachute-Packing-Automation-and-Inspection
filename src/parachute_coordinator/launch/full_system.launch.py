@@ -32,7 +32,7 @@ import os
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, TimerAction, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition
@@ -368,6 +368,7 @@ def launch_setup(context, *args, **kwargs):
 
     # Read vision args
     vision_test = LaunchConfiguration('vision_test').perform(context).lower() == 'true'
+    enable_ground_truth = LaunchConfiguration('enable_ground_truth').perform(context).lower() == 'true'
     use_real_camera = LaunchConfiguration('use_real_camera').perform(context).lower() == 'true'
     enable_side_cam = LaunchConfiguration('enable_side_cam').perform(context).lower() == 'true'
     enable_top_cam = LaunchConfiguration('enable_top_cam').perform(context).lower() == 'true'
@@ -386,7 +387,7 @@ def launch_setup(context, *args, **kwargs):
         0.40, -0.15, -0.015,
     ]
 
-    if vision_test:
+    if enable_ground_truth:
         nodes.append(Node(
             package='parachute_perception',
             executable='loop_ground_truth_node',
@@ -406,6 +407,7 @@ def launch_setup(context, *args, **kwargs):
             }],
         ))
 
+    if vision_test and not use_real_camera:
         # One detection simulator per arm (each uses its own camera frame)
         for cam_frame, arm_ns in [
             (left_camera_frame, 'side_arm_left'),
@@ -454,10 +456,13 @@ def launch_setup(context, *args, **kwargs):
 
     # ---- Real cameras (one per arm) ----
     if use_real_camera:
-        for cam_idx_arg, cam_frame, arm_ns in [
-            ('left_camera_index',  left_camera_frame,  'side_arm_left'),
-            ('right_camera_index', right_camera_frame, 'side_arm_right'),
-        ]:
+        camera_configs = []
+        if enable_left:
+            camera_configs.append(('left_camera_index', left_camera_frame, 'side_arm_left'))
+        if enable_right:
+            camera_configs.append(('right_camera_index', right_camera_frame, 'side_arm_right'))
+
+        for cam_idx_arg, cam_frame, arm_ns in camera_configs:
             nodes.append(Node(
                 package='yolo_detect_ros',
                 executable='yolo_detector',
@@ -496,23 +501,46 @@ def launch_setup(context, *args, **kwargs):
         _extra_path = _user_site if os.path.isdir(_user_site) else ''
         _merged = f"{_extra_path}:{os.environ.get('PYTHONPATH', '')}" if _extra_path else os.environ.get('PYTHONPATH', '')
         nodes.append(SetEnvironmentVariable('PYTHONPATH', _merged))
+        nodes.append(TimerAction(
+            period=5.0,  # wait 5 seconds for side cameras to claim their devices
+            actions=[Node(
+                package='top_cam_loop_state',
+                executable='loop_state_node',
+                name='top_cam_loop_state',
+                output='screen',
+                parameters=[{
+                    'camera_index': LaunchConfiguration('top_cam_device'),
+                    'det_weights': LaunchConfiguration('top_cam_det_weights'),
+                    'cls_weights': LaunchConfiguration('top_cam_cls_weights'),
+                    'conf_threshold': 0.35,
+                    'iou_threshold': 0.45,
+                    'frame_rate': 30.0,
+                    'display': LaunchConfiguration('top_cam_display'),
+                    'publish_image': True,
+                    'image_topic': '/top_cam/image',
+                }],
+            )],
+        ))
+    
+    # ---- Camera Loop Fusion Node ----
+    if enable_top_cam and use_real_camera:
         nodes.append(Node(
-            package='top_cam_loop_state',
-            executable='loop_state_node',
-            name='top_cam_loop_state',
+            package='parachute_perception',
+            executable='loop_fusion_node',
+            name='loop_fusion_node',
             output='screen',
             parameters=[{
-                'camera_index': LaunchConfiguration('top_cam_device'),
-                'det_weights': LaunchConfiguration('top_cam_det_weights'),
-                'cls_weights': LaunchConfiguration('top_cam_cls_weights'),
-                'conf_threshold': 0.35,
-                'iou_threshold': 0.45,
-                'frame_rate': 30.0,
-                'display': LaunchConfiguration('top_cam_display'),
-                'publish_image': True,
-                'image_topic': '/top_cam/image',
-            }],
+                'publish_rate': 10.0,
+                'max_match_distance': 0.03,  # meters
+                'left_topic': '/side_arm_left/detected_loops',
+                'right_topic': '/side_arm_right/detected_loops',
+                'top_cam_topic': '/top_cam/loop_states',
+                'ground_truth_topic': '/loop_ground_truth',
+                'output_topic': '/fused_loop_states',
+                'num_loops_per_side': 9,
+            }]
         ))
+
 
     # ==================== TARGET SELECTOR & COORDINATOR ====================
     if enable_coordinator:
@@ -587,6 +615,11 @@ def generate_launch_description():
             description='Enable vision test mode (simulated loops)'
         ),
         DeclareLaunchArgument(
+            'enable_ground_truth',
+            default_value='true',
+            description='Enable use of ground truth node for sensor fusion'
+        ),
+        DeclareLaunchArgument(
             'enable_coordinator',
             default_value='true',
             description='Enable state machine coordinator (set false for manual testing)'
@@ -594,9 +627,9 @@ def generate_launch_description():
         # Adding vision launch args
         DeclareLaunchArgument('use_real_camera', default_value='false',
             description='Use real USB cameras with YOLO detection'),
-        DeclareLaunchArgument('left_camera_index', default_value='0',
+        DeclareLaunchArgument('left_camera_index', default_value='/dev/video8',
             description='Left arm camera device index'),
-        DeclareLaunchArgument('right_camera_index', default_value='2',
+        DeclareLaunchArgument('right_camera_index', default_value='/dev/video4',
             description='Right arm camera device index'),
         DeclareLaunchArgument('camera_display', default_value='false',
             description='Show YOLO detection windows'),
@@ -606,15 +639,15 @@ def generate_launch_description():
             description='Enable side camera pipeline'),
         DeclareLaunchArgument('enable_top_cam', default_value='false',
             description='Enable top camera loop state detection'),
-        DeclareLaunchArgument('top_cam_device', default_value='/dev/video4',
+        DeclareLaunchArgument('top_cam_device', default_value='/dev/video6',
             description='Top camera device path'),
         DeclareLaunchArgument('top_cam_det_weights',
             default_value=os.path.join(os.path.expanduser('~'),
-                'MQP_ws/MQP-Parachute-Packing-Automation-and-Inspection/src/top_cam_yolo/runs/detect/runs/detect/yolo26m_holes_all_aug/weights/best.pt'),
+                'MQP-Parachute-Packing-Automation-and-Inspection/src/top_cam_yolo/runs/detect/runs/detect/yolo26m_holes_all_aug/weights/best.pt'),
             description='Top camera detection weights'),
         DeclareLaunchArgument('top_cam_cls_weights',
             default_value=os.path.join(os.path.expanduser('~'),
-                'MQP_ws/MQP-Parachute-Packing-Automation-and-Inspection/src/top_cam_yolo/runs/classify/runs/classify/yolo26m_cls_custom_aug/weights/best.pt'),
+                'MQP-Parachute-Packing-Automation-and-Inspection/src/top_cam_yolo/runs/classify/runs/classify/yolo26m_cls_custom_aug/weights/best.pt'),
             description='Top camera classification weights'),
         DeclareLaunchArgument('top_cam_display', default_value='false',
             description='Show top camera window'),

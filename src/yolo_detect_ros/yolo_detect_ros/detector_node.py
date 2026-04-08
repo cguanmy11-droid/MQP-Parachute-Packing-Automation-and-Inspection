@@ -27,7 +27,8 @@ class YoloDetectorNode(Node):
 
     def __init__(self) -> None:
         super().__init__('yolo_detector')
-        self.declare_parameter('camera_index', 0)
+        # self.declare_parameter('camera_index', 0)
+        self.declare_parameter('camera_index', '/dev/video4')
         self.declare_parameter('weights_path', 'runs/yolo26m_hole2_100/weights/best.pt')
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('iou_threshold', 0.5)
@@ -38,7 +39,8 @@ class YoloDetectorNode(Node):
         self.declare_parameter('publish_image', True)
         self.declare_parameter('display', True)
 
-        self.camera_index = int(self.get_parameter('camera_index').get_parameter_value().integer_value)
+        # self.camera_index = int(self.get_parameter('camera_index').get_parameter_value().integer_value)
+        self.camera_index = self.get_parameter('camera_index').get_parameter_value().string_value
         weights_arg = self.get_parameter('weights_path').get_parameter_value().string_value
         self.weights_path = self._resolve_weights_path(weights_arg)
         self.conf_threshold = float(self.get_parameter('conf_threshold').get_parameter_value().double_value)
