@@ -32,8 +32,9 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
 import rclpy
+import tf2_ros
 from rclpy.node import Node
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, PointStamped
 
 from parachute_interfaces.msg import (
     DetectedLoop,
@@ -155,6 +156,10 @@ class LoopFusionNode(Node):
         self.num_per_side = self.get_parameter('num_loops_per_side').value
         self.y_threshold = self.get_parameter('y_side_threshold').value
 
+        # TF buffer for transforming side cam detections to world frame
+        self.tf_buffer = tf2_ros.Buffer()
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
+
         # Internal state: canonical_id -> FusedLoop
         self.loops: Dict[str, FusedLoop] = {}
         self._init_loops()
@@ -255,11 +260,29 @@ class LoopFusionNode(Node):
 
         now = self.get_clock().now().nanoseconds / 1e9
 
-        # Gather detections as (index, position, confidence)
+        # Transform each detection to world frame, then match
         detections: List[Tuple[int, Tuple[float, float, float], float]] = []
         for i, loop in enumerate(msg.loops):
             p = loop.pose.pose.position
-            detections.append((i, (p.x, p.y, p.z), loop.confidence))
+            frame_id = msg.header.frame_id or loop.pose.header.frame_id
+
+            # Try to transform to world
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    'world', frame_id, rclpy.time.Time(), 
+                    timeout=rclpy.duration.Duration(seconds=0.1))
+                
+                pt = PointStamped()
+                pt.header.frame_id = frame_id
+                pt.point = loop.pose.pose.position
+                
+                from tf2_geometry_msgs import do_transform_point
+                pt_world = do_transform_point(pt, transform)
+                
+                detections.append((i, (pt_world.point.x, pt_world.point.y, pt_world.point.z), loop.confidence))
+            except Exception as e:
+                self.get_logger().warning(f'TF transform failed: {e}', throttle_duration_sec=5.0)
+                return
 
         # Gather expected positions for this side
         expected: List[Tuple[str, Tuple[float, float, float]]] = []
@@ -267,12 +290,10 @@ class LoopFusionNode(Node):
             if fl.side == side and fl.expected_position is not None:
                 expected.append((cid, fl.expected_position))
 
-        # Match
         matches = _match_detections_to_expected(
             detections, expected, self.max_match_dist
         )
 
-        # Update matched loops
         for cid, (pos, conf) in matches.items():
             fl = self.loops[cid]
             fl.detected_position = pos
