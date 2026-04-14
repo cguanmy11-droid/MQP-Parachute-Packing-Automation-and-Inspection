@@ -33,8 +33,8 @@ serial_bridge:
 # MOTOR CALIBRATION
 # =============================================================================
 coordinate_node:
-  steps_per_mm_horizontal: 300.0
-  steps_per_mm_vertical: 100.0    # Dual stepper setup
+  steps_per_mm_horizontal: 400.0
+  steps_per_mm_vertical: 400.0    # Dual stepper setup
   dc_mm_per_second: 4.0
   dc_speed_percent: 50
   default_speed_horizontal: 1200.0
@@ -47,8 +47,8 @@ coordinate_node:
   home_z_mm: 0.0
 
   # Position invert - V2 steps decrease from max X
-  position_invert_x: true
-  position_invert_y: false
+  position_invert_x: false
+  position_invert_y: true
   position_invert_z: true
 
 # =============================================================================
@@ -67,7 +67,7 @@ interface_node:
   side_arm_frame: "right_side_arm_origin"
 
   # Hook offset from origin when homed (mm) - TODO: Calibrate for V2
-  hook_offset_x_mm: 10.0
+  hook_offset_x_mm: 0.0
   hook_offset_y_mm: 115.0
   hook_offset_z_mm: -156.0
 

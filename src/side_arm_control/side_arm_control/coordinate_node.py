@@ -569,7 +569,10 @@ class SideArmCoordinateNode(Node):
         return int(mm * self.steps_per_mm_horizontal)
 
     def _mm_to_steps_vertical(self, mm: float) -> int:
-        return int(mm * self.steps_per_mm_vertical)
+        steps = int(mm * self.steps_per_mm_vertical)
+        if self.position_invert_y:
+            steps = -steps
+        return steps
 
     def _mm_to_dc_duration(self, delta_mm: float) -> float:
         """Calculate duration in seconds to move DC motor given distance in mm."""

@@ -36,12 +36,12 @@ class ManualJog(Node):
     def __init__(self):
         super().__init__('manual_jog')
 
-        self.pub = self.create_publisher(String, '/side_arm/command', 10)
+        self.pub = self.create_publisher(String, '/side_arm_right/command', 10)
         self.sub = self.create_subscription(
-            String, '/side_arm/state', self._state_callback, 10)
+            String, '/side_arm_right/state', self._state_callback, 10)
 
-        self.step_size = 500    # steps per keypress
-        self.speed = 500        # steps/second
+        self.step_size = 1000    # steps per keypress
+        self.speed = 1500        # steps/second
         self.dc_speed = 50      # DC motor speed percent
         self.servo_step = 50    # servo offset increment (microseconds)
         self.servo_offset = 0   # current servo offset from neutral
@@ -153,6 +153,9 @@ class ManualJog(Node):
                         self.send('STOP_NOW')
                         self.servo_offset = 0
                         self.send('SERVO,0')
+                    elif ch == '\r':
+                        print('\n\r STOP ALL')
+                        self.send('STOP_ALL')
 
                     elif ch == '+' or ch == '=':
                         self.step_size += 100

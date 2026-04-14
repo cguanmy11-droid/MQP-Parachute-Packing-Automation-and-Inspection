@@ -19,7 +19,9 @@ from parachute_interfaces.srv import RotateHook, MoveToPosition, MoveToWorldPose
 from parachute_interfaces.msg import HookStatus, SideArmState
 from geometry_msgs.msg import Point, PoseStamped, PoseArray
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
 import time
+import math
 from typing import Optional, Tuple
 
 # TF2 for coordinate transforms
@@ -72,6 +74,28 @@ class SideArmInterfaceNode(Node):
         self.servo_max_speed = self.get_parameter('servo_max_speed').value
         self.image_width_px = self.get_parameter('image_width_px').value
 
+        # Y-axis servo parameters
+        self.declare_parameter('servo_kp_y', 1.0)
+        self.declare_parameter('servo_deadband_y_px', 8.0)
+        self.declare_parameter('image_height_px', 480)
+        
+        # Step-based servo control
+        self.declare_parameter('servo_step_size', 100)       # steps per servo iteration
+        self.declare_parameter('servo_step_speed', 1200)     # steps/sec for servo moves
+        self.declare_parameter('servo_settle_sec', 0.08)    # pause between moves
+        self.declare_parameter('servo_goal_x', 331.0)
+        self.declare_parameter('servo_goal_y', 161.0)
+        
+        # Read new parameters
+        self.servo_kp_y = self.get_parameter('servo_kp_y').value
+        self.servo_deadband_y_px = self.get_parameter('servo_deadband_y_px').value
+        self.image_height_px = self.get_parameter('image_height_px').value
+        self.servo_step_size = self.get_parameter('servo_step_size').value
+        self.servo_step_speed = self.get_parameter('servo_step_speed').value
+        self.servo_settle_sec = self.get_parameter('servo_settle_sec').value
+        self.servo_goal_x = self.get_parameter('servo_goal_x').value
+        self.servo_goal_y = self.get_parameter('servo_goal_y').value
+
         # Handle test_mode as either bool or string (from PythonExpression)
         test_mode_val = self.get_parameter('test_mode').value
         if isinstance(test_mode_val, bool):
@@ -113,10 +137,14 @@ class SideArmInterfaceNode(Node):
             SideArmState, 'parsed_state',
             self._state_callback, 10)
 
-        # Vision subscriber for servo control (absolute - shared across arms)
+        # Vision subscriber for servo control (relative topic for namespace support)
         self._vision_sub = self.create_subscription(
-            PoseArray, '/yolo/centers',
+            PoseArray, 'yolo/centers',
             self._vision_callback, 10)
+ 
+        # Target pixel position for servo (set before calling servo)
+        self._vision_target_px: Optional[Tuple[float, float]] = None
+        self._vision_detections: list = []  # all current detections as (x, y) pixel pairs
 
         # Action server for inserting hook (relative topic)
         self.action_server = ActionServer(
@@ -128,6 +156,16 @@ class SideArmInterfaceNode(Node):
         self.rotate_service = self.create_service(
             RotateHook, 'rotate_hook',
             self.rotate_hook_callback)
+        
+        # Service for retracting hook (relative topic)
+        self.retract_service = self.create_service(
+            Trigger, 'retract_hook_release',
+            self.retract_hook_callback)
+
+        # Service for releasing hook (relative topic)  
+        self.release_service = self.create_service(
+            Trigger, 'release_hook',
+            self.release_hook_callback)
 
         # Service for direct position move (relative topic)
         self.move_service = self.create_service(
@@ -138,6 +176,11 @@ class SideArmInterfaceNode(Node):
         self.world_move_service = self.create_service(
             MoveToWorldPose, 'move_to_world_pose',
             self.move_to_world_pose_callback)
+        
+        # Service to test the visual servoing
+        self.servo_test_service = self.create_service(
+            Trigger, 'test_vision_servo',
+            self._test_servo_callback)
 
         # Publisher for hook status (relative topic)
         self.status_publisher = self.create_publisher(HookStatus, 'status', 10)
@@ -203,13 +246,19 @@ class SideArmInterfaceNode(Node):
         self._is_homed = msg.is_homed
 
     def _vision_callback(self, msg: PoseArray):
-        """Track vision detections for servo control."""
+        """Track all vision detections for servo control."""
         if not msg.poses:
+            self._vision_detections = []
             self._vision_latest_x = None
             self._vision_lost_count += 1
             return
-
-        # Track rightmost detection (matching vis_servo_benchmark logic)
+ 
+        # Store all detections as pixel coordinates
+        self._vision_detections = [
+            (p.position.x, p.position.y) for p in msg.poses
+        ]
+        
+        # Keep rightmost tracking for backward compatibility
         rightmost = max(msg.poses, key=lambda p: p.position.x)
         self._vision_latest_x = rightmost.position.x
         self._vision_lost_count = 0
@@ -217,58 +266,143 @@ class SideArmInterfaceNode(Node):
     def _vision_servo_to_center(self, timeout: Optional[float] = None) -> Tuple[bool, str]:
         """
         Run vision servo loop to center on detected loop.
-
+        
+        Uses discrete STEPPER_MOVE commands with P-control on both axes.
+        Selects the detection closest to the target pixel position
+        (or image center if no target is set).
+        
         Returns:
             (success, message): Whether centering succeeded and status message
         """
         timeout = timeout or self.servo_timeout_sec
         center_x = self.image_width_px / 2.0
-        stepper_x = 2  # X axis stepper (from vis_servo_benchmark)
-
-        self.get_logger().info(f'[SERVO] Starting vision servo (timeout={timeout}s)')
+        center_y = self.image_height_px / 2.0
+        self._last_servo_det = None
+        
+        # Use target pixel if set, otherwise center of image
+        goal_x = self.servo_goal_x
+        goal_y = self.servo_goal_y
+        if self._vision_target_px is not None:
+            goal_x, goal_y = self._vision_target_px
+ 
+        self.get_logger().info(
+            f'[SERVO] Starting vision servo '
+            f'(goal=({goal_x:.0f},{goal_y:.0f})px, timeout={timeout:.1f}s)')
         self._servo_active = True
         self._vision_lost_count = 0
+        lost_streak = 0
         start_time = time.time()
-
+        iterations = 0
+ 
         try:
             while time.time() - start_time < timeout:
-                # Process callbacks to get fresh vision data
-                rclpy.spin_once(self, timeout_sec=0.05)
-
+                iterations += 1
+                
+                # Brief wait for new detection data
+                time.sleep(self.servo_settle_sec)
+                
                 # Check for lost detection
-                if self._vision_latest_x is None:
-                    if self._vision_lost_count > 15:  # ~1.5 seconds at 10Hz
-                        self._send_command('STOP_ALL')
-                        return (False, 'Detection lost during servo')
+                if not self._vision_detections:
+                    lost_streak += 1
+                    if lost_streak > 20:  # ~1.6s with 0.08s settle
+                        return (False, f'Detection lost for {lost_streak} frames')
+                    continue
+                lost_streak = 0
+ 
+                # Select closest detection to goal
+                best_det = None
+                best_dist = float('inf')
+                for dx, dy in self._vision_detections:
+                    dist = math.sqrt((dx - goal_x)**2 + (dy - goal_y)**2)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_det = (dx, dy)
+                
+                if best_det is None:
                     continue
 
-                # Calculate error
-                error_x = self._vision_latest_x - center_x
+                # Skip if detection hasn't updated (camera latency)
+                if hasattr(self, '_last_servo_det') and best_det == self._last_servo_det:
+                    continue
+                self._last_servo_det = best_det
 
-                # Check if centered (within deadband)
-                if abs(error_x) < self.servo_deadband_px:
-                    self._send_command('STOP_ALL')
-                    self.get_logger().info(f'[SERVO] Centered (error={error_x:.1f}px)')
-                    return (True, 'Centered successfully')
-
-                # P-control velocity command
-                velocity = int(self.servo_kp_x * error_x)
-                velocity = max(-self.servo_max_speed, min(self.servo_max_speed, velocity))
-                if abs(velocity) < self.servo_min_speed:
-                    velocity = int(self.servo_min_speed * (1 if velocity > 0 else -1))
-
-                # Send velocity command (continuous mode)
-                self._send_command(f'STEPPER_MOVE,{stepper_x},{velocity}')
-
-                time.sleep(0.066)  # ~15Hz control loop
-
+                det_x, det_y = best_det
+ 
+                det_x, det_y = best_det
+                error_x = det_x - center_x  # positive = detection is right of center
+                error_y = det_y - center_y  # positive = detection is below center
+ 
+                # Check if centered (within deadband on both axes)
+                x_centered = abs(error_x) < self.servo_deadband_px
+                y_centered = abs(error_y) < self.servo_deadband_y_px
+                
+                if x_centered and y_centered:
+                    self.get_logger().info(
+                        f'[SERVO] Centered in {iterations} iters '
+                        f'(err_x={error_x:.1f}, err_y={error_y:.1f}px)')
+                    return (True, f'Centered in {iterations} iterations')
+ 
+                # --- X axis correction (stepper 2) ---
+                if not x_centered:
+                    # P-control: scale steps by error magnitude
+                    x_scale = min(abs(error_x) / (self.image_width_px / 4.0), 1.0)
+                    x_steps = max(int(self.servo_step_size * x_scale), 200)
+                    
+                    # Direction: if detection is right of center, we need to move
+                    # the arm to bring it left (direction depends on arm config)
+                    x_sign = 1 if error_x > 0 else -1
+                    
+                    self._send_command(
+                        f'STEPPER_MOVE,2,{x_sign * x_steps},{self.servo_step_speed}')
+ 
+                # --- Y axis correction (stepper 1) ---
+                if not y_centered:
+                    y_scale = min(abs(error_y) / (self.image_height_px / 4.0), 1.0)
+                    y_steps = max(int(self.servo_step_size * y_scale), 200)
+                    
+                    # Direction: if detection is below center, move arm up
+                    y_sign = 1 if error_y > 0 else -1
+                    
+                    self._send_command(
+                        f'STEPPER_MOVE,1,{y_sign * y_steps},{self.servo_step_speed}')
+ 
+                # Log every 10 iterations
+                if iterations % 10 == 0:
+                    self.get_logger().info(
+                        f'[SERVO] iter={iterations} det=({det_x:.0f},{det_y:.0f}) '
+                        f'err=({error_x:.0f},{error_y:.0f})px')
+ 
             # Timeout
-            self._send_command('STOP_ALL')
-            return (False, f'Servo timeout after {timeout}s')
-
+            return (False, f'Servo timeout after {timeout:.1f}s ({iterations} iters)')
+ 
         finally:
             self._servo_active = False
-            self._send_command('STOP_ALL')  # Ensure motors stopped
+    
+    def set_servo_target_from_loop(self, target_loop):
+        """
+        Set the servo target pixel from a DetectedLoop's pixel position.
+        Call this before _vision_servo_to_center() in the insert sequence.
+        
+        If the loop pose is in camera frame, position.x and position.y
+        are already pixel coordinates from the YOLO detector.
+        """
+        if target_loop is None:
+            self._vision_target_px = None
+            return
+            
+        # The yolo/centers topic publishes pixel coordinates in position.x/y
+        px = target_loop.pose.pose.position.x
+        py = target_loop.pose.pose.position.y
+        
+        if 0 < px < self.image_width_px and 0 < py < self.image_height_px:
+            self._vision_target_px = (px, py)
+            self.get_logger().info(
+                f'[SERVO] Target pixel set to ({px:.0f}, {py:.0f})')
+        else:
+            # Position is in meters (world frame), not pixels — use image center
+            self._vision_target_px = None
+            self.get_logger().info(
+                '[SERVO] Target not in pixel coords, defaulting to image center')
 
     def _send_command(self, cmd: str):
         """Send direct command (works in both real and test/simulation mode)."""
@@ -558,6 +692,8 @@ class SideArmInterfaceNode(Node):
             goal_handle.publish_feedback(feedback_msg)
             self.get_logger().info('Stage 1b: Vision servo centering')
 
+            self.set_servo_target_from_loop(target_loop)
+
             servo_success, servo_msg = self._vision_servo_to_center()
             if not servo_success:
                 self.get_logger().warn(f'Vision servo failed: {servo_msg} - continuing with open-loop')
@@ -609,6 +745,59 @@ class SideArmInterfaceNode(Node):
         self.get_logger().info('Hook insertion complete!')
 
         return result
+    
+    def retract_hook_callback(self, request, response):
+        """Retract hook: bring Z axis home, reset hook to down position."""
+        self.get_logger().info('[RETRACT] Retracting hook — homing Z axis...')
+        
+        # Home the DC motor (Z axis) to pull hook out
+        self._send_command('HOME,0')
+        time.sleep(3.0)  # Wait for homing to complete
+        
+        # Reset hook rotation to down position
+        self._send_command('SERVO,0')
+        time.sleep(0.5)
+        
+        self.get_logger().info('[RETRACT] Hook retracted and reset')
+        self.current_state = HookStatus.STATE_IDLE
+        response.success = True
+        response.message = 'Hook retracted'
+        return response
+
+    def release_hook_callback(self, request, response):
+        """Release: move up to pull line, DC motor forward to push line off."""
+        self.get_logger().info('[RELEASE] Pulling line up...')
+        
+        # Move up 10k steps at 1500 speed and DC forward at 75% effort
+        self._send_command('STEPPER_MOVE,1,10000,1500')
+        self._send_command('DC_SPEED,75')
+        time.sleep(7.0)  # Wait for move to complete
+        
+        self.get_logger().info('[RELEASE] Running DC motor forward to release line...')
+        
+        # Stop DC motor
+        self._send_command('DC_SPEED,0')
+        time.sleep(0.3)
+        
+        # Reverse DC motor to return to ready position
+        # TODO maybe: self._send_command('DC_SPEED,-75')
+        # time.sleep(2.0)
+        
+        # # Stop
+        # self._send_command('DC_SPEED,0')
+        
+        self.get_logger().info('[RELEASE] Line released, hook ready')
+        response.success = True
+        response.message = 'Line released'
+        return response
+    
+    def _test_servo_callback(self, request, response):
+        """Test service — runs vision servo to center on nearest detection."""
+        self._vision_target_px = None  # use image center
+        success, message = self._vision_servo_to_center(timeout=10.0)
+        response.success = success
+        response.message = message
+        return response
 
 
 def main(args=None):

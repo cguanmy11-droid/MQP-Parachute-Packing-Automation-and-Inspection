@@ -47,6 +47,7 @@ from parachute_interfaces.action import InsertHook, ExecuteTrajectory
 from parachute_interfaces.msg import HookStatus, SideArmState
 from geometry_msgs.msg import Pose, Point
 from std_msgs.msg import String
+from std_srvs.srv import Trigger
 import time
 
 from .state_machine import StateMachine, StowState
@@ -807,9 +808,9 @@ class PackingCoordinatorNode(Node):
 
         future = rotate_client.call_async(request)
         future.add_done_callback(self._on_pre_stow_rotate_done)
-
+    
     def _on_pre_stow_rotate_done(self, future):
-        """After rotating hook, execute the stow trajectory."""
+        """After rotating hook, skip main arm trajectory for now."""
         try:
             response = future.result()
             if not response.success:
@@ -819,44 +820,58 @@ class PackingCoordinatorNode(Node):
             self._enter_error('trajectory_failure', f'Rotation error: {e}')
             return
 
-        self.get_logger().info(
-            f'[HANDOFF] Executing stow trajectory (pattern: {self.current_pattern})'
-        )
+        self.get_logger().info('[HANDOFF] Hook rotated — skipping main arm trajectory')
+        self._transition('trajectory_complete')
 
-        # Generate waypoints from pattern
-        target_pos = self.current_target_loop.pose.pose.position
-        waypoints = self.pattern_manager.apply_pattern(
-            self.current_pattern, target_pos
-        )
+    # def _on_pre_stow_rotate_done(self, future):
+    #     """After rotating hook, execute the stow trajectory."""
+    #     try:
+    #         response = future.result()
+    #         if not response.success:
+    #             self._enter_error('trajectory_failure', 'Pre-stow rotation failed')
+    #             return
+    #     except Exception as e:
+    #         self._enter_error('trajectory_failure', f'Rotation error: {e}')
+    #         return
 
-        if not waypoints:
-            self._enter_error(
-                'trajectory_failure',
-                f'Pattern "{self.current_pattern}" produced no waypoints'
-            )
-            return
+    #     self.get_logger().info(
+    #         f'[HANDOFF] Executing stow trajectory (pattern: {self.current_pattern})'
+    #     )
 
-        self.get_logger().info(f'[HANDOFF] {len(waypoints)} waypoints generated')
+    #     # Generate waypoints from pattern
+    #     target_pos = self.current_target_loop.pose.pose.position
+    #     waypoints = self.pattern_manager.apply_pattern(
+    #         self.current_pattern, target_pos
+    #     )
 
-        # Get speed from pattern config
-        pattern = self.pattern_manager.get_pattern(self.current_pattern)
-        speed_factor = pattern.speed_factor if pattern else 0.5
+    #     if not waypoints:
+    #         self._enter_error(
+    #             'trajectory_failure',
+    #             f'Pattern "{self.current_pattern}" produced no waypoints'
+    #         )
+    #         return
 
-        # Send trajectory goal
-        # TODO: Once main_arm accepts Point + pattern name instead of Pose,
-        # switch to that interface and remove Pose construction from here
-        if not self.arm_action_client.server_is_ready():
-            self._enter_error('timeout', 'Arm action server not available')
-            return
+    #     self.get_logger().info(f'[HANDOFF] {len(waypoints)} waypoints generated')
 
-        goal = ExecuteTrajectory.Goal()
-        goal.waypoints = waypoints
-        goal.speed_factor = speed_factor
+    #     # Get speed from pattern config
+    #     pattern = self.pattern_manager.get_pattern(self.current_pattern)
+    #     speed_factor = pattern.speed_factor if pattern else 0.5
 
-        send_future = self.arm_action_client.send_goal_async(
-            goal, feedback_callback=self._on_trajectory_feedback
-        )
-        send_future.add_done_callback(self._on_trajectory_goal_response)
+    #     # Send trajectory goal
+    #     # TODO: Once main_arm accepts Point + pattern name instead of Pose,
+    #     # switch to that interface and remove Pose construction from here
+    #     if not self.arm_action_client.server_is_ready():
+    #         self._enter_error('timeout', 'Arm action server not available')
+    #         return
+
+    #     goal = ExecuteTrajectory.Goal()
+    #     goal.waypoints = waypoints
+    #     goal.speed_factor = speed_factor
+
+    #     send_future = self.arm_action_client.send_goal_async(
+    #         goal, feedback_callback=self._on_trajectory_feedback
+    #     )
+    #     send_future.add_done_callback(self._on_trajectory_goal_response)
 
     def _on_trajectory_feedback(self, feedback_msg):
         """Monitor trajectory execution."""
@@ -892,15 +907,18 @@ class PackingCoordinatorNode(Node):
             self._enter_error('trajectory_failure', result.message)
 
     def on_enter_retract(self, state: StowState, event: str):
-        """Entered RETRACT — rotate hook again, then withdraw using current arm."""
-        self.get_logger().info(f'[RETRACT] Rotating {self.current_arm} hook to capture line...')
+        """Entered RETRACT — call side arm retract service."""
+        self.get_logger().info(f'[RETRACT] Retracting {self.current_arm} hook...')
 
-        rotate_client = self.get_current_rotate_client()
-        request = RotateHook.Request()
-        request.angle_degrees = 90.0  # Second 90° rotation to capture
+        service_name = f'/side_arm_{self.current_arm}/retract_hook_release'
+        client = self.create_client(Trigger, service_name)
+        
+        if not client.service_is_ready():
+            self.get_logger().warn(f'[RETRACT] Waiting for {service_name}...')
+            client.wait_for_service(timeout_sec=5.0)
 
-        future = rotate_client.call_async(request)
-        future.add_done_callback(self._on_capture_rotate_done)
+        future = client.call_async(Trigger.Request())
+        future.add_done_callback(self._on_retract_done)
 
     def _on_capture_rotate_done(self, future):
         """After capture rotation, retract the hook."""
@@ -928,35 +946,47 @@ class PackingCoordinatorNode(Node):
         """Handle retraction completion."""
         try:
             response = future.result()
+            if not response.success:
+                self._enter_error('excessive_force', f'Retract failed: {response.message}')
+                return
         except Exception as e:
             self._enter_error('excessive_force', f'Retract error: {e}')
             return
 
         self.get_logger().info('[RETRACT] Hook retracted')
-        # TODO: Verify line position using vision
         self._transition('retracted')
 
     def on_enter_release(self, state: StowState, event: str):
-        """Entered RELEASE — verify stow and prepare for next loop."""
-        self.get_logger().info(f'[RELEASE] {self.current_arm} arm: Verifying stow quality...')
+        """Entered RELEASE — release line, then verify and prepare for next loop."""
+        self.get_logger().info(f'[RELEASE] {self.current_arm} arm: Releasing line...')
 
-        # TODO: Vision verification of stow quality
-        # For now, assume success
+        service_name = f'/side_arm_{self.current_arm}/release_hook'
+        client = self.create_client(Trigger, service_name)
+        
+        if not client.service_is_ready():
+            self.get_logger().warn(f'[RELEASE] Waiting for {service_name}...')
+            client.wait_for_service(timeout_sec=5.0)
+
+        future = client.call_async(Trigger.Request())
+        future.add_done_callback(self._on_release_done)
+
+    def _on_release_done(self, future):
+        """Handle release completion, then advance."""
+        try:
+            response = future.result()
+            if not response.success:
+                self.get_logger().warn(f'[RELEASE] Release issue: {response.message}')
+        except Exception as e:
+            self.get_logger().warn(f'[RELEASE] Release error: {e}')
 
         self.completed_loops += 1
         self.get_logger().info(
             f'[RELEASE] Loop {self.completed_loops}/{self.total_loops} stowed by {self.current_arm} arm'
         )
 
-        # Reset for next cycle
         self.current_target_loop = None
-
-        # Switch to the other arm for the next loop (alternating pattern)
         self.switch_arm()
 
-        # TODO: Return arms to ready positions
-
-        # Check if more loops remain
         if self.total_loops > 0 and self.completed_loops >= self.total_loops:
             self._transition('all_complete')
         else:

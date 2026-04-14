@@ -107,6 +107,7 @@ class MainWindow(QMainWindow):
         self._state_widget.setMinimumWidth(320)
 
         self._perception_panel = LoopPerceptionPanel()
+        self._perception_panel.setMaximumWidth(700) 
 
         self._arm_widget = ArmControlWidget()
         self._arm_widget.setMinimumWidth(240)

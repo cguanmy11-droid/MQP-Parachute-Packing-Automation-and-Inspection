@@ -459,28 +459,34 @@ class LoopPerceptionPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        # Top camera feed
-        self.top_cam = CameraFeedWidget('TOP CAMERA (OVERVIEW)')
-        self.top_cam.set_active(True)
-        self.top_cam.setFixedHeight(140)
-        layout.addWidget(self.top_cam)
+        # Top row: top cam | active side cam
+        top_row = QHBoxLayout()
+        top_row.setSpacing(8)
 
-        # Middle row: left cam | grid | right cam
-        mid = QHBoxLayout()
-        mid.setSpacing(8)
+        self.top_cam = CameraFeedWidget('TOP CAMERA')
+        self.top_cam.set_active(True)
+        self.top_cam.setFixedHeight(180)
+        top_row.addWidget(self.top_cam, stretch=1)
 
         self.left_cam = CameraFeedWidget('LEFT SIDE CAM')
         self.left_cam.clicked.connect(lambda: self.set_active_side('left'))
-        mid.addWidget(self.left_cam, stretch=1)
-
-        self.loop_grid = LoopGridWidget()
-        mid.addWidget(self.loop_grid, stretch=2)
 
         self.right_cam = CameraFeedWidget('RIGHT SIDE CAM')
         self.right_cam.clicked.connect(lambda: self.set_active_side('right'))
-        mid.addWidget(self.right_cam, stretch=1)
 
-        layout.addLayout(mid, stretch=1)
+        # Stacked widget to switch between left/right cam
+        from PyQt5.QtWidgets import QStackedWidget
+        self._cam_stack = QStackedWidget()
+        self._cam_stack.addWidget(self.left_cam)   # index 0
+        self._cam_stack.addWidget(self.right_cam)  # index 1
+        self._cam_stack.setFixedHeight(180)
+        top_row.addWidget(self._cam_stack, stretch=1)
+
+        layout.addLayout(top_row)
+
+        # Loop grid full width
+        self.loop_grid = LoopGridWidget()
+        layout.addWidget(self.loop_grid, stretch=1)
 
         # Toggle buttons
         btn_layout = QHBoxLayout()
@@ -502,16 +508,17 @@ class LoopPerceptionPanel(QWidget):
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
-        # Initial state
         self.set_active_side('right')
 
     def set_active_side(self, side: str):
         self._active_side = side
+
+        # Switch the stacked cam
+        self._cam_stack.setCurrentIndex(0 if side == 'left' else 1)
         self.left_cam.set_active(side == 'left')
         self.right_cam.set_active(side == 'right')
         self.loop_grid.set_active_side(side)
 
-        # Button styling
         active_style = '''
             QPushButton {
                 background: rgba(59, 130, 246, 0.15);
