@@ -188,7 +188,7 @@ void requestHome(uint8_t target) {
   const LimitStates limits = readLimitStates();
 
   if (target == 1) {
-    if (limits.sw3) {
+    if (limits.sw2) {
       // Already on limit — back off first
       stepper1HomingState = HomingState::BACKING_OFF;
       stepper1.setMaxSpeed(HOMING_SPEED);
@@ -204,7 +204,7 @@ void requestHome(uint8_t target) {
       Serial.println("HOME stepper1: approaching limit");
     }
   } else if (target == 2) {
-    if (limits.sw2) {
+    if (limits.sw3) {
       stepper2HomingState = HomingState::BACKING_OFF;
       stepper2.setMaxSpeed(HOMING_SPEED);
       stepper2.setAcceleration(HOMING_SPEED * 2);
@@ -235,7 +235,7 @@ void updateHoming() {
 
   // === Stepper 1 ===
   if (stepper1HomingState == HomingState::BACKING_OFF) {
-    if (!limits.sw3 && stepper1.distanceToGo() == 0) {
+    if (!limits.sw2 && stepper1.distanceToGo() == 0) {
       // Cleared the limit, now approach slowly
       stepper1HomingState = HomingState::APPROACHING;
       stepper1.setMaxSpeed(HOMING_APPROACH_SPEED);
@@ -244,7 +244,7 @@ void updateHoming() {
       Serial.println("HOME stepper1: approaching limit");
     }
   } else if (stepper1HomingState == HomingState::APPROACHING) {
-    if (limits.sw3) {
+    if (limits.sw2) {
       stepper1.stop();
       stepper1.setCurrentPosition(0);
       stepper1HomingState = HomingState::DONE;
@@ -255,7 +255,7 @@ void updateHoming() {
 
   // === Stepper 2 ===
   if (stepper2HomingState == HomingState::BACKING_OFF) {
-    if (!limits.sw2 && stepper2.distanceToGo() == 0) {
+    if (!limits.sw3 && stepper2.distanceToGo() == 0) {
       stepper2HomingState = HomingState::APPROACHING;
       stepper2.setMaxSpeed(HOMING_APPROACH_SPEED);
       stepper2.setAcceleration(HOMING_APPROACH_SPEED * 2);
@@ -263,7 +263,7 @@ void updateHoming() {
       Serial.println("HOME stepper2: approaching limit");
     }
   } else if (stepper2HomingState == HomingState::APPROACHING) {
-    if (limits.sw2) {
+    if (limits.sw3) {
       stepper2.stop();
       stepper2.setCurrentPosition(0);
       stepper2HomingState = HomingState::DONE;

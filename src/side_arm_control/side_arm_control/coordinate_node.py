@@ -51,7 +51,7 @@ class SideArmCoordinateNode(Node):
         # ========== CALIBRATION PARAMETERS (to be tuned) ==========
         self.declare_parameter('steps_per_mm_horizontal', 80.0)   # Stepper2 - belt drive
         self.declare_parameter('steps_per_mm_vertical', 200.0)    # Stepper1 - lead screw
-        self.declare_parameter('dc_mm_per_second', 10.0)          # DC motor travel rate
+        self.declare_parameter('dc_mm_per_second', 5.0)          # DC motor travel rate
         self.declare_parameter('dc_speed_percent', 50)            # Default DC speed
 
         # Speed defaults
