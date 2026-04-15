@@ -870,11 +870,27 @@ class SideArmInterfaceNode(Node):
 
         # Home DC motor (Z axis) to pull hook out
         self._send_command('HOME,0')
-        time.sleep(3.0)  # Wait for homing to complete
 
-        response.success = True
-        response.message = 'Z axis homed'
-        self.get_logger().info('[RETRACT_Z] Z axis retracted')
+        # Poll until Z is near home (0) or timeout
+        timeout_sec = 20.0
+        home_tolerance_mm = 5.0
+        poll_interval = 0.1
+        start_time = time.time()
+
+        while time.time() - start_time < timeout_sec:
+            time.sleep(poll_interval)
+            current_z = self._current_position.z
+            if current_z <= home_tolerance_mm:
+                elapsed = time.time() - start_time
+                response.success = True
+                response.message = f'Z homed in {elapsed:.1f}s (Z={current_z:.1f}mm)'
+                self.get_logger().info(f'[RETRACT_Z] {response.message}')
+                return response
+
+        # Timeout
+        response.success = False
+        response.message = f'Z homing timeout after {timeout_sec}s (Z={self._current_position.z:.1f}mm)'
+        self.get_logger().warn(f'[RETRACT_Z] {response.message}')
         return response
 
     def _reset_hook_angle_callback(self, request, response):
