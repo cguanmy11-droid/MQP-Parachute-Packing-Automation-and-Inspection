@@ -732,7 +732,7 @@ class PackingCoordinatorNode(Node):
             self._enter_error('ik_failure', result.message)
 
     def on_enter_insert(self, state: StowState, event: str):
-        """Entered INSERT — send hook through the target loop using current arm."""
+        """Entered INSERT — use primitive services: vision_servo then insert_through_loop."""
         retry = self.sm.retry_count
         if retry > 0:
             config = self.sm.get_state_config(StowState.INSERT)
@@ -744,55 +744,58 @@ class PackingCoordinatorNode(Node):
 
         self.get_logger().info(f'[INSERT] Using {self.current_arm} arm to insert hook...')
 
-        hook_client = self.get_current_hook_client()
-        if not hook_client.server_is_ready():
-            self._enter_error('timeout', f'{self.current_arm} hook action server not available')
-            return
+        # Step 1: Vision servo (optional - can fail gracefully)
+        servo_service = f'/side_arm_{self.current_arm}/vision_servo'
+        servo_client = self.create_client(Trigger, servo_service)
 
-        goal = InsertHook.Goal()
-        goal.target_loop = self.current_target_loop
-
-        send_future = hook_client.send_goal_async(
-            goal, feedback_callback=self._on_insert_feedback
-        )
-        send_future.add_done_callback(self._on_insert_goal_response)
-
-    def _on_insert_feedback(self, feedback_msg):
-        """Monitor hook insertion progress."""
-        feedback = feedback_msg.feedback
-        self.get_logger().info(
-            f'  [INSERT] {int(feedback.progress * 100)}% - '
-            f'state: {feedback.current_state}'
-        )
-        # TODO: Check for collision via motor current in feedback
-        # if feedback.motor_current > COLLISION_THRESHOLD:
-        #     self._transition('collision')
-
-    def _on_insert_goal_response(self, future):
-        """Handle goal acceptance for hook insertion."""
-        goal_handle = future.result()
-        if not goal_handle.accepted:
-            self._enter_error('timeout', 'Hook insertion goal rejected')
-            return
-
-        self._active_goal_handle = goal_handle
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(self._on_insert_result)
-
-    def _on_insert_result(self, future):
-        """Handle hook insertion result."""
-        self._active_goal_handle = None
-        result = future.result().result
-
-        if result.success:
-            self.get_logger().info('[INSERT] Hook inserted successfully')
-            # TODO: Verify depth with forward kinematics
-            self._transition('inserted')
+        if servo_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().info('[INSERT] Running vision servo...')
+            future = servo_client.call_async(Trigger.Request())
+            future.add_done_callback(self._on_vision_servo_done)
         else:
-            self.get_logger().warn(f'[INSERT] Failed: {result.message}')
-            # Distinguish collision from other failures
-            # TODO: Check result for collision flag
-            self._transition('collision')  # will retry with offset
+            self.get_logger().warn('[INSERT] Vision servo not available, skipping to insert')
+            self._do_insert_through_loop()
+
+    def _on_vision_servo_done(self, future):
+        """Handle vision servo result, then proceed to insert."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[INSERT] Vision servo: {response.message}')
+            else:
+                self.get_logger().warn(f'[INSERT] Vision servo failed: {response.message} - continuing anyway')
+        except Exception as e:
+            self.get_logger().warn(f'[INSERT] Vision servo error: {e} - continuing anyway')
+
+        # Proceed to insert regardless of servo result
+        self._do_insert_through_loop()
+
+    def _do_insert_through_loop(self):
+        """Step 2: Call insert_through_loop service."""
+        insert_service = f'/side_arm_{self.current_arm}/insert_through_loop'
+        insert_client = self.create_client(Trigger, insert_service)
+
+        if not insert_client.wait_for_service(timeout_sec=5.0):
+            self._enter_error('timeout', f'{self.current_arm} insert_through_loop service not available')
+            return
+
+        self.get_logger().info('[INSERT] Inserting through loop...')
+        future = insert_client.call_async(Trigger.Request())
+        future.add_done_callback(self._on_insert_through_done)
+
+    def _on_insert_through_done(self, future):
+        """Handle insert_through_loop result."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[INSERT] {response.message}')
+                self._transition('inserted')
+            else:
+                self.get_logger().warn(f'[INSERT] Failed: {response.message}')
+                self._transition('collision')  # will retry with offset
+        except Exception as e:
+            self.get_logger().error(f'[INSERT] Error: {e}')
+            self._transition('collision')
 
     def on_enter_handoff(self, state: StowState, event: str):
         """Entered HANDOFF — rotate hook and execute stow trajectory using current arm."""
@@ -907,21 +910,22 @@ class PackingCoordinatorNode(Node):
             self._enter_error('trajectory_failure', result.message)
 
     def on_enter_retract(self, state: StowState, event: str):
-        """Entered RETRACT — call side arm retract service."""
-        self.get_logger().info(f'[RETRACT] Retracting {self.current_arm} hook...')
+        """Entered RETRACT — call retract_z to home Z axis only."""
+        self.get_logger().info(f'[RETRACT] Retracting {self.current_arm} hook (Z axis)...')
 
-        service_name = f'/side_arm_{self.current_arm}/retract_hook_release'
+        service_name = f'/side_arm_{self.current_arm}/retract_z'
         client = self.create_client(Trigger, service_name)
-        
-        if not client.service_is_ready():
-            self.get_logger().warn(f'[RETRACT] Waiting for {service_name}...')
-            client.wait_for_service(timeout_sec=5.0)
+
+        if not client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warn(f'[RETRACT] {service_name} not available')
+            self._enter_error('timeout', f'{service_name} not available')
+            return
 
         future = client.call_async(Trigger.Request())
         future.add_done_callback(self._on_retract_done)
 
     def _on_capture_rotate_done(self, future):
-        """After capture rotation, retract the hook."""
+        """After capture rotation, reset hook angle then retract."""
         try:
             response = future.result()
             if not response.success:
@@ -931,16 +935,18 @@ class PackingCoordinatorNode(Node):
             self._enter_error('excessive_force', f'Rotation error: {e}')
             return
 
-        self.get_logger().info(f'[RETRACT] Retracting {self.current_arm} hook...')
+        self.get_logger().info(f'[RETRACT] Resetting {self.current_arm} hook angle...')
 
-        # TODO: Send retraction command (reversed insertion path)
-        # For now, rotate hook back to neutral as a placeholder
-        rotate_client = self.get_current_rotate_client()
-        request = RotateHook.Request()
-        request.angle_degrees = 0.0
+        # Use reset_hook_angle service instead of rotate_hook
+        reset_service = f'/side_arm_{self.current_arm}/reset_hook_angle'
+        reset_client = self.create_client(Trigger, reset_service)
 
-        future = rotate_client.call_async(request)
-        future.add_done_callback(self._on_retract_done)
+        if reset_client.wait_for_service(timeout_sec=2.0):
+            future = reset_client.call_async(Trigger.Request())
+            future.add_done_callback(self._on_retract_done)
+        else:
+            self.get_logger().warn('[RETRACT] reset_hook_angle not available')
+            self._enter_error('timeout', 'reset_hook_angle service not available')
 
     def _on_retract_done(self, future):
         """Handle retraction completion."""
@@ -971,7 +977,7 @@ class PackingCoordinatorNode(Node):
         future.add_done_callback(self._on_release_done)
 
     def _on_release_done(self, future):
-        """Handle release completion, then advance."""
+        """Handle release completion, then reset hook angle."""
         try:
             response = future.result()
             if not response.success:
@@ -979,6 +985,33 @@ class PackingCoordinatorNode(Node):
         except Exception as e:
             self.get_logger().warn(f'[RELEASE] Release error: {e}')
 
+        # Reset hook angle to neutral before next cycle
+        self.get_logger().info(f'[RELEASE] Resetting {self.current_arm} hook angle...')
+        reset_service = f'/side_arm_{self.current_arm}/reset_hook_angle'
+        reset_client = self.create_client(Trigger, reset_service)
+
+        if reset_client.wait_for_service(timeout_sec=2.0):
+            future = reset_client.call_async(Trigger.Request())
+            future.add_done_callback(self._on_hook_reset_done)
+        else:
+            self.get_logger().warn('[RELEASE] reset_hook_angle not available, continuing')
+            self._finish_release_cycle()
+
+    def _on_hook_reset_done(self, future):
+        """Handle hook reset completion, then advance."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[RELEASE] Hook reset: {response.message}')
+            else:
+                self.get_logger().warn(f'[RELEASE] Hook reset issue: {response.message}')
+        except Exception as e:
+            self.get_logger().warn(f'[RELEASE] Hook reset error: {e}')
+
+        self._finish_release_cycle()
+
+    def _finish_release_cycle(self):
+        """Complete the release cycle and transition to next state."""
         self.completed_loops += 1
         self.get_logger().info(
             f'[RELEASE] Loop {self.completed_loops}/{self.total_loops} stowed by {self.current_arm} arm'
