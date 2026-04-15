@@ -37,8 +37,8 @@ coordinate_node:
   steps_per_mm_vertical: 400.0    # Dual stepper setup
   dc_mm_per_second: 4.0
   dc_speed_percent: 50
-  default_speed_horizontal: 1200.0
-  default_speed_vertical: 500.0
+  default_speed_horizontal: 1500.0
+  default_speed_vertical: 1500.0
   sim_speed_mm_per_sec: 50.0
 
   # Homing position - V2 homes to max X (carriage at far end)
@@ -128,8 +128,8 @@ joint_state_publisher:
 # Right arm at negative Y, facing positive Y (toward parachute)
 tf_transform:
   x: 0.07
-  y: -0.41   # Opposite side (negative Y)
-  z: -0.26
+  y: -0.38   # Opposite side (negative Y)
+  z: -0.17
   roll: 1.5708
   pitch: 0.0
   yaw: 0.0   # Facing +Y
