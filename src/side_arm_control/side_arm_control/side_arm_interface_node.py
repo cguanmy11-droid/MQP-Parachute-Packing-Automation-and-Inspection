@@ -182,6 +182,29 @@ class SideArmInterfaceNode(Node):
             Trigger, 'test_vision_servo',
             self._test_servo_callback)
 
+        # ==================== PRIMITIVE SERVICES ====================
+        # These break down insert_hook into coordinator-controllable steps
+
+        # Vision servo centering (extracts the servo loop from insert_hook)
+        self.vision_servo_service = self.create_service(
+            Trigger, 'vision_servo',
+            self._vision_servo_callback)
+
+        # Insert through loop (just Z-axis push)
+        self.insert_through_service = self.create_service(
+            Trigger, 'insert_through_loop',
+            self._insert_through_loop_callback)
+
+        # Retract Z only (split from retract_hook_release - no servo motion)
+        self.retract_z_service = self.create_service(
+            Trigger, 'retract_z',
+            self._retract_z_callback)
+
+        # Reset hook angle only (split from retract_hook_release)
+        self.reset_hook_service = self.create_service(
+            Trigger, 'reset_hook_angle',
+            self._reset_hook_angle_callback)
+
         # Publisher for hook status (relative topic)
         self.status_publisher = self.create_publisher(HookStatus, 'status', 10)
 
@@ -797,6 +820,75 @@ class SideArmInterfaceNode(Node):
         success, message = self._vision_servo_to_center(timeout=10.0)
         response.success = success
         response.message = message
+        return response
+
+    # ==================== PRIMITIVE SERVICE CALLBACKS ====================
+
+    def _vision_servo_callback(self, request, response):
+        """Run vision servo to center on detected loop."""
+        self.get_logger().info('[VISION_SERVO] Starting servo centering...')
+        self._vision_target_px = None  # use configured goal (servo_goal_x/y)
+        success, message = self._vision_servo_to_center(timeout=self.servo_timeout_sec)
+        response.success = success
+        response.message = message
+        if success:
+            self.get_logger().info(f'[VISION_SERVO] {message}')
+        else:
+            self.get_logger().warn(f'[VISION_SERVO] Failed: {message}')
+        return response
+
+    def _insert_through_loop_callback(self, request, response):
+        """Push hook through loop - move Z to max position (150mm)."""
+        self.get_logger().info('[INSERT_THROUGH] Pushing hook through loop...')
+
+        # Keep current X/Y, move Z to insert depth (150mm)
+        target_z = 150.0  # max_z_mm from coordinate node
+        current_x = self._current_position.x
+        current_y = self._current_position.y
+
+        self.get_logger().info(
+            f'[INSERT_THROUGH] Moving Z: {self._current_position.z:.1f} -> {target_z:.1f}mm'
+        )
+
+        success = self._move_to(current_x, current_y, target_z, speed_scale=0.5)
+
+        if success:
+            self.current_state = HookStatus.STATE_INSERTED
+            response.success = True
+            response.message = f'Inserted to Z={target_z:.1f}mm'
+            self.get_logger().info(f'[INSERT_THROUGH] {response.message}')
+        else:
+            response.success = False
+            response.message = 'Insert move failed'
+            self.get_logger().error(f'[INSERT_THROUGH] {response.message}')
+
+        return response
+
+    def _retract_z_callback(self, request, response):
+        """Retract Z axis only (home DC motor) - no servo motion."""
+        self.get_logger().info('[RETRACT_Z] Homing Z axis...')
+
+        # Home DC motor (Z axis) to pull hook out
+        self._send_command('HOME,0')
+        time.sleep(3.0)  # Wait for homing to complete
+
+        response.success = True
+        response.message = 'Z axis homed'
+        self.get_logger().info('[RETRACT_Z] Z axis retracted')
+        return response
+
+    def _reset_hook_angle_callback(self, request, response):
+        """Reset hook servo to neutral (0 degrees)."""
+        self.get_logger().info('[RESET_HOOK] Resetting hook angle to 0...')
+
+        self._send_command('SERVO,0')
+        time.sleep(0.5)
+
+        self.current_angle = 0.0
+        self.current_state = HookStatus.STATE_IDLE
+        response.success = True
+        response.message = 'Hook angle reset to 0'
+        self.get_logger().info('[RESET_HOOK] Hook angle reset')
         return response
 
 
