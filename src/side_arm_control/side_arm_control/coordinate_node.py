@@ -566,7 +566,10 @@ class SideArmCoordinateNode(Node):
         self.get_logger().debug(f'Sent: {cmd}')
 
     def _mm_to_steps_horizontal(self, mm: float) -> int:
-        return int(mm * self.steps_per_mm_horizontal)
+        steps = int(mm * self.steps_per_mm_horizontal)
+        if self.position_invert_x:
+            steps = -steps
+        return steps
 
     def _mm_to_steps_vertical(self, mm: float) -> int:
         steps = int(mm * self.steps_per_mm_vertical)
