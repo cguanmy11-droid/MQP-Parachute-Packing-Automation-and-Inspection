@@ -775,7 +775,7 @@ class SideArmInterfaceNode(Node):
         
         # Home the DC motor (Z axis) to pull hook out
         self._send_command('HOME,0')
-        time.sleep(3.0)  # Wait for homing to complete
+        time.sleep(5.0)  # Wait for homing to complete
         
         # Reset hook rotation to down position
         self._send_command('SERVO,0')
@@ -850,7 +850,7 @@ class SideArmInterfaceNode(Node):
             f'[INSERT_THROUGH] Moving Z: {self._current_position.z:.1f} -> {target_z:.1f}mm'
         )
 
-        success = self._move_to(current_x, current_y, target_z, speed_scale=0.5)
+        success = self._move_to(current_x, current_y, target_z, speed_scale=1.0)
 
         if success:
             self.current_state = HookStatus.STATE_INSERTED
@@ -894,16 +894,16 @@ class SideArmInterfaceNode(Node):
         return response
 
     def _reset_hook_angle_callback(self, request, response):
-        """Reset hook servo to neutral (0 degrees)."""
-        self.get_logger().info('[RESET_HOOK] Resetting hook angle to 0...')
+        """Reset hook servo to 1000 (down)."""
+        self.get_logger().info('[RESET_HOOK] Resetting hook angle to down...')
 
-        self._send_command('SERVO,0')
+        self._send_command('SERVO,1000')
         time.sleep(0.5)
 
-        self.current_angle = 0.0
+        self.current_angle = 1000.0
         self.current_state = HookStatus.STATE_IDLE
         response.success = True
-        response.message = 'Hook angle reset to 0'
+        response.message = 'Hook angle reset to down'
         self.get_logger().info('[RESET_HOOK] Hook angle reset')
         return response
 

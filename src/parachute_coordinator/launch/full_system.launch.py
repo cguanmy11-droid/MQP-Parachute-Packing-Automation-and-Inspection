@@ -149,6 +149,8 @@ def create_side_arm_nodes(arm_name: str, config_path: str, sim_mode: bool):
             'servo_kp_x': interface_cfg.get('servo_kp_x', 1.2),
             'servo_deadband_px': interface_cfg.get('servo_deadband_px', 5.0),
             'servo_timeout_sec': interface_cfg.get('servo_timeout_sec', 10.0),
+            'servo_goal_x': interface_cfg.get('servo_goal_x', 320.0),
+            'servo_goal_y': interface_cfg.get('servo_goal_y', 238.0),
             'servo_min_speed': interface_cfg.get('servo_min_speed', 400),
             'servo_max_speed': interface_cfg.get('servo_max_speed', 1100),
             'image_width_px': interface_cfg.get('image_width_px', 640),
