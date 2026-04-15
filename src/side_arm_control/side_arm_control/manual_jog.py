@@ -123,12 +123,12 @@ class ManualJog(Node):
                     # Servo controls
                     elif ch == 'z':
                         self.servo_offset -= self.servo_step
-                        self.servo_offset = max(-500, self.servo_offset)  # Limit range
+                        self.servo_offset = max(-1000, self.servo_offset)  # Limit range
                         self.send(f'SERVO,{self.servo_offset}')
                         print(f'\n\rServo offset: {self.servo_offset}us')
                     elif ch == 'c':
                         self.servo_offset += self.servo_step
-                        self.servo_offset = min(500, self.servo_offset)  # Limit range
+                        self.servo_offset = min(1000, self.servo_offset)  # Limit range
                         self.send(f'SERVO,{self.servo_offset}')
                         print(f'\n\rServo offset: {self.servo_offset}us')
 
