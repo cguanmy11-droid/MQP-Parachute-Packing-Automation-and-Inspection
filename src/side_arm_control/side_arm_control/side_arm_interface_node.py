@@ -872,7 +872,7 @@ class SideArmInterfaceNode(Node):
         self._send_command('HOME,0')
 
         # Poll until Z is near home (0) or timeout
-        timeout_sec = 20.0
+        timeout_sec = 60.0
         home_tolerance_mm = 5.0
         poll_interval = 0.1
         start_time = time.time()
