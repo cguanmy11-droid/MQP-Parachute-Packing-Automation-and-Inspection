@@ -465,9 +465,9 @@ class SideArmInterfaceNode(Node):
 
         self.get_logger().info(f'Moving to ({x:.1f}, {y:.1f}, {z:.1f}) mm')
 
-        # Send goal async
+        # Send goal async (longer timeout in case server is busy)
         send_goal_future = self._move_client.send_goal_async(goal)
-        if not self._wait_for_future(send_goal_future, 10.0):
+        if not self._wait_for_future(send_goal_future, 30.0):
             self.get_logger().error('Goal send timed out')
             return (False, x, y, z)
 
@@ -476,9 +476,9 @@ class SideArmInterfaceNode(Node):
             self.get_logger().error('Move goal rejected')
             return (False, x, y, z)
 
-        # Wait for result
+        # Wait for result (generous timeout for slow moves)
         result_future = goal_handle.get_result_async()
-        if not self._wait_for_future(result_future, 60.0):
+        if not self._wait_for_future(result_future, 120.0):
             self.get_logger().warn('Result wait timed out, reading current position')
             final_x = self._current_position.x
             final_y = self._current_position.y

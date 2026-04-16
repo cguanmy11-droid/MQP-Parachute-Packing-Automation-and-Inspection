@@ -744,17 +744,20 @@ class PackingCoordinatorNode(Node):
 
         self.get_logger().info(f'[INSERT] Using {self.current_arm} arm to insert hook...')
 
-        # Step 1: Vision servo (optional - can fail gracefully)
-        servo_service = f'/side_arm_{self.current_arm}/vision_servo'
-        servo_client = self.create_client(Trigger, servo_service)
+        # Step 1: Vision servo (disabled for now - go straight to insert)
+        # servo_service = f'/side_arm_{self.current_arm}/vision_servo'
+        # servo_client = self.create_client(Trigger, servo_service)
+        #
+        # if servo_client.wait_for_service(timeout_sec=2.0):
+        #     self.get_logger().info('[INSERT] Running vision servo...')
+        #     future = servo_client.call_async(Trigger.Request())
+        #     future.add_done_callback(self._on_vision_servo_done)
+        # else:
+        #     self.get_logger().warn('[INSERT] Vision servo not available, skipping to insert')
+        #     self._do_insert_through_loop()
 
-        if servo_client.wait_for_service(timeout_sec=2.0):
-            self.get_logger().info('[INSERT] Running vision servo...')
-            future = servo_client.call_async(Trigger.Request())
-            future.add_done_callback(self._on_vision_servo_done)
-        else:
-            self.get_logger().warn('[INSERT] Vision servo not available, skipping to insert')
-            self._do_insert_through_loop()
+        # Go directly to insert (no vision servo)
+        self._do_insert_through_loop()
 
     def _on_vision_servo_done(self, future):
         """Handle vision servo result, then proceed to insert."""
