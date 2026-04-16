@@ -51,7 +51,7 @@ class SideArmCoordinateNode(Node):
         # ========== CALIBRATION PARAMETERS (to be tuned) ==========
         self.declare_parameter('steps_per_mm_horizontal', 80.0)   # Stepper2 - belt drive
         self.declare_parameter('steps_per_mm_vertical', 200.0)    # Stepper1 - lead screw
-        self.declare_parameter('dc_mm_per_second', 5.0)          # DC motor travel rate
+        self.declare_parameter('dc_mm_per_second', 10.0)          # DC motor travel rate
         self.declare_parameter('dc_speed_percent', 50)            # Default DC speed
 
         # Speed defaults
@@ -566,10 +566,7 @@ class SideArmCoordinateNode(Node):
         self.get_logger().debug(f'Sent: {cmd}')
 
     def _mm_to_steps_horizontal(self, mm: float) -> int:
-        steps = int(mm * self.steps_per_mm_horizontal)
-        if self.position_invert_x:
-            steps = -steps
-        return steps
+        return int(mm * self.steps_per_mm_horizontal)
 
     def _mm_to_steps_vertical(self, mm: float) -> int:
         steps = int(mm * self.steps_per_mm_vertical)
@@ -825,26 +822,19 @@ class SideArmCoordinateNode(Node):
 
             time.sleep(0.1)
 
-        # Wait briefly for final state update, then read final position
-        time.sleep(0.2)
-        with self._state_lock:
-            final_x = self._position_x_mm
-            final_y = self._position_y_mm
-            final_z = self._position_z_mm
-
         # Result
         goal_handle.succeed()
         result = MoveToCoordinate.Result()
         result.success = True
-        result.final_x_mm = final_x
-        result.final_y_mm = final_y
-        result.final_z_mm = final_z
+        result.final_x_mm = current_x
+        result.final_y_mm = current_y
+        result.final_z_mm = current_z
         result.execution_time_sec = time.time() - start_time
         result.message = f'[{mode_str}] Move complete'
 
         self.get_logger().info(
             f'[{mode_str}] Move complete in {result.execution_time_sec:.2f}s, '
-            f'final position: ({final_x:.1f}, {final_y:.1f}, {final_z:.1f}) mm'
+            f'final position: ({current_x:.1f}, {current_y:.1f}, {current_z:.1f}) mm'
         )
 
         return result

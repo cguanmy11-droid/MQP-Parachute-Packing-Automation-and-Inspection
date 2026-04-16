@@ -1117,9 +1117,10 @@ class SideArmInterfaceNode(Node):
         # Run DC motor at full speed toward home (positive = retract)
         self._send_command('DC_SPEED,100')
 
-        # Poll until depth limit switch is hit or timeout
-        timeout_sec = 30.0
-        poll_interval = 0.05  # Fast polling
+        # Poll until Z is near home (0) or timeout
+        timeout_sec = 90.0
+        home_tolerance_mm = 5.0
+        poll_interval = 0.1
         start_time = time.time()
 
         while time.time() - start_time < timeout_sec:
