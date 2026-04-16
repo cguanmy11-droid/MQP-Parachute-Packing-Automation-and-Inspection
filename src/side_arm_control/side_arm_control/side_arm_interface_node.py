@@ -15,7 +15,7 @@ from rclpy.node import Node
 from rclpy.action import ActionServer, ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-from parachute_interfaces.action import InsertHook, MoveToCoordinate, VisualServo
+from parachute_interfaces.action import InsertHook, MoveToCoordinate, VisualServo, ReleaseHook
 from parachute_interfaces.srv import RotateHook, MoveToPosition, MoveToWorldPose
 from parachute_interfaces.msg import HookStatus, SideArmState
 from geometry_msgs.msg import Point, PoseStamped, PoseArray
@@ -117,6 +117,9 @@ class SideArmInterfaceNode(Node):
         # Current position tracking
         self._current_position = Point()
         self._is_homed = False
+        self._limit_depth = False
+        self._limit_horizontal = False
+        self._limit_vertical = False
 
         # Vision servo state
         self._vision_latest_x: Optional[float] = None
@@ -157,6 +160,12 @@ class SideArmInterfaceNode(Node):
         self.visual_servo_action = ActionServer(
             self, VisualServo, 'visual_servo',
             self._visual_servo_action_callback,
+            callback_group=self._cb_group)
+
+        # Action server for releasing hook (relative topic)
+        self.release_hook_action = ActionServer(
+            self, ReleaseHook, 'release_hook',
+            self._release_hook_action_callback,
             callback_group=self._cb_group)
 
         # Service for rotating hook (relative topic)
@@ -269,11 +278,14 @@ class SideArmInterfaceNode(Node):
         return self._target_to_carriage_coords(world_x_mm, world_y_mm, world_z_mm)
 
     def _state_callback(self, msg: SideArmState):
-        """Track current position from coordinate node."""
+        """Track current position and limit switches from coordinate node."""
         self._current_position.x = msg.x_mm
         self._current_position.y = msg.y_mm
         self._current_position.z = msg.z_mm
         self._is_homed = msg.is_homed
+        self._limit_depth = msg.limit_depth
+        self._limit_horizontal = msg.limit_horizontal
+        self._limit_vertical = msg.limit_vertical
 
     def _vision_callback(self, msg: PoseArray):
         """Track all vision detections for servo control."""
@@ -537,6 +549,70 @@ class SideArmInterfaceNode(Node):
 
         finally:
             self._servo_active = False
+
+    def _release_hook_action_callback(self, goal_handle):
+        """
+        Action callback for releasing the hook.
+
+        Pulls line up (stepper move) while running DC motor forward
+        to push the line off the hook.
+        """
+        request = goal_handle.request
+        feedback = ReleaseHook.Feedback()
+
+        # Use defaults if not specified
+        pull_steps = request.pull_steps if request.pull_steps > 0 else 10000
+        pull_speed = request.pull_speed if request.pull_speed > 0 else 1500
+        dc_speed = request.dc_speed_percent if request.dc_speed_percent > 0 else 50
+        dc_duration = request.dc_duration_sec if request.dc_duration_sec > 0 else 3.0
+
+        self.get_logger().info(
+            f'[RELEASE] Starting: pull={pull_steps} steps @ {pull_speed}, '
+            f'DC={dc_speed}% for {dc_duration}s'
+        )
+
+        start_time = time.time()
+
+        # Stage 1: Pull up while pushing forward
+        feedback.stage = 'pulling'
+        feedback.progress = 0.0
+        goal_handle.publish_feedback(feedback)
+
+        # Start both movements simultaneously
+        self._send_command(f'STEPPER_MOVE,1,{pull_steps},{pull_speed}')
+        time.sleep(0.05)  # Brief delay for firmware
+        self._send_command(f'DC_SPEED,{dc_speed}')
+
+        self.get_logger().info('[RELEASE] Pulling line up and pushing forward...')
+
+        # Wait for DC duration while updating feedback
+        dc_start = time.time()
+        while time.time() - dc_start < dc_duration:
+            elapsed = time.time() - dc_start
+            feedback.progress = min(elapsed / dc_duration, 0.9)
+            goal_handle.publish_feedback(feedback)
+            time.sleep(0.1)
+
+        # Stage 2: Stop DC motor
+        feedback.stage = 'releasing'
+        feedback.progress = 0.95
+        goal_handle.publish_feedback(feedback)
+
+        self._send_command('DC_SPEED,0')
+        self.get_logger().info('[RELEASE] DC motor stopped')
+
+        # Brief pause for stepper to finish
+        time.sleep(0.5)
+
+        # Complete
+        goal_handle.succeed()
+        result = ReleaseHook.Result()
+        result.success = True
+        result.message = 'Hook released'
+        result.execution_time_sec = time.time() - start_time
+
+        self.get_logger().info(f'[RELEASE] Complete in {result.execution_time_sec:.1f}s')
+        return result
 
     def set_servo_target_from_loop(self, target_loop):
         """
@@ -1035,38 +1111,36 @@ class SideArmInterfaceNode(Node):
         return response
 
     def _retract_z_callback(self, request, response):
-        """Retract Z axis only (home DC motor) - no servo motion."""
-        self.get_logger().info('[RETRACT_Z] Homing Z axis...')
+        """Retract Z axis fast until limit switch is hit."""
+        self.get_logger().info('[RETRACT_Z] Retracting Z axis (fast)...')
 
-        # Home DC motor (Z axis) to pull hook out
-        self._send_command('HOME,0')
+        # Run DC motor at full speed toward home (positive = retract)
+        self._send_command('DC_SPEED,100')
 
-        # Poll until Z is near home (0) or timeout
-        timeout_sec = 60.0
-        home_tolerance_mm = 5.0
-        poll_interval = 0.1
+        # Poll until depth limit switch is hit or timeout
+        timeout_sec = 30.0
+        poll_interval = 0.05  # Fast polling
         start_time = time.time()
 
         while time.time() - start_time < timeout_sec:
             time.sleep(poll_interval)
-            current_z = self._current_position.z
-            if current_z <= home_tolerance_mm:
+
+            # Check limit switch - this is the reliable indicator
+            if self._limit_depth:
+                # Stop motor immediately
+                self._send_command('DC_SPEED,0')
                 elapsed = time.time() - start_time
                 response.success = True
-                response.message = f'Z homed in {elapsed:.1f}s (Z={current_z:.1f}mm)'
+                response.message = f'Z retracted in {elapsed:.1f}s (limit hit)'
                 self.get_logger().info(f'[RETRACT_Z] {response.message}')
                 return response
 
-        # Timeout - for demo, still return success if Z decreased significantly
+        # Timeout - stop motor
+        self._send_command('DC_SPEED,0')
         current_z = self._current_position.z
-        if current_z < 50.0:  # At least moved toward home
-            response.success = True
-            response.message = f'Z retracted to {current_z:.1f}mm (timeout but close enough)'
-            self.get_logger().warn(f'[RETRACT_Z] {response.message}')
-        else:
-            response.success = False
-            response.message = f'Z homing timeout after {timeout_sec}s (Z={current_z:.1f}mm)'
-            self.get_logger().warn(f'[RETRACT_Z] {response.message}')
+        response.success = False
+        response.message = f'Z retract timeout after {timeout_sec}s (Z={current_z:.1f}mm, limit={self._limit_depth})'
+        self.get_logger().warn(f'[RETRACT_Z] {response.message}')
         return response
 
     def _reset_hook_angle_callback(self, request, response):

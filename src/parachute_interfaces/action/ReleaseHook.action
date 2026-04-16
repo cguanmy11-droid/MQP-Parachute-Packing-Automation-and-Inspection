@@ -1,0 +1,17 @@
+# Release Hook Action
+# Pulls line up and pushes it off the hook
+
+# Goal
+int32 pull_steps        # Steps to move up (default 10000 if 0)
+int32 pull_speed        # Speed for pull move (default 1500 if 0)
+int32 dc_speed_percent  # DC motor speed percent (default 50 if 0)
+float32 dc_duration_sec # How long to run DC (default 3.0 if 0)
+---
+# Result
+bool success
+string message
+float32 execution_time_sec
+---
+# Feedback
+string stage            # 'pulling' or 'releasing'
+float32 progress        # 0.0 to 1.0

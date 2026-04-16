@@ -34,6 +34,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/ExecuteTrajectory.action"
   "action/MoveToCoordinate.action"
   "action/VisualServo.action"
+  "action/ReleaseHook.action"
   DEPENDENCIES geometry_msgs std_msgs action_msgs
 )
 
