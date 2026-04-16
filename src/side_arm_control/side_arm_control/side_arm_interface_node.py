@@ -14,6 +14,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionServer, ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from parachute_interfaces.action import InsertHook, MoveToCoordinate
 from parachute_interfaces.srv import RotateHook, MoveToPosition, MoveToWorldPose
 from parachute_interfaces.msg import HookStatus, SideArmState
@@ -943,8 +944,14 @@ class SideArmInterfaceNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = SideArmInterfaceNode()
+
+    # Use MultiThreadedExecutor so action callbacks can be processed
+    # while service callbacks are waiting for action results
+    executor = MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
