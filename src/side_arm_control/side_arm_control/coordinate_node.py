@@ -49,14 +49,14 @@ class SideArmCoordinateNode(Node):
         self.declare_parameter('simulation_mode', False)  # Enable simulation
 
         # ========== CALIBRATION PARAMETERS (to be tuned) ==========
-        self.declare_parameter('steps_per_mm_horizontal', 80.0)   # Stepper2 - belt drive
-        self.declare_parameter('steps_per_mm_vertical', 200.0)    # Stepper1 - lead screw
-        self.declare_parameter('dc_mm_per_second', 10.0)          # DC motor travel rate
-        self.declare_parameter('dc_speed_percent', 50)            # Default DC speed
+        self.declare_parameter('steps_per_mm_horizontal', 400.0)   # Stepper2 - belt drive
+        self.declare_parameter('steps_per_mm_vertical', 400.0)    # Stepper1 - lead screw
+        self.declare_parameter('dc_mm_per_second', 6.0)          # DC motor travel rate
+        self.declare_parameter('dc_speed_percent', 75)            # Default DC speed
 
         # Speed defaults
-        self.declare_parameter('default_speed_horizontal', 800.0)  # steps/s
-        self.declare_parameter('default_speed_vertical', 400.0)    # steps/s
+        self.declare_parameter('default_speed_horizontal', 1500.0)  # steps/s
+        self.declare_parameter('default_speed_vertical', 1500.0)    # steps/s
 
         # Workspace limits (soft limits in mm)
         self.declare_parameter('max_x_mm', 300.0)
