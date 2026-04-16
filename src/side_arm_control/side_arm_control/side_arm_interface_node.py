@@ -15,7 +15,7 @@ from rclpy.node import Node
 from rclpy.action import ActionServer, ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
-from parachute_interfaces.action import InsertHook, MoveToCoordinate
+from parachute_interfaces.action import InsertHook, MoveToCoordinate, VisualServo
 from parachute_interfaces.srv import RotateHook, MoveToPosition, MoveToWorldPose
 from parachute_interfaces.msg import HookStatus, SideArmState
 from geometry_msgs.msg import Point, PoseStamped, PoseArray
@@ -151,6 +151,12 @@ class SideArmInterfaceNode(Node):
         self.action_server = ActionServer(
             self, InsertHook, 'insert_hook',
             self.insert_hook_callback,
+            callback_group=self._cb_group)
+
+        # Action server for visual servoing (relative topic)
+        self.visual_servo_action = ActionServer(
+            self, VisualServo, 'visual_servo',
+            self._visual_servo_action_callback,
             callback_group=self._cb_group)
 
         # Service for rotating hook (relative topic)
@@ -402,6 +408,136 @@ class SideArmInterfaceNode(Node):
         finally:
             self._servo_active = False
     
+    def _visual_servo_action_callback(self, goal_handle):
+        """
+        Action callback for visual servoing.
+
+        Selects loop based on arm side:
+        - Right arm: targets LEFTMOST loop (lowest X pixel)
+        - Left arm: targets RIGHTMOST loop (highest X pixel)
+
+        Uses P-control to center the selected loop in the camera frame.
+        """
+        request = goal_handle.request
+        feedback = VisualServo.Feedback()
+
+        arm_side = request.arm_side.lower() if request.arm_side else 'right'
+        timeout = request.timeout_sec if request.timeout_sec > 0 else self.servo_timeout_sec
+
+        # Goal position: use provided values or defaults
+        goal_x = request.goal_x_px if request.goal_x_px > 0 else self.servo_goal_x
+        goal_y = request.goal_y_px if request.goal_y_px > 0 else self.servo_goal_y
+
+        self.get_logger().info(
+            f'[VISUAL_SERVO] Starting: arm={arm_side}, timeout={timeout:.1f}s, '
+            f'goal=({goal_x:.0f}, {goal_y:.0f})px'
+        )
+
+        self._servo_active = True
+        start_time = time.time()
+        iterations = 0
+        lost_streak = 0
+
+        try:
+            while time.time() - start_time < timeout:
+                iterations += 1
+
+                # Brief settle time for camera
+                time.sleep(self.servo_settle_sec)
+
+                # Check for detections
+                if not self._vision_detections:
+                    lost_streak += 1
+                    if lost_streak > 30:  # ~2.4s with 0.08s settle
+                        goal_handle.abort()
+                        result = VisualServo.Result()
+                        result.success = False
+                        result.message = f'Detection lost for {lost_streak} frames'
+                        result.iterations = iterations
+                        result.execution_time_sec = time.time() - start_time
+                        return result
+                    continue
+                lost_streak = 0
+
+                # Select loop based on arm side
+                # Right arm: leftmost loop (min X) - hook approaches from right
+                # Left arm: rightmost loop (max X) - hook approaches from left
+                if arm_side == 'right':
+                    target_det = min(self._vision_detections, key=lambda d: d[0])
+                else:
+                    target_det = max(self._vision_detections, key=lambda d: d[0])
+
+                det_x, det_y = target_det
+
+                # Calculate error from goal position
+                error_x = det_x - goal_x
+                error_y = det_y - goal_y
+
+                # Publish feedback
+                feedback.target_x_px = det_x
+                feedback.target_y_px = det_y
+                feedback.error_x_px = error_x
+                feedback.error_y_px = error_y
+                feedback.iteration = iterations
+                feedback.num_detections = len(self._vision_detections)
+                goal_handle.publish_feedback(feedback)
+
+                # Check if centered
+                x_centered = abs(error_x) < self.servo_deadband_px
+                y_centered = abs(error_y) < self.servo_deadband_y_px
+
+                if x_centered and y_centered:
+                    goal_handle.succeed()
+                    result = VisualServo.Result()
+                    result.success = True
+                    result.message = f'Centered on {"leftmost" if arm_side == "right" else "rightmost"} loop'
+                    result.final_error_x_px = error_x
+                    result.final_error_y_px = error_y
+                    result.iterations = iterations
+                    result.execution_time_sec = time.time() - start_time
+                    self.get_logger().info(
+                        f'[VISUAL_SERVO] Centered in {iterations} iters, '
+                        f'err=({error_x:.1f}, {error_y:.1f})px'
+                    )
+                    return result
+
+                # P-control: scale steps by error magnitude
+                # X axis (stepper 2)
+                if not x_centered:
+                    x_scale = min(abs(error_x) / (self.image_width_px / 4.0), 1.0)
+                    x_steps = max(int(self.servo_step_size * x_scale), 150)
+                    x_sign = 1 if error_x > 0 else -1
+                    self._send_command(f'STEPPER_MOVE,2,{x_sign * x_steps},{self.servo_step_speed}')
+
+                # Y axis (stepper 1)
+                if not y_centered:
+                    y_scale = min(abs(error_y) / (self.image_height_px / 4.0), 1.0)
+                    y_steps = max(int(self.servo_step_size * y_scale), 150)
+                    y_sign = 1 if error_y > 0 else -1
+                    self._send_command(f'STEPPER_MOVE,1,{y_sign * y_steps},{self.servo_step_speed}')
+
+                # Log periodically
+                if iterations % 15 == 0:
+                    self.get_logger().info(
+                        f'[VISUAL_SERVO] iter={iterations}, det=({det_x:.0f},{det_y:.0f}), '
+                        f'err=({error_x:.0f},{error_y:.0f}), n_loops={len(self._vision_detections)}'
+                    )
+
+            # Timeout
+            goal_handle.abort()
+            result = VisualServo.Result()
+            result.success = False
+            result.message = f'Timeout after {timeout:.1f}s'
+            result.final_error_x_px = error_x if 'error_x' in dir() else 0.0
+            result.final_error_y_px = error_y if 'error_y' in dir() else 0.0
+            result.iterations = iterations
+            result.execution_time_sec = time.time() - start_time
+            self.get_logger().warn(f'[VISUAL_SERVO] {result.message}')
+            return result
+
+        finally:
+            self._servo_active = False
+
     def set_servo_target_from_loop(self, target_loop):
         """
         Set the servo target pixel from a DetectedLoop's pixel position.

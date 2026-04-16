@@ -740,6 +740,14 @@ class SideArmCoordinateNode(Node):
             if abs(steps_y) > 0:
                 self._send_command(f'STEPPER_MOVE,1,{steps_y},{speed_y}')
 
+            # Update expected position immediately (don't wait for STATE feedback)
+            # This prevents hanging if serial bridge doesn't return state
+            with self._state_lock:
+                if abs(steps_x) > 0:
+                    self._position_x_mm = x
+                if abs(steps_y) > 0:
+                    self._position_y_mm = y
+
             # DC motor with timed stop
             if abs(dz) > 0.5:
                 dc_duration = self._mm_to_dc_duration(dz)
