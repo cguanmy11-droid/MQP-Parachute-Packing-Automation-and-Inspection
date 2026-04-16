@@ -10,7 +10,7 @@ using namespace side_arm;
 
 constexpr unsigned long STATE_INTERVAL_MS = 100;
 constexpr size_t MAX_CMD_LEN = 96;
-constexpr long HOMING_TRAVEL_STEPS = 40000;
+constexpr long HOMING_TRAVEL_STEPS = 75000;
 constexpr float INSTANT_ACCEL = 6000;
 constexpr int DC_IS_ADC_PIN = 35;    // R_IS
 constexpr int DC_IS_UPPER = 1700;    // ADC threshold

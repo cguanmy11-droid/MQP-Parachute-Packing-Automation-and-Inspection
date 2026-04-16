@@ -631,6 +631,7 @@ class SideArmCoordinateNode(Node):
                     self._send_command(f'STEPPER_MOVE,2,{steps_x},{speed_x}')
                     hw_time_x = abs(dx) / (speed_x / self.steps_per_mm_horizontal)
                     estimated_time = max(estimated_time, hw_time_x)
+                    time.sleep(0.05) # 50 ms delay
 
                 if abs(steps_x) > 0 and abs(steps_y) > 0:
                     time.sleep(0.05)  # 50ms delay between commands for firmware
