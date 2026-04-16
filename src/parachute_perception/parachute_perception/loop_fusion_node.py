@@ -171,6 +171,9 @@ class LoopFusionNode(Node):
         # Loops with y > 0 are Left, y < 0 are Right (matching your launch config).
         self.declare_parameter('y_side_threshold', 0.0)
 
+        # Use top camera positions as ground truth (no separate GT publisher needed)
+        self.declare_parameter('use_top_cam_as_ground_truth', True)
+
         publish_rate = self.get_parameter('publish_rate').value
         self.max_match_dist = self.get_parameter('max_match_distance').value
         left_topic = self.get_parameter('left_topic').value
@@ -180,6 +183,7 @@ class LoopFusionNode(Node):
         output_topic = self.get_parameter('output_topic').value
         self.num_per_side = self.get_parameter('num_loops_per_side').value
         self.y_threshold = self.get_parameter('y_side_threshold').value
+        self.use_top_cam_as_gt = self.get_parameter('use_top_cam_as_ground_truth').value
 
         # TF buffer for transforming side cam detections to world frame
         self.tf_buffer = tf2_ros.Buffer()
@@ -209,10 +213,11 @@ class LoopFusionNode(Node):
         # Publish timer
         self.create_timer(1.0 / max(publish_rate, 1.0), self._publish_fused)
 
+        gt_mode = 'TOP_CAM' if self.use_top_cam_as_gt else 'EXTERNAL'
         self.get_logger().info(
             f'LoopFusionNode ready → {output_topic}  '
-            f'({self.num_per_side} loops/side, '
-            f'match threshold {self.max_match_dist:.3f}m)'
+            f'(ground_truth={gt_mode}, {self.num_per_side} loops/side, '
+            f'match_dist={self.max_match_dist:.3f}m)'
         )
 
     # ------------------------------------------------------------------
@@ -341,8 +346,12 @@ class LoopFusionNode(Node):
         Update stow state AND world position from top camera.
         Top camera uses IDs like L1, L2, R1, R2 — direct match to canonical.
         Top camera provides best X/Y accuracy (looking down).
+
+        If use_top_cam_as_ground_truth is enabled, top camera positions also
+        serve as the expected/anchor positions for side camera matching.
         """
         now = self.get_clock().now().nanoseconds / 1e9
+        positions_received = False
 
         for ls in msg.loops:
             cid = ls.loop_id  # Already "L1", "R2", etc.
@@ -355,9 +364,20 @@ class LoopFusionNode(Node):
                 # Update position from top camera (X/Y are most accurate)
                 wp = ls.world_position
                 if wp.x != 0.0 or wp.y != 0.0:  # Has valid position
-                    fl.top_cam_position = (wp.x, wp.y, wp.z)
+                    pos = (wp.x, wp.y, wp.z)
+                    fl.top_cam_position = pos
                     fl.top_cam_confidence = ls.confidence
                     fl.last_top_cam_stamp = now
+                    positions_received = True
+
+                    # Use top camera as ground truth (expected positions for side cam matching)
+                    if self.use_top_cam_as_gt:
+                        fl.expected_position = pos
+
+        # Mark ground truth as received if using top cam as GT
+        if self.use_top_cam_as_gt and positions_received and not self._gt_received:
+            self._gt_received = True
+            self.get_logger().info('Using top camera positions as ground truth for fusion')
 
     # ------------------------------------------------------------------
     # Publish fused state

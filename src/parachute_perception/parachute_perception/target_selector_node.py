@@ -40,13 +40,20 @@ class TargetSelectorNode(Node):
         self.declare_parameter('stow_proximity_threshold', 0.01)  # meters — how close to consider "same loop"
         self.declare_parameter('output_frame', 'world')  # Frame to transform detections into
         self.declare_parameter('loop_source', 'top_camera')  # 'side_camera' or 'top_camera'
+        self.declare_parameter('enabled_side', 'right')  # 'left', 'right', or 'both'
+        self.declare_parameter('skip_stowed', True)  # Skip loops classified as fully/partially stowed
 
         self.use_test_loops = self.get_parameter('use_test_loops').value
         self.selection_strategy = self.get_parameter('selection_strategy').value
         self.proximity_threshold = self.get_parameter('stow_proximity_threshold').value
         self.loop_source = self.get_parameter('loop_source').value
         self.output_frame = self.get_parameter('output_frame').value
+        self.enabled_side = self.get_parameter('enabled_side').value
+        self.skip_stowed = self.get_parameter('skip_stowed').value
         self._next_side = 'left'
+
+        # Store stow state per loop ID (from top camera classification)
+        self.loop_stow_states: dict[str, str] = {}  # loop_id -> "fully"/"partial"/"not"/"unknown"
 
         # ==================== TF2 ====================
         self.tf_buffer = tf2_ros.Buffer()
@@ -108,7 +115,8 @@ class TargetSelectorNode(Node):
 
         mode = 'TEST LOOPS' if self.use_test_loops else self.loop_source.upper()
         self.get_logger().info(
-            f'Target Selector initialized (source={mode}, strategy={self.selection_strategy})'
+            f'Target Selector: source={mode}, side={self.enabled_side}, '
+            f'strategy={self.selection_strategy}, skip_stowed={self.skip_stowed}'
         )
 
     # def _generate_test_loops(self):
@@ -211,20 +219,28 @@ class TargetSelectorNode(Node):
             return  # Ignore detections in test mode
 
         if self._is_locked:
+            # Still update stow states even when locked (classification can change)
+            for ls in msg.loops:
+                self.loop_stow_states[ls.loop_id] = ls.state
             return
 
         self.current_loops = []
 
         for i, ls in enumerate(msg.loops):
+            # Store stow state for this loop
+            self.loop_stow_states[ls.loop_id] = ls.state
+
             # Skip loops without valid world position
             if ls.world_position.x == 0.0 and ls.world_position.y == 0.0:
                 continue
 
             # Convert LoopState to DetectedLoop
             loop = DetectedLoop()
-            # Convert string ID like "L1" to int (extract number)
+            # Use index based on string ID for tracking (L1=1, R1=101, etc.)
             try:
-                loop.loop_id = int(ls.loop_id[1:]) if ls.loop_id[1:].isdigit() else i
+                side_offset = 0 if ls.loop_id.startswith('L') else 100
+                num = int(ls.loop_id[1:]) if ls.loop_id[1:].isdigit() else i
+                loop.loop_id = side_offset + num
             except (ValueError, IndexError):
                 loop.loop_id = i
             loop.confidence = ls.confidence
@@ -235,6 +251,9 @@ class TargetSelectorNode(Node):
             loop.pose.header.stamp = msg.header.stamp
             loop.pose.pose.position = ls.world_position
             loop.pose.pose.orientation = Quaternion(w=1.0)
+
+            # Store original string ID in header frame_id for later lookup
+            loop.header.frame_id = ls.loop_id  # e.g., "L1", "R2"
 
             self.current_loops.append(loop)
 
@@ -354,18 +373,51 @@ class TargetSelectorNode(Node):
                 return True
         return False
 
+    def _get_loop_string_id(self, loop: DetectedLoop) -> str:
+        """Get the string ID (e.g., 'L1', 'R2') for a loop."""
+        # Try header.frame_id first (we store it there in top_cam_callback)
+        if loop.header.frame_id and loop.header.frame_id.startswith(('L', 'R')):
+            return loop.header.frame_id
+        # Fall back to deriving from numeric ID
+        if loop.loop_id >= 100:
+            return f'R{loop.loop_id - 100}'
+        return f'L{loop.loop_id}'
+
+    def _is_loop_eligible(self, loop: DetectedLoop) -> bool:
+        """Check if loop is eligible for selection based on side and stow state."""
+        string_id = self._get_loop_string_id(loop)
+
+        # Filter by enabled side
+        if self.enabled_side == 'left' and not string_id.startswith('L'):
+            return False
+        if self.enabled_side == 'right' and not string_id.startswith('R'):
+            return False
+
+        # Filter by stow state (skip already stowed)
+        if self.skip_stowed:
+            state = self.loop_stow_states.get(string_id, 'unknown')
+            if state in ('fully', 'partial'):
+                return False
+
+        return True
+
     def _select_target(self, loops: list[DetectedLoop], preferred_side: str = None) -> DetectedLoop | None:
-        """Select next target. preferred_side: 'left' (Y>=0), 'right' (Y<0), or None for any."""
+        """Select next target based on enabled_side and stow state."""
         source_loops = self._locked_loops if self._is_locked else loops
-        available = [l for l in source_loops if not self._is_already_stowed(l)]
+
+        # Filter: not already stowed (by position), eligible (by side and classification)
+        available = [
+            l for l in source_loops
+            if not self._is_already_stowed(l) and self._is_loop_eligible(l)
+        ]
 
         if not available:
             return None
 
-        # Filter by side if requested
+        # Further filter by preferred_side if specified (legacy support)
         if preferred_side == 'left':
             side_loops = [l for l in available if l.pose.pose.position.y >= 0]
-            available = side_loops if side_loops else available  # fall back to any
+            available = side_loops if side_loops else available
         elif preferred_side == 'right':
             side_loops = [l for l in available if l.pose.pose.position.y < 0]
             available = side_loops if side_loops else available
@@ -380,23 +432,21 @@ class TargetSelectorNode(Node):
 
     def _request_target_callback(self, request, response):
         """Service callback — select and return next loop to stow."""
-        # Try preferred side first, fall back to other side
-        target = self._select_target(self.current_loops, preferred_side=self._next_side)
+        # Select from enabled side only (filtering done in _select_target via _is_loop_eligible)
+        target = self._select_target(self.current_loops)
 
         if target is None:
-            # Try other side before giving up
-            other_side = 'right' if self._next_side == 'left' else 'left'
-            target = self._select_target(self.current_loops, preferred_side=other_side)
-
-        if target is None:
+            # Count eligible loops
+            eligible = [l for l in self.current_loops if self._is_loop_eligible(l)]
+            stowed_count = len(self.current_loops) - len(eligible)
             response.target_available = False
             response.target_loop = DetectedLoop()
-            response.message = f'All {len(self.current_loops)} loops already stowed'
+            response.message = (
+                f'No eligible loops (total={len(self.current_loops)}, '
+                f'stowed/ineligible={stowed_count}, side={self.enabled_side})'
+            )
             self.get_logger().info(response.message)
             return response
-
-        # Alternate side for next call
-        self._next_side = 'right' if self._next_side == 'left' else 'left'
 
         self.stowed_positions.append(Point(
             x=target.pose.pose.position.x,
@@ -406,16 +456,18 @@ class TargetSelectorNode(Node):
 
         response.target_available = True
         response.target_loop = target
-        response.message = f'Selected loop {target.loop_id}'
+        string_id = self._get_loop_string_id(target)
+        response.message = f'Selected loop {string_id}'
         self.target_pub.publish(target)
 
-        remaining = len(self.current_loops) - len(self.stowed_positions)
+        # Count remaining eligible loops
+        eligible = [l for l in self.current_loops if self._is_loop_eligible(l) and not self._is_already_stowed(l)]
         pos = target.pose.pose.position
-        side = 'LEFT' if pos.y >= 0 else 'RIGHT'
+        state = self.loop_stow_states.get(string_id, 'unknown')
         self.get_logger().info(
-            f'Target: loop {target.loop_id} [{side}] at '
+            f'Target: {string_id} (state={state}) at '
             f'({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f}) '
-            f'[{remaining} remaining]'
+            f'[{len(eligible) - 1} eligible remaining]'
         )
         return response
 

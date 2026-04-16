@@ -542,12 +542,24 @@ def launch_setup(context, *args, **kwargs):
                 'ground_truth_topic': '/loop_ground_truth',
                 'output_topic': '/fused_loop_states',
                 'num_loops_per_side': 9,
+                'use_top_cam_as_ground_truth': True,  # Use top cam X/Y as ground truth
             }]
         ))
 
 
     # ==================== TARGET SELECTOR & COORDINATOR ====================
     if enable_coordinator:
+        # Determine loop source based on cameras enabled
+        loop_source = 'top_camera' if enable_top_cam else 'side_camera'
+
+        # Determine enabled side(s)
+        if enable_left and enable_right:
+            enabled_side = 'both'
+        elif enable_left:
+            enabled_side = 'left'
+        else:
+            enabled_side = 'right'
+
         # Provides /request_next_target service - delayed to allow TF tree setup
         nodes.append(TimerAction(
             period=2.0,
@@ -560,6 +572,9 @@ def launch_setup(context, *args, **kwargs):
                     'use_test_loops': vision_test,
                     'selection_strategy': 'leftmost',
                     'stow_proximity_threshold': 0.01,
+                    'loop_source': loop_source,
+                    'enabled_side': enabled_side,
+                    'skip_stowed': True,
                 }],
                 remappings=[
                     ('/detected_loops', '/side_arm_right/detected_loops'),
