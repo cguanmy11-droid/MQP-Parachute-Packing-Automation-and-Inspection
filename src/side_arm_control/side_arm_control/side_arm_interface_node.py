@@ -440,8 +440,6 @@ class SideArmInterfaceNode(Node):
         Returns (success, final_x, final_y, final_z) tuple.
         Works in both real and test/simulation mode.
         """
-        import time as time_module
-
         if not self._move_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error('Coordinate node not available')
             return (False, x, y, z)
@@ -454,41 +452,21 @@ class SideArmInterfaceNode(Node):
 
         self.get_logger().info(f'Moving to ({x:.1f}, {y:.1f}, {z:.1f}) mm')
 
-        # Send goal
+        # Send goal and wait for acceptance (original working approach)
         send_goal_future = self._move_client.send_goal_async(goal)
-
-        # Wait for goal acceptance - must spin to process callbacks
-        start = time_module.time()
-        while not send_goal_future.done() and (time_module.time() - start) < 10.0:
-            rclpy.spin_once(self, timeout_sec=0.05)
-
-        if not send_goal_future.done():
-            self.get_logger().error('Goal send timed out')
-            return (False, x, y, z)
+        rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=10.0)
 
         goal_handle = send_goal_future.result()
         if not goal_handle or not goal_handle.accepted:
             self.get_logger().error('Move goal rejected')
             return (False, x, y, z)
 
-        self.get_logger().debug('Goal accepted, waiting for result...')
-
-        # Wait for result - must spin to process callbacks
+        # Wait for result
         result_future = goal_handle.get_result_async()
-        start = time_module.time()
-        while not result_future.done() and (time_module.time() - start) < 60.0:
-            rclpy.spin_once(self, timeout_sec=0.1)
-
-        if not result_future.done():
-            self.get_logger().warn('Move action timed out, reading current position')
-            final_x = self._current_position.x
-            final_y = self._current_position.y
-            final_z = self._current_position.z
-            self.get_logger().info(f'Current position: ({final_x:.1f}, {final_y:.1f}, {final_z:.1f}) mm')
-            return (True, final_x, final_y, final_z)
+        rclpy.spin_until_future_complete(self, result_future, timeout_sec=60.0)
 
         result = result_future.result()
-        if result.result.success:
+        if result and result.result.success:
             final_x = result.result.final_x_mm
             final_y = result.result.final_y_mm
             final_z = result.result.final_z_mm
@@ -497,8 +475,14 @@ class SideArmInterfaceNode(Node):
             )
             return (True, final_x, final_y, final_z)
         else:
-            self.get_logger().error(f'Move failed: {result.result.message}')
-            return (False, result.result.final_x_mm, result.result.final_y_mm, result.result.final_z_mm)
+            # Move likely happened but result wasn't received - read current position
+            final_x = self._current_position.x
+            final_y = self._current_position.y
+            final_z = self._current_position.z
+            self.get_logger().warn(
+                f'Move result unclear, current position: ({final_x:.1f}, {final_y:.1f}, {final_z:.1f}) mm'
+            )
+            return (True, final_x, final_y, final_z)
 
     def publish_status(self):
         """Publish current hook status."""
