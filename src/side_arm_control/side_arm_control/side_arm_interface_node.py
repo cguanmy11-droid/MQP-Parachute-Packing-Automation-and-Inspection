@@ -434,14 +434,15 @@ class SideArmInterfaceNode(Node):
         self._cmd_pub.publish(msg)
         self.get_logger().debug(f'Sent command: {cmd}')
 
-    def _move_to(self, x: float, y: float, z: float, speed_scale: float = 0.7) -> bool:
+    def _move_to(self, x: float, y: float, z: float, speed_scale: float = 0.7):
         """
         Move to position using coordinate node action.
-        Returns True on success. Works in both real and test/simulation mode.
+        Returns (success, final_x, final_y, final_z) tuple.
+        Works in both real and test/simulation mode.
         """
         if not self._move_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error('Coordinate node not available')
-            return False
+            return (False, x, y, z)
 
         goal = MoveToCoordinate.Goal()
         goal.x_mm = x
@@ -457,21 +458,31 @@ class SideArmInterfaceNode(Node):
         goal_handle = send_goal_future.result()
         if not goal_handle or not goal_handle.accepted:
             self.get_logger().error('Move goal rejected')
-            return False
+            return (False, x, y, z)
 
         result_future = goal_handle.get_result_async()
         rclpy.spin_until_future_complete(self, result_future, timeout_sec=60.0)
 
         result = result_future.result()
-        if result and result.result.success:
+        if result is None:
+            self.get_logger().error('Move timed out - no result received')
+            # Read current position as fallback
+            final_x = self._current_position.x
+            final_y = self._current_position.y
+            final_z = self._current_position.z
+            self.get_logger().info(f'Current position: ({final_x:.1f}, {final_y:.1f}, {final_z:.1f}) mm')
+            return (True, final_x, final_y, final_z)  # Still return success if we got close
+        elif result.result.success:
+            final_x = result.result.final_x_mm
+            final_y = result.result.final_y_mm
+            final_z = result.result.final_z_mm
             self.get_logger().info(
-                f'Move complete: ({result.result.final_x_mm:.1f}, '
-                f'{result.result.final_y_mm:.1f}, {result.result.final_z_mm:.1f}) mm'
+                f'Move complete: ({final_x:.1f}, {final_y:.1f}, {final_z:.1f}) mm'
             )
-            return True
+            return (True, final_x, final_y, final_z)
         else:
-            self.get_logger().error('Move failed')
-            return False
+            self.get_logger().error(f'Move failed: {result.result.message}')
+            return (False, result.result.final_x_mm, result.result.final_y_mm, result.result.final_z_mm)
 
     def publish_status(self):
         """Publish current hook status."""
@@ -533,11 +544,11 @@ class SideArmInterfaceNode(Node):
             f'MoveToPosition: ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) mm, speed={speed:.2f}'
         )
 
-        success = self._move_to(x_mm, y_mm, z_mm, speed_scale=speed)
+        success, final_x, final_y, final_z = self._move_to(x_mm, y_mm, z_mm, speed_scale=speed)
 
         response.success = success
         if success:
-            response.message = f"Moved to ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) mm"
+            response.message = f"Moved to ({final_x:.1f}, {final_y:.1f}, {final_z:.1f}) mm"
             response.estimated_time_sec = 0.0  # Already completed
         else:
             response.message = "Move failed"
@@ -599,17 +610,17 @@ class SideArmInterfaceNode(Node):
             return response
 
         # Execute the move
-        success = self._move_to(x_mm, y_mm, z_mm, speed_scale=speed)
+        success, final_x, final_y, final_z = self._move_to(x_mm, y_mm, z_mm, speed_scale=speed)
 
         response.success = success
-        response.final_x_mm = x_mm
-        response.final_y_mm = y_mm
-        response.final_z_mm = z_mm
+        response.final_x_mm = final_x
+        response.final_y_mm = final_y
+        response.final_z_mm = final_z
 
         if success:
-            response.message = f"Moved to ({x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f}) mm in {self.side_arm_frame}"
+            response.message = f"Moved to ({final_x:.1f}, {final_y:.1f}, {final_z:.1f}) mm in {self.side_arm_frame}"
         else:
-            response.message = "Move failed after transform"
+            response.message = f"Move failed (target was {x_mm:.1f}, {y_mm:.1f}, {z_mm:.1f} mm)"
 
         return response
 
@@ -701,7 +712,8 @@ class SideArmInterfaceNode(Node):
         self.get_logger().info('Stage 1: Approaching loop position')
 
         approach_z = target_z_mm - self.approach_offset_z
-        if not self._move_to(target_x_mm, target_y_mm, approach_z, speed_scale=0.7):
+        success, _, _, _ = self._move_to(target_x_mm, target_y_mm, approach_z, speed_scale=0.7)
+        if not success:
             goal_handle.abort()
             result = InsertHook.Result()
             result.success = False
@@ -740,7 +752,8 @@ class SideArmInterfaceNode(Node):
         self.get_logger().info('Stage 3: Inserting hook through loop')
 
         insert_z = target_z_mm + self.insert_depth_z
-        if not self._move_to(target_x_mm, target_y_mm, insert_z, speed_scale=0.5):
+        success, _, _, _ = self._move_to(target_x_mm, target_y_mm, insert_z, speed_scale=0.5)
+        if not success:
             goal_handle.abort()
             result = InsertHook.Result()
             result.success = False
@@ -850,16 +863,16 @@ class SideArmInterfaceNode(Node):
             f'[INSERT_THROUGH] Moving Z: {self._current_position.z:.1f} -> {target_z:.1f}mm'
         )
 
-        success = self._move_to(current_x, current_y, target_z, speed_scale=1.0)
+        success, final_x, final_y, final_z = self._move_to(current_x, current_y, target_z, speed_scale=1.0)
 
         if success:
             self.current_state = HookStatus.STATE_INSERTED
             response.success = True
-            response.message = f'Inserted to Z={target_z:.1f}mm'
+            response.message = f'Inserted to Z={final_z:.1f}mm'
             self.get_logger().info(f'[INSERT_THROUGH] {response.message}')
         else:
             response.success = False
-            response.message = 'Insert move failed'
+            response.message = f'Insert move failed (reached Z={final_z:.1f}mm)'
             self.get_logger().error(f'[INSERT_THROUGH] {response.message}')
 
         return response
