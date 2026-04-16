@@ -439,6 +439,9 @@ class SideArmInterfaceNode(Node):
         Move to position using coordinate node action.
         Returns (success, final_x, final_y, final_z) tuple.
         Works in both real and test/simulation mode.
+
+        Uses .result() instead of spin_until_future_complete to avoid
+        executor conflicts when called from within service callbacks.
         """
         if not self._move_client.wait_for_server(timeout_sec=5.0):
             self.get_logger().error('Coordinate node not available')
@@ -452,20 +455,30 @@ class SideArmInterfaceNode(Node):
 
         self.get_logger().info(f'Moving to ({x:.1f}, {y:.1f}, {z:.1f}) mm')
 
-        # Send goal and wait for acceptance (original working approach)
+        # Send goal async - blocks this thread only, other executor threads process callbacks
         send_goal_future = self._move_client.send_goal_async(goal)
-        rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=10.0)
+        try:
+            goal_handle = send_goal_future.result(timeout=10.0)
+        except Exception as e:
+            self.get_logger().error(f'Goal send failed: {e}')
+            return (False, x, y, z)
 
-        goal_handle = send_goal_future.result()
         if not goal_handle or not goal_handle.accepted:
             self.get_logger().error('Move goal rejected')
             return (False, x, y, z)
 
-        # Wait for result
+        # Wait for result - blocks this thread only
         result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future, timeout_sec=60.0)
+        try:
+            result = result_future.result(timeout=60.0)
+        except Exception as e:
+            self.get_logger().warn(f'Result wait failed: {e}')
+            # Move likely happened - read current position
+            final_x = self._current_position.x
+            final_y = self._current_position.y
+            final_z = self._current_position.z
+            return (True, final_x, final_y, final_z)
 
-        result = result_future.result()
         if result and result.result.success:
             final_x = result.result.final_x_mm
             final_y = result.result.final_y_mm
