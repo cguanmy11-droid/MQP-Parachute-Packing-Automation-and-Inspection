@@ -26,6 +26,7 @@ from parachute_interfaces.msg import DetectedLoops, DetectedLoop, LoopGroundTrut
 from parachute_interfaces.srv import RequestNextTarget, CaptureLoops
 from geometry_msgs.msg import Pose, PoseStamped, Point, Quaternion
 from std_msgs.msg import String
+from visualization_msgs.msg import Marker
 import tf2_ros
 from tf2_geometry_msgs import do_transform_pose_stamped
 
@@ -104,9 +105,13 @@ class TargetSelectorNode(Node):
             self._capture_loops_callback
         )
 
-        # ==================== PUBLISHER ====================
+        # ==================== PUBLISHERS ====================
         self.target_pub = self.create_publisher(
-            DetectedLoop, '/target_loop', 10 # change back or to var name
+            DetectedLoop, '/target_loop', 10
+        )
+        # RViz marker for target visualization
+        self.target_marker_pub = self.create_publisher(
+            Marker, '/target_loop_marker', 10
         )
 
         # ==================== TEST LOOPS ====================
@@ -373,6 +378,51 @@ class TargetSelectorNode(Node):
                 return True
         return False
 
+    def _publish_target_marker(self, loop: DetectedLoop, string_id: str):
+        """Publish RViz marker for the target loop - large green sphere with text."""
+        pos = loop.pose.pose.position
+
+        # Sphere marker for target
+        marker = Marker()
+        marker.header.frame_id = 'world'
+        marker.header.stamp = self.get_clock().now().to_msg()
+        marker.ns = 'target_loop'
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position = pos
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = 0.04  # 4cm diameter - larger than loop markers
+        marker.scale.y = 0.04
+        marker.scale.z = 0.04
+        marker.color.r = 0.0
+        marker.color.g = 1.0
+        marker.color.b = 0.0
+        marker.color.a = 0.9
+        marker.lifetime.sec = 0  # Persistent until replaced
+        self.target_marker_pub.publish(marker)
+
+        # Text marker with loop ID
+        text_marker = Marker()
+        text_marker.header.frame_id = 'world'
+        text_marker.header.stamp = self.get_clock().now().to_msg()
+        text_marker.ns = 'target_loop_text'
+        text_marker.id = 1
+        text_marker.type = Marker.TEXT_VIEW_FACING
+        text_marker.action = Marker.ADD
+        text_marker.pose.position.x = pos.x
+        text_marker.pose.position.y = pos.y
+        text_marker.pose.position.z = pos.z + 0.05  # Above the sphere
+        text_marker.pose.orientation.w = 1.0
+        text_marker.scale.z = 0.03  # Text height
+        text_marker.color.r = 1.0
+        text_marker.color.g = 1.0
+        text_marker.color.b = 1.0
+        text_marker.color.a = 1.0
+        text_marker.text = f'TARGET: {string_id}'
+        text_marker.lifetime.sec = 0
+        self.target_marker_pub.publish(text_marker)
+
     def _get_loop_string_id(self, loop: DetectedLoop) -> str:
         """Get the string ID (e.g., 'L1', 'R2') for a loop."""
         # Try header.frame_id first (we store it there in top_cam_callback)
@@ -460,14 +510,17 @@ class TargetSelectorNode(Node):
         response.message = f'Selected loop {string_id}'
         self.target_pub.publish(target)
 
+        # Publish RViz marker for visual feedback
+        self._publish_target_marker(target, string_id)
+
         # Count remaining eligible loops
         eligible = [l for l in self.current_loops if self._is_loop_eligible(l) and not self._is_already_stowed(l)]
         pos = target.pose.pose.position
         state = self.loop_stow_states.get(string_id, 'unknown')
         self.get_logger().info(
-            f'Target: {string_id} (state={state}) at '
+            f'TARGET: {string_id} (state={state}) at '
             f'({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f}) '
-            f'[{len(eligible) - 1} eligible remaining]'
+            f'[{len(eligible) - 1} remaining]'
         )
         return response
 

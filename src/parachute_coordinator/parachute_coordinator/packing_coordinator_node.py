@@ -122,6 +122,7 @@ class PackingCoordinatorNode(Node):
 
         # ==================== TRACKING ====================
         self.current_target_loop = None
+        self.current_target_string_id = ''  # e.g., 'L1', 'R2'
         self.completed_loops = 0
         self.total_loops = 0
         self._error_message = ''
@@ -557,6 +558,16 @@ class PackingCoordinatorNode(Node):
     #  event that triggers the next transition.
     # ================================================================
 
+    def _get_loop_string_id(self, loop) -> str:
+        """Get the string ID (e.g., 'L1', 'R2') for a loop."""
+        # Try header.frame_id first (set by target_selector for top cam loops)
+        if loop.header.frame_id and loop.header.frame_id.startswith(('L', 'R')):
+            return loop.header.frame_id
+        # Fall back to deriving from numeric ID
+        if loop.loop_id >= 100:
+            return f'R{loop.loop_id - 100}'
+        return f'L{loop.loop_id}'
+
     def _transition(self, event: str) -> bool:
         if self._paused:
             self._pending_event = event   # store it
@@ -691,12 +702,13 @@ class PackingCoordinatorNode(Node):
             return
 
         self.current_target_loop = response.target_loop
+        self.current_target_string_id = self._get_loop_string_id(self.current_target_loop)
         pos = self.current_target_loop.pose.pose.position
 
         # Route by Y sign: positive Y = left side, negative Y = right side
         self.current_arm = 'left' if pos.y >= 0 else 'right'
         self.get_logger().info(
-            f'[AT_LOOP] Loop {self.current_target_loop.loop_id} '
+            f'[AT_LOOP] Target: {self.current_target_string_id} '
             f'at ({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f}) -> {self.current_arm} arm'
         )
 

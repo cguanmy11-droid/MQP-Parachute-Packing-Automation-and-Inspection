@@ -629,11 +629,14 @@ class SideArmCoordinateNode(Node):
                 speed_x = int(self.default_speed_horizontal * speed_scale)
                 speed_y = int(self.default_speed_vertical * speed_scale)
 
-                # Send stepper commands
+                # Send stepper commands (with delay to ensure firmware processes both)
                 if abs(steps_x) > 0:
                     self._send_command(f'STEPPER_MOVE,2,{steps_x},{speed_x}')
                     hw_time_x = abs(dx) / (speed_x / self.steps_per_mm_horizontal)
                     estimated_time = max(estimated_time, hw_time_x)
+
+                if abs(steps_x) > 0 and abs(steps_y) > 0:
+                    time.sleep(0.05)  # 50ms delay between commands for firmware
 
                 if abs(steps_y) > 0:
                     self._send_command(f'STEPPER_MOVE,1,{steps_y},{speed_y}')
@@ -729,9 +732,11 @@ class SideArmCoordinateNode(Node):
             steps_x = self._mm_to_steps_horizontal(dx)
             steps_y = self._mm_to_steps_vertical(dy)
 
-            # Start stepper movements
+            # Start stepper movements (with delay to ensure firmware processes both)
             if abs(steps_x) > 0:
                 self._send_command(f'STEPPER_MOVE,2,{steps_x},{speed_x}')
+            if abs(steps_x) > 0 and abs(steps_y) > 0:
+                time.sleep(0.05)  # 50ms delay between commands for firmware
             if abs(steps_y) > 0:
                 self._send_command(f'STEPPER_MOVE,1,{steps_y},{speed_y}')
 
