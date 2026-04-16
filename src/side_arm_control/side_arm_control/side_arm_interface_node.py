@@ -479,11 +479,12 @@ class SideArmInterfaceNode(Node):
         # Wait for result (generous timeout for slow moves)
         result_future = goal_handle.get_result_async()
         if not self._wait_for_future(result_future, 120.0):
-            self.get_logger().warn('Result wait timed out, reading current position')
-            final_x = self._current_position.x
-            final_y = self._current_position.y
-            final_z = self._current_position.z
-            return (True, final_x, final_y, final_z)
+            self.get_logger().warn('Result wait timed out - canceling goal')
+            # Cancel the goal so action server is free for next command
+            cancel_future = goal_handle.cancel_goal_async()
+            self._wait_for_future(cancel_future, 5.0)
+            self.get_logger().info('Goal canceled')
+            return (False, x, y, z)
 
         result = result_future.result()
         if result and result.result.success:
