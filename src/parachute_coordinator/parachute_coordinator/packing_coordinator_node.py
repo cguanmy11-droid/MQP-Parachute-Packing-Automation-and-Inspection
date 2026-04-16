@@ -185,7 +185,7 @@ class PackingCoordinatorNode(Node):
             self.right_world_move_client = self.create_client(
                 MoveToWorldPose, '/side_arm_right/move_to_world_pose')
 
-        self.world_move_client = self.left_world_move_client or self.right_world_move_client
+        self.world_move_client = self.right_world_move_client or self.left_world_move_client # or self.right_world_move_client
 
         # ==================== ACTION CLIENTS ====================
         # Dual arm insert hook clients (only create for enabled arms)
