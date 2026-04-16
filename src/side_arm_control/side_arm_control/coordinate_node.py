@@ -242,8 +242,8 @@ class SideArmCoordinateNode(Node):
             self._update_simulated_position()
 
         # If no hardware state and not in simulation mode, nothing to publish
-        if self._current_state is None and not self.simulation_mode:
-            return
+        # if self._current_state is None and not self.simulation_mode:
+        #     return
 
         with self._state_lock:
             msg = SideArmState()
