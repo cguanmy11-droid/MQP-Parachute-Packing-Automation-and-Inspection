@@ -35,6 +35,7 @@ import rclpy
 import tf2_ros
 from rclpy.node import Node
 from geometry_msgs.msg import Point, PointStamped
+from visualization_msgs.msg import Marker, MarkerArray
 
 from parachute_interfaces.msg import (
     DetectedLoop,
@@ -59,15 +60,39 @@ class FusedLoop:
     # From ground truth (anchor for matching)
     expected_position: Optional[Tuple[float, float, float]] = None
 
-    # From side camera (updated on each detection)
-    detected_position: Optional[Tuple[float, float, float]] = None
-    detection_confidence: float = 0.0
-    last_detected_stamp: float = 0.0
+    # From side camera (updated on each detection) - best for Z depth
+    side_cam_position: Optional[Tuple[float, float, float]] = None
+    side_cam_confidence: float = 0.0
+    last_side_cam_stamp: float = 0.0
 
-    # From top camera (updated on each classification)
+    # From top camera (updated on each detection) - best for X/Y
+    top_cam_position: Optional[Tuple[float, float, float]] = None
+    top_cam_confidence: float = 0.0
+    last_top_cam_stamp: float = 0.0
+
+    # From top camera (classification state)
     stow_state: str = "unknown"       # "fully", "partial", "not", "unknown"
     stow_confidence: float = 0.0
-    last_classified_stamp: float = 0.0
+
+    def get_fused_position(self) -> Optional[Tuple[float, float, float]]:
+        """
+        Return fused position: X/Y from top camera, Z from side camera.
+        Falls back to available sources if one is missing.
+        """
+        # If we have both sources, fuse them
+        if self.top_cam_position and self.side_cam_position:
+            return (
+                self.top_cam_position[0],   # X from top cam
+                self.top_cam_position[1],   # Y from top cam
+                self.side_cam_position[2],  # Z from side cam
+            )
+        # Fall back to whichever is available
+        if self.top_cam_position:
+            return self.top_cam_position
+        if self.side_cam_position:
+            return self.side_cam_position
+        # Last resort: expected position
+        return self.expected_position
 
 
 # ---------------------------------------------------------------------------
@@ -177,8 +202,9 @@ class LoopFusionNode(Node):
         self.create_subscription(
             LoopGroundTruth, gt_topic, self._ground_truth_cb, 10)
 
-        # Publisher
+        # Publishers
         self.fused_pub = self.create_publisher(LoopStateArray, output_topic, 10)
+        self.marker_pub = self.create_publisher(MarkerArray, '/fused_loop_markers', 10)
 
         # Publish timer
         self.create_timer(1.0 / max(publish_rate, 1.0), self._publish_fused)
@@ -296,9 +322,9 @@ class LoopFusionNode(Node):
 
         for cid, (pos, conf) in matches.items():
             fl = self.loops[cid]
-            fl.detected_position = pos
-            fl.detection_confidence = conf
-            fl.last_detected_stamp = now
+            fl.side_cam_position = pos
+            fl.side_cam_confidence = conf
+            fl.last_side_cam_stamp = now
 
     def _left_cam_cb(self, msg: DetectedLoops) -> None:
         self._side_cam_cb(msg, 'L')
@@ -312,8 +338,9 @@ class LoopFusionNode(Node):
 
     def _top_cam_cb(self, msg: LoopStateArray) -> None:
         """
-        Update stow state from top camera.
+        Update stow state AND world position from top camera.
         Top camera uses IDs like L1, L2, R1, R2 — direct match to canonical.
+        Top camera provides best X/Y accuracy (looking down).
         """
         now = self.get_clock().now().nanoseconds / 1e9
 
@@ -321,9 +348,16 @@ class LoopFusionNode(Node):
             cid = ls.loop_id  # Already "L1", "R2", etc.
             if cid in self.loops:
                 fl = self.loops[cid]
+                # Update classification state
                 fl.stow_state = ls.state
                 fl.stow_confidence = ls.confidence
-                fl.last_classified_stamp = now
+
+                # Update position from top camera (X/Y are most accurate)
+                wp = ls.world_position
+                if wp.x != 0.0 or wp.y != 0.0:  # Has valid position
+                    fl.top_cam_position = (wp.x, wp.y, wp.z)
+                    fl.top_cam_confidence = ls.confidence
+                    fl.last_top_cam_stamp = now
 
     # ------------------------------------------------------------------
     # Publish fused state
@@ -343,11 +377,14 @@ class LoopFusionNode(Node):
             ls.state = fl.stow_state
             ls.confidence = fl.stow_confidence
 
-            # Use detected position if available, else expected position
-            pos = fl.detected_position or fl.expected_position
+            # Get fused position (X/Y from top cam, Z from side cam)
+            pos = fl.get_fused_position()
             if pos is not None:
-                # Normalize to 0-1 for LoopState (or use raw — depends on consumer)
-                # For now, store raw world coordinates in center_x/center_y
+                # Store in world_position field (3D)
+                ls.world_position.x = float(pos[0])
+                ls.world_position.y = float(pos[1])
+                ls.world_position.z = float(pos[2])
+                # Also keep center_x/y for backwards compatibility
                 ls.center_x = float(pos[0])
                 ls.center_y = float(pos[1])
 
@@ -356,6 +393,70 @@ class LoopFusionNode(Node):
         msg.total_count = len(msg.loops)
         msg.changed = False  # Could track changes if needed
         self.fused_pub.publish(msg)
+
+        # Publish RViz markers
+        self._publish_markers()
+
+    def _publish_markers(self) -> None:
+        """Publish RViz markers for fused loop positions."""
+        marker_array = MarkerArray()
+        stamp = self.get_clock().now().to_msg()
+
+        colors = {
+            "fully":   (0.0, 1.0, 0.0, 1.0),  # Green
+            "partial": (1.0, 1.0, 0.0, 1.0),  # Yellow
+            "not":     (0.5, 0.5, 0.5, 1.0),  # Red
+            "unknown": (1.0, 0.5, 0.5, 1.0),  # Orange
+        }
+
+        for i, (cid, fl) in enumerate(sorted(self.loops.items(), key=lambda x: self._sort_key(x[0]))):
+            pos = fl.get_fused_position()
+            if pos is None:
+                continue
+
+            # Sphere marker
+            marker = Marker()
+            marker.header.stamp = stamp
+            marker.header.frame_id = "world"
+            marker.ns = "fused_loops"
+            marker.id = i
+            marker.type = Marker.SPHERE
+            marker.action = Marker.ADD
+            marker.pose.position.x = pos[0]
+            marker.pose.position.y = pos[1]
+            marker.pose.position.z = pos[2]
+            marker.pose.orientation.w = 1.0
+            marker.scale.x = 0.025  # 25mm diameter
+            marker.scale.y = 0.025
+            marker.scale.z = 0.025
+            r, g, b, a = colors.get(fl.stow_state, (0.5, 0.5, 0.5, 1.0))
+            marker.color.r = r
+            marker.color.g = g
+            marker.color.b = b
+            marker.color.a = a
+            marker_array.markers.append(marker)
+
+            # Text label
+            text = Marker()
+            text.header.stamp = stamp
+            text.header.frame_id = "world"
+            text.ns = "fused_loop_labels"
+            text.id = i
+            text.type = Marker.TEXT_VIEW_FACING
+            text.action = Marker.ADD
+            text.pose.position.x = pos[0]
+            text.pose.position.y = pos[1]
+            text.pose.position.z = pos[2] + 0.04
+            text.pose.orientation.w = 1.0
+            text.scale.z = 0.02
+            text.color.r = 1.0
+            text.color.g = 1.0
+            text.color.b = 1.0
+            text.color.a = 1.0
+            text.text = f"{cid}"
+            marker_array.markers.append(text)
+
+        self.marker_pub.publish(marker_array)
 
     # ------------------------------------------------------------------
     # Utilities

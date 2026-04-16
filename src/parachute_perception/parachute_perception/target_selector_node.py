@@ -22,7 +22,7 @@ Usage:
 
 import rclpy
 from rclpy.node import Node
-from parachute_interfaces.msg import DetectedLoops, DetectedLoop, LoopGroundTruth
+from parachute_interfaces.msg import DetectedLoops, DetectedLoop, LoopGroundTruth, LoopStateArray
 from parachute_interfaces.srv import RequestNextTarget, CaptureLoops
 from geometry_msgs.msg import Pose, PoseStamped, Point, Quaternion
 from std_msgs.msg import String
@@ -39,10 +39,12 @@ class TargetSelectorNode(Node):
         self.declare_parameter('selection_strategy', 'rightmost')  # rightmost, leftmost, nearest
         self.declare_parameter('stow_proximity_threshold', 0.01)  # meters — how close to consider "same loop"
         self.declare_parameter('output_frame', 'world')  # Frame to transform detections into
+        self.declare_parameter('loop_source', 'top_camera')  # 'side_camera' or 'top_camera'
 
         self.use_test_loops = self.get_parameter('use_test_loops').value
         self.selection_strategy = self.get_parameter('selection_strategy').value
         self.proximity_threshold = self.get_parameter('stow_proximity_threshold').value
+        self.loop_source = self.get_parameter('loop_source').value
         self.output_frame = self.get_parameter('output_frame').value
         self._next_side = 'left'
 
@@ -60,10 +62,20 @@ class TargetSelectorNode(Node):
         self._capture_timestamp = None  # When capture occurred
 
         # ==================== SUBSCRIBERS ====================
-        self.loop_sub = self.create_subscription(
-            DetectedLoops, '/side_arm_right/detected_loops', # change back or to var name
-            self._loops_callback, 10
-        )
+        # Subscribe based on loop_source parameter
+        if self.loop_source == 'top_camera':
+            self.loop_sub = self.create_subscription(
+                LoopStateArray, '/top_cam/loop_states',
+                self._top_cam_callback, 10
+            )
+            self.get_logger().info('Using TOP CAMERA as loop source')
+        else:
+            self.loop_sub = self.create_subscription(
+                DetectedLoops, '/side_arm_right/detected_loops',
+                self._loops_callback, 10
+            )
+            self.get_logger().info('Using SIDE CAMERA as loop source')
+
         self.cmd_sub = self.create_subscription(
             String, '/stow/command',
             self._command_callback, 10
@@ -94,9 +106,9 @@ class TargetSelectorNode(Node):
         if self.use_test_loops:
             self.get_logger().info('Test mode: using /loop_ground_truth as source')
 
-        mode = 'TEST LOOPS' if self.use_test_loops else 'DETECTION'
+        mode = 'TEST LOOPS' if self.use_test_loops else self.loop_source.upper()
         self.get_logger().info(
-            f'Target Selector initialized ({mode}, strategy={self.selection_strategy})'
+            f'Target Selector initialized (source={mode}, strategy={self.selection_strategy})'
         )
 
     # def _generate_test_loops(self):
@@ -192,6 +204,42 @@ class TargetSelectorNode(Node):
             transformed_loop.pose = transformed_pose
 
             self.current_loops.append(transformed_loop)
+
+    def _top_cam_callback(self, msg: LoopStateArray):
+        """Convert top camera LoopStateArray to DetectedLoop format."""
+        if self.use_test_loops:
+            return  # Ignore detections in test mode
+
+        if self._is_locked:
+            return
+
+        self.current_loops = []
+
+        for i, ls in enumerate(msg.loops):
+            # Skip loops without valid world position
+            if ls.world_position.x == 0.0 and ls.world_position.y == 0.0:
+                continue
+
+            # Convert LoopState to DetectedLoop
+            loop = DetectedLoop()
+            # Convert string ID like "L1" to int (extract number)
+            try:
+                loop.loop_id = int(ls.loop_id[1:]) if ls.loop_id[1:].isdigit() else i
+            except (ValueError, IndexError):
+                loop.loop_id = i
+            loop.confidence = ls.confidence
+
+            # Create PoseStamped from world_position
+            loop.pose = PoseStamped()
+            loop.pose.header.frame_id = 'world'
+            loop.pose.header.stamp = msg.header.stamp
+            loop.pose.pose.position = ls.world_position
+            loop.pose.pose.orientation = Quaternion(w=1.0)
+
+            self.current_loops.append(loop)
+
+        if self.current_loops:
+            self.get_logger().debug(f'Top cam: {len(self.current_loops)} loops received')
 
     def _command_callback(self, msg: String):
         """Handle commands (reset stowed list, unlock, etc.)."""
