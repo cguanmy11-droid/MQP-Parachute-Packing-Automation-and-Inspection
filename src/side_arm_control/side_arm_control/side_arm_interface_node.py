@@ -457,10 +457,10 @@ class SideArmInterfaceNode(Node):
         # Send goal
         send_goal_future = self._move_client.send_goal_async(goal)
 
-        # Wait for goal acceptance with polling (avoid spin_until_future_complete)
+        # Wait for goal acceptance - must spin to process callbacks
         start = time_module.time()
         while not send_goal_future.done() and (time_module.time() - start) < 10.0:
-            time_module.sleep(0.05)
+            rclpy.spin_once(self, timeout_sec=0.05)
 
         if not send_goal_future.done():
             self.get_logger().error('Goal send timed out')
@@ -471,11 +471,13 @@ class SideArmInterfaceNode(Node):
             self.get_logger().error('Move goal rejected')
             return (False, x, y, z)
 
-        # Wait for result with polling
+        self.get_logger().debug('Goal accepted, waiting for result...')
+
+        # Wait for result - must spin to process callbacks
         result_future = goal_handle.get_result_async()
         start = time_module.time()
         while not result_future.done() and (time_module.time() - start) < 60.0:
-            time_module.sleep(0.1)
+            rclpy.spin_once(self, timeout_sec=0.1)
 
         if not result_future.done():
             self.get_logger().warn('Move action timed out, reading current position')
