@@ -26,12 +26,29 @@ states:
       timeout: ERROR
 
   AT_LOOP:
-    description: "Vision-guided positioning at next loop target"
+    description: "Request next target loop from perception"
     transitions:
-      positioned: INSERT     # both arms report ready
+      positioned: APPROACH   # target acquired, move to approach position
       no_targets: COMPLETE   # no more loops to stow
       vision_failure: ERROR
-      ik_failure: ERROR
+      timeout: ERROR
+
+  APPROACH:
+    description: "Coarse coordinate move to approach position (rough X/Y, retracted Z)"
+    timeout_sec: 30
+    transitions:
+      approached: SERVO      # at approach position, start visual servo
+      approach_failed: ERROR
+      timeout: ERROR
+
+  SERVO:
+    description: "Visual servo to center hook on loop (PRIMARY movement driver)"
+    timeout_sec: 15
+    max_retries: 2
+    transitions:
+      servo_complete: INSERT  # centered on loop, proceed to insert
+      servo_failed: ERROR
+      servo_timeout: ERROR
       timeout: ERROR
 
   INSERT:

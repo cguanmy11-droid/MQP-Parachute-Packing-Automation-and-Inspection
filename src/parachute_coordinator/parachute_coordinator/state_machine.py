@@ -22,6 +22,8 @@ class StowState(Enum):
     IDLE = auto()
     HOMING = auto()
     AT_LOOP = auto()
+    APPROACH = auto() 
+    SERVO = auto() 
     INSERT = auto()
     HANDOFF = auto()
     RETRACT = auto()
