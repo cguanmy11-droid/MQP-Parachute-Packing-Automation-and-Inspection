@@ -36,7 +36,7 @@ from parachute_interfaces.msg import LoopState, LoopStateArray
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
-from std_srvs.srv import Trigger
+from std_srvs.srv import Trigger, SetBool
 
 
 # ---------------------------------------------------------------------------
@@ -379,32 +379,42 @@ class TopCamLoopStateNode(Node):
         self.capture_srv = self.create_service(
             Trigger, '/top_cam/capture', self._capture_callback)
 
-        self.continuous_mode = self.get_parameter("continuous_mode").value
+        # Enable/disable service for dynamic control
+        self.enable_srv = self.create_service(
+            SetBool, '/top_cam/enable', self._enable_callback)
 
-        if self.display and self.continuous_mode:
+        self.continuous_mode = self.get_parameter("continuous_mode").value
+        self._processing_enabled = self.continuous_mode  # Start enabled if continuous
+
+        if self.display:
             cv2.namedWindow("Top Cam Loop State", cv2.WINDOW_NORMAL)
 
-        # Display timer runs at full frame_rate; inference is non-blocking
-        # Only create timer in continuous mode
-        if self.continuous_mode:
-            period = 1.0 / max(frame_rate, 1.0)
-            self.timer = self.create_timer(period, self._tick)
-            self.get_logger().info(
-                f"TopCamLoopStateNode ready → {out_topic}  "
-                f"(display {frame_rate:.0f} Hz, inference async)"
-            )
-        else:
-            self.timer = None
-            self.get_logger().info(
-                f"TopCamLoopStateNode ready → {out_topic}  "
-                f"(ON-DEMAND mode, call /top_cam/capture to capture)"
-            )
+        # Timer always runs for camera keep-alive, but only processes when enabled
+        period = 1.0 / max(frame_rate, 1.0)
+        self.timer = self.create_timer(period, self._tick)
+
+        mode_str = "CONTINUOUS" if self.continuous_mode else "ON-DEMAND"
+        self.get_logger().info(
+            f"TopCamLoopStateNode ready → {out_topic}  "
+            f"({mode_str} mode, processing={'ON' if self._processing_enabled else 'OFF'})"
+        )
+        self.get_logger().info(
+            f"  Services: /top_cam/capture (single shot), /top_cam/enable (on/off)"
+        )
 
     # ------------------------------------------------------------------
     def _tick(self) -> None:
         ret, frame = self.cap.read()
         if not ret:
             self.get_logger().warning("Camera read failed")
+            return
+
+        # Only submit to inference worker if processing is enabled
+        if not self._processing_enabled:
+            # Just keep camera alive, don't process
+            if self.display:
+                cv2.imshow("Top Cam Loop State", frame)
+                cv2.waitKey(1)
             return
 
         # Submit new frame to inference worker (non-blocking)
@@ -632,6 +642,16 @@ class TopCamLoopStateNode(Node):
             cv2.putText(frame, label, (x_cursor, y_pos),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.42, color, 1, cv2.LINE_AA)
             x_cursor += len(label) * 11 + 12
+
+    # ------------------------------------------------------------------
+    def _enable_callback(self, request, response):
+        """Enable or disable continuous processing."""
+        self._processing_enabled = request.data
+        state = "ENABLED" if request.data else "DISABLED"
+        self.get_logger().info(f'[TOP_CAM] Processing {state}')
+        response.success = True
+        response.message = f'Processing {state}'
+        return response
 
     # ------------------------------------------------------------------
     def _capture_callback(self, request, response):

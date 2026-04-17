@@ -522,6 +522,7 @@ def launch_setup(context, *args, **kwargs):
                     'display': LaunchConfiguration('top_cam_display'),
                     'publish_image': True,
                     'image_topic': '/top_cam/image',
+                    'continuous_mode': LaunchConfiguration('top_cam_continuous'),
                 }],
             )],
         ))
@@ -670,5 +671,7 @@ def generate_launch_description():
             description='Top camera classification weights'),
         DeclareLaunchArgument('top_cam_display', default_value='false',
             description='Show top camera window'),
+        DeclareLaunchArgument('top_cam_continuous', default_value='false',
+            description='Run top camera inference continuously (false = on-demand via /top_cam/capture)'),
         OpaqueFunction(function=launch_setup),
     ])
