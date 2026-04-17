@@ -130,6 +130,15 @@ int readDcCurrent() {
 
 void applyDcCommand(int percent) {
   percent = constrain(percent, -100, 100);
+
+  // Safety: Don't allow motion toward an engaged limit switch
+  const LimitStates limits = readLimitStates();
+  if (limits.sw1 && percent > 0) {
+    // Limit 1 (DC retract limit) is engaged, block motion toward it
+    percent = 0;
+    Serial.println("BLOCKED DC motion toward engaged limit");
+  }
+
   currentDcPercent = percent;
 
   if (percent == 0) {
@@ -309,6 +318,19 @@ void handleStepperMove(uint8_t id, long steps, long speed) {
   AccelStepper* motor = (id == 1) ? &stepper1 : (id == 2 ? &stepper2 : nullptr);
   if (!motor) {
     Serial.println("ERR Unknown stepper id");
+    return;
+  }
+
+  // Safety: Don't allow motion toward an engaged limit switch
+  const LimitStates limits = readLimitStates();
+  if (id == 1 && limits.sw2 && steps > 0) {
+    // Stepper 1 limit (sw2/l2) is engaged, block motion toward it
+    Serial.println("BLOCKED stepper1 motion toward engaged limit");
+    return;
+  }
+  if (id == 2 && limits.sw3 && steps > 0) {
+    // Stepper 2 limit (sw3/l3) is engaged, block motion toward it
+    Serial.println("BLOCKED stepper2 motion toward engaged limit");
     return;
   }
 
