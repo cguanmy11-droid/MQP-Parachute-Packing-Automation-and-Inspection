@@ -365,7 +365,7 @@ class PackingCoordinatorNode(Node):
 
         if cmd == 'estop':
             self._halt_all()
-            self.get_logger().error('⚠ EMERGENCY STOP ⚠ - All motion halted')
+            self.get_logger().error('EMERGENCY STOP - All motion halted')
             self._transition('error')  # Force to ERROR state
             self.error_pub.publish(String(data='EMERGENCY STOP activated by operator'))
             return
@@ -547,7 +547,7 @@ class PackingCoordinatorNode(Node):
             self._active_goal_handle = None
 
         # Send stop commands to side arms
-        stop_msg = String(data='STOP')
+        stop_msg = String(data='STOP_ALL')
         dc_stop = String(data='DC_SPEED,0')
         if self.left_cmd_pub:
             self.left_cmd_pub.publish(stop_msg)
