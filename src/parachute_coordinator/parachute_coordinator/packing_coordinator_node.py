@@ -363,6 +363,13 @@ class PackingCoordinatorNode(Node):
             self.get_logger().info('Sequence stopped, reset to IDLE')
             return
 
+        if cmd == 'estop':
+            self._halt_all()
+            self.get_logger().error('⚠ EMERGENCY STOP ⚠ - All motion halted')
+            self._transition('error')  # Force to ERROR state
+            self.error_pub.publish(String(data='EMERGENCY STOP activated by operator'))
+            return
+
         if cmd == 'home':
             self._halt_all()
             self._transition('home')
@@ -539,9 +546,15 @@ class PackingCoordinatorNode(Node):
                 pass
             self._active_goal_handle = None
 
-        # TODO: Send stop commands to both arms
-        # self._send_main_arm_stop()
-        # self._send_side_arm_stop()
+        # Send stop commands to side arms
+        stop_msg = String(data='STOP')
+        dc_stop = String(data='DC_SPEED,0')
+        if self.left_cmd_pub:
+            self.left_cmd_pub.publish(stop_msg)
+            self.left_cmd_pub.publish(dc_stop)
+        if self.right_cmd_pub:
+            self.right_cmd_pub.publish(stop_msg)
+            self.right_cmd_pub.publish(dc_stop)
 
     def _enter_error(self, event: str, message: str):
         """Common error entry — halts motion, records diagnostics."""

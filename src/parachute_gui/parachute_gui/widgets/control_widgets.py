@@ -121,6 +121,7 @@ class LoopSelectorWidget(QWidget):
 class ArmControlWidget(QWidget):
     command_requested = pyqtSignal(str)
     joystick_toggled  = pyqtSignal(bool)
+    emergency_stop_requested = pyqtSignal()  # New signal for E-STOP
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -139,6 +140,23 @@ class ArmControlWidget(QWidget):
         header.setFont(QFont('Courier New', 11, QFont.Bold))
         header.setStyleSheet('color: #00b4d8;')
         layout.addWidget(header)
+
+        # ── EMERGENCY STOP ──────────────────────────────────────────────────
+        self._estop_btn = QPushButton('EMERGENCY STOP')
+        self._estop_btn.setStyleSheet('''
+            QPushButton {
+                background: #8b0000; color: #ffffff;
+                border: 3px solid #ff0000; border-radius: 8px;
+                padding: 12px; font-family: Courier New;
+                font-size: 14px; font-weight: bold;
+            }
+            QPushButton:hover { background: #ff0000; }
+            QPushButton:pressed { background: #cc0000; }
+        ''')
+        self._estop_btn.clicked.connect(self._on_estop)
+        layout.addWidget(self._estop_btn)
+
+        layout.addWidget(self._separator())
 
         # ── Dual arm status ─────────────────────────────────────────────────
         arm_status_layout = QHBoxLayout()
@@ -255,6 +273,10 @@ class ArmControlWidget(QWidget):
         self._context_label.setText(
             f'PAUSED — {base}' if is_paused else base
         )
+
+    def _on_estop(self):
+        """Handle emergency stop button press."""
+        self.emergency_stop_requested.emit()
 
     def _toggle_joystick(self, checked):
         self._joystick_on = checked

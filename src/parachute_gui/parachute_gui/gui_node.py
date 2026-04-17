@@ -73,6 +73,11 @@ class ROSBridge(QObject):
         self._cmd_pub = self._node.create_publisher(String, '/stow/command', 10)
         self._joy_pub = self._node.create_publisher(Bool, '/joystick_enabled', 10)
 
+        # Emergency stop publishers - send direct commands to stop all motion
+        self._left_cmd_pub = self._node.create_publisher(String, '/side_arm_left/command', 10)
+        self._right_cmd_pub = self._node.create_publisher(String, '/side_arm_right/command', 10)
+        self._main_cmd_pub = self._node.create_publisher(String, '/main_arm/command', 10)
+
         threading.Thread(
             target=rclpy.spin, args=(self._node,), daemon=True
         ).start()
@@ -147,6 +152,26 @@ class ROSBridge(QObject):
     def set_joystick_mode(self, enabled: bool):
         self._joy_pub.publish(Bool(data=enabled))
         self.joystick_mode_changed.emit(enabled)
+
+    def emergency_stop(self):
+        """Send stop commands to all arms and abort the state machine."""
+        self._node.get_logger().warn('EMERGENCY STOP triggered!')
+
+        # Stop side arm motors immediately
+        stop_msg = String(data='STOP')
+        self._left_cmd_pub.publish(stop_msg)
+        self._right_cmd_pub.publish(stop_msg)
+
+        # Stop DC motors
+        dc_stop = String(data='DC_SPEED,0')
+        self._left_cmd_pub.publish(dc_stop)
+        self._right_cmd_pub.publish(dc_stop)
+
+        # Stop main arm (if it has a stop command)
+        self._main_cmd_pub.publish(stop_msg)
+
+        # Abort state machine -> moves to ERROR state
+        self._cmd_pub.publish(String(data='estop'))
 
     def shutdown(self):
         self._node.destroy_node()

@@ -212,6 +212,7 @@ class MainWindow(QMainWindow):
         # GUI → ROS2
         self._arm_widget.command_requested.connect(self._bridge.send_command)
         self._arm_widget.joystick_toggled.connect(self._bridge.set_joystick_mode)
+        self._arm_widget.emergency_stop_requested.connect(self._on_emergency_stop)
 
     # ── Handlers ──────────────────────────────────────────────────────────────
 
@@ -245,6 +246,10 @@ class MainWindow(QMainWindow):
 
     def _on_error(self, error: str):
         self._log_message(f'ERROR: {error}', color='#e94560')
+
+    def _on_emergency_stop(self):
+        self._bridge.emergency_stop()
+        self._log_message('EMERGENCY STOP ACTIVATED', color='#ff0000')
 
     def _log_message(self, msg: str, color: str = '#888'):
         ts = QDateTime.currentDateTime().toString('hh:mm:ss')
