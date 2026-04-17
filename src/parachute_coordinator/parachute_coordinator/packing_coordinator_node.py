@@ -76,6 +76,8 @@ class PackingCoordinatorNode(Node):
         # Set only one to True for single-arm backwards compatibility
         self.declare_parameter('enable_left_arm', True)
         self.declare_parameter('enable_right_arm', True)
+        # Top camera mode - if True, skip explicit capture calls (camera streams continuously)
+        self.declare_parameter('top_cam_continuous', False)
 
         self.test_mode = self.get_parameter('test_mode').value
         self.current_pattern = self.get_parameter('stow_pattern').value
@@ -84,6 +86,7 @@ class PackingCoordinatorNode(Node):
         self.enable_left_arm = self.get_parameter('enable_left_arm').value
         self.enable_right_arm = self.get_parameter('enable_right_arm').value
         self.dual_arm_mode = self.enable_left_arm and self.enable_right_arm
+        self.top_cam_continuous = self.get_parameter('top_cam_continuous').value
 
         # ==================== STATE MACHINE ====================
         config_path = os.path.join(
@@ -156,6 +159,12 @@ class PackingCoordinatorNode(Node):
         )
         self.capture_client = self.create_client(
             CaptureLoops, '/capture_loops',
+            callback_group=self._cb_group
+        )
+
+        # Top camera capture service (on-demand mode)
+        self.top_cam_capture_client = self.create_client(
+            Trigger, '/top_cam/capture',
             callback_group=self._cb_group
         )
 
@@ -647,7 +656,40 @@ class PackingCoordinatorNode(Node):
 
     def _capture_loops_after_homing(self):
         """Capture and lock loop positions after homing completes."""
-        self.get_logger().info('[HOMING] Capturing loop positions...')
+        # Skip explicit capture if top camera is running continuously
+        if self.top_cam_continuous:
+            self.get_logger().info('[HOMING] Top camera in continuous mode - using latest data')
+            self._lock_loop_positions()
+            return
+
+        self.get_logger().info('[HOMING] Triggering top camera capture...')
+
+        # Trigger top camera capture for fresh perception data (on-demand mode)
+        if self.top_cam_capture_client.service_is_ready():
+            future = self.top_cam_capture_client.call_async(Trigger.Request())
+            future.add_done_callback(self._on_homing_top_cam_done)
+        else:
+            self.get_logger().warn(
+                '[HOMING] Top camera not available - using existing perception'
+            )
+            self._lock_loop_positions()
+
+    def _on_homing_top_cam_done(self, future):
+        """Handle top cam capture during homing, then lock positions."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[HOMING] Top cam: {response.message}')
+            else:
+                self.get_logger().warn(f'[HOMING] Top cam capture failed: {response.message}')
+        except Exception as e:
+            self.get_logger().warn(f'[HOMING] Top cam error: {e}')
+
+        self._lock_loop_positions()
+
+    def _lock_loop_positions(self):
+        """Lock current loop positions from perception."""
+        self.get_logger().info('[HOMING] Locking loop positions...')
 
         if not self.capture_client.service_is_ready():
             self.get_logger().warn(
@@ -684,7 +726,42 @@ class PackingCoordinatorNode(Node):
             self._enter_error('homing_failed', response.message)
 
     def on_enter_at_loop(self, state: StowState, event: str):
-        """Entered AT_LOOP — request next target from perception."""
+        """Entered AT_LOOP — capture top cam image, then request next target from perception."""
+        # Skip explicit capture if top camera is running continuously
+        if self.top_cam_continuous:
+            self.get_logger().info('[AT_LOOP] Top camera in continuous mode - requesting target...')
+            self._request_next_target()
+            return
+
+        self.get_logger().info('[AT_LOOP] Capturing top camera image...')
+
+        # Trigger a top camera capture (on-demand mode)
+        if self.top_cam_capture_client.service_is_ready():
+            future = self.top_cam_capture_client.call_async(Trigger.Request())
+            future.add_done_callback(self._on_top_cam_capture_done)
+        else:
+            self.get_logger().warn(
+                '[AT_LOOP] Top camera capture service not available — '
+                'requesting target without fresh capture'
+            )
+            self._request_next_target()
+
+    def _on_top_cam_capture_done(self, future):
+        """Handle top camera capture result, then request target."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[AT_LOOP] Top cam capture: {response.message}')
+            else:
+                self.get_logger().warn(f'[AT_LOOP] Top cam capture failed: {response.message}')
+        except Exception as e:
+            self.get_logger().warn(f'[AT_LOOP] Top cam capture error: {e}')
+
+        # Proceed to request target regardless of capture result
+        self._request_next_target()
+
+    def _request_next_target(self):
+        """Request the next target loop from perception."""
         self.get_logger().info('[AT_LOOP] Requesting next target loop...')
 
         if not self.target_client.service_is_ready():
@@ -692,8 +769,6 @@ class PackingCoordinatorNode(Node):
                 '[AT_LOOP] Target service not available — '
                 'using current target or waiting'
             )
-            # TODO: Could retry or wait for service
-            # For now, transition to error
             self._enter_error('vision_failure', 'Target service not available')
             return
 

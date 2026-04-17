@@ -157,12 +157,17 @@ class ROSBridge(QObject):
         """Send stop commands to all arms and abort the state machine."""
         self._node.get_logger().warn('EMERGENCY STOP triggered!')
 
-        # Stop side arm motors immediately
-        stop_msg = String(data='STOP')
+        # Stop side arm motors immediately (firmware command)
+        stop_msg = String(data='STOP_ALL')
         self._left_cmd_pub.publish(stop_msg)
         self._right_cmd_pub.publish(stop_msg)
 
-        # Stop DC motors
+        # Also send immediate halt
+        stop_now = String(data='STOP_NOW')
+        self._left_cmd_pub.publish(stop_now)
+        self._right_cmd_pub.publish(stop_now)
+
+        # Stop DC motors explicitly
         dc_stop = String(data='DC_SPEED,0')
         self._left_cmd_pub.publish(dc_stop)
         self._right_cmd_pub.publish(dc_stop)

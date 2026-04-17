@@ -600,6 +600,7 @@ def launch_setup(context, *args, **kwargs):
                     'expected_loop_count': 0,
                     'enable_left_arm': enable_left,
                     'enable_right_arm': enable_right,
+                    'top_cam_continuous': LaunchConfiguration('top_cam_continuous'),
                 }]
             )]
         ))
