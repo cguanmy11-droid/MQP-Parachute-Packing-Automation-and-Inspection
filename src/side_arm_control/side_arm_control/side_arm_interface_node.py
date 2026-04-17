@@ -136,15 +136,18 @@ class SideArmInterfaceNode(Node):
         # Command publisher for direct commands (relative topic)
         self._cmd_pub = self.create_publisher(String, 'command', 10)
 
-        # State subscriber (relative topic)
+        # State subscriber (relative topic) - needs reentrant callback group
+        # so state updates can run while services are polling
         self._state_sub = self.create_subscription(
             SideArmState, 'parsed_state',
-            self._state_callback, 10)
+            self._state_callback, 10,
+            callback_group=self._cb_group)
 
         # Vision subscriber for servo control (relative topic for namespace support)
         self._vision_sub = self.create_subscription(
             PoseArray, 'yolo/centers',
-            self._vision_callback, 10)
+            self._vision_callback, 10,
+            callback_group=self._cb_group)
  
         # Target pixel position for servo (set before calling servo)
         self._vision_target_px: Optional[Tuple[float, float]] = None
@@ -214,7 +217,8 @@ class SideArmInterfaceNode(Node):
         # Retract Z only (split from retract_hook_release - no servo motion)
         self.retract_z_service = self.create_service(
             Trigger, 'retract_z',
-            self._retract_z_callback)
+            self._retract_z_callback,
+            callback_group=self._cb_group)
 
         # Reset hook angle only (split from retract_hook_release)
         self.reset_hook_service = self.create_service(
