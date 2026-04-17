@@ -36,6 +36,7 @@ from parachute_interfaces.msg import LoopState, LoopStateArray
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
+from std_srvs.srv import Trigger
 
 
 # ---------------------------------------------------------------------------
@@ -281,6 +282,7 @@ class TopCamLoopStateNode(Node):
         self.declare_parameter("output_topic",   "/top_cam/loop_states")
         self.declare_parameter("image_topic",    "/top_cam/image")
         self.declare_parameter("publish_image",  True)
+        self.declare_parameter("continuous_mode", True)  # False = only capture on service call
 
         # Camera is pointing down, camera Y is in line w/ world Y
         self.declare_parameter("cam_x", 0.32)       
@@ -373,17 +375,30 @@ class TopCamLoopStateNode(Node):
         self._fps_tick_prev: float = time.time()
         self._fps_value: float = 0.0
 
-        if self.display:
+        # On-demand capture service (always available)
+        self.capture_srv = self.create_service(
+            Trigger, '/top_cam/capture', self._capture_callback)
+
+        self.continuous_mode = self.get_parameter("continuous_mode").value
+
+        if self.display and self.continuous_mode:
             cv2.namedWindow("Top Cam Loop State", cv2.WINDOW_NORMAL)
 
         # Display timer runs at full frame_rate; inference is non-blocking
-        period = 1.0 / max(frame_rate, 1.0)
-        self.timer = self.create_timer(period, self._tick)
-
-        self.get_logger().info(
-            f"TopCamLoopStateNode ready → {out_topic}  "
-            f"(display {frame_rate:.0f} Hz, inference async)"
-        )
+        # Only create timer in continuous mode
+        if self.continuous_mode:
+            period = 1.0 / max(frame_rate, 1.0)
+            self.timer = self.create_timer(period, self._tick)
+            self.get_logger().info(
+                f"TopCamLoopStateNode ready → {out_topic}  "
+                f"(display {frame_rate:.0f} Hz, inference async)"
+            )
+        else:
+            self.timer = None
+            self.get_logger().info(
+                f"TopCamLoopStateNode ready → {out_topic}  "
+                f"(ON-DEMAND mode, call /top_cam/capture to capture)"
+            )
 
     # ------------------------------------------------------------------
     def _tick(self) -> None:
@@ -619,11 +634,74 @@ class TopCamLoopStateNode(Node):
             x_cursor += len(label) * 11 + 12
 
     # ------------------------------------------------------------------
+    def _capture_callback(self, request, response):
+        """
+        Service callback for on-demand capture.
+        Captures a single frame, runs inference, publishes result, and returns.
+        """
+        self.get_logger().info('[CAPTURE] Capturing frame...')
+
+        # Read a fresh frame
+        ret, frame = self.cap.read()
+        if not ret:
+            response.success = False
+            response.message = 'Camera read failed'
+            return response
+
+        # Submit to worker and wait for result
+        self._worker.submit(frame)
+
+        # Wait for inference to complete (with timeout)
+        timeout = 5.0
+        start = time.time()
+        result = None
+        while time.time() - start < timeout:
+            time.sleep(0.05)
+            with self._worker._lock:
+                result = self._worker.latest_result
+            if result is not None:
+                break
+
+        if result is None:
+            response.success = False
+            response.message = 'Inference timeout'
+            return response
+
+        annotated, loop_states = result
+
+        # Compute 3D world positions
+        for ls in loop_states:
+            ls.world_position = self._compute_world_position(ls.center_x, ls.center_y)
+
+        # Publish the results
+        msg = LoopStateArray()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "world"
+        msg.loops = loop_states
+        msg.changed = True
+        msg.total_count = len(loop_states)
+        self.pub.publish(msg)
+
+        # Publish markers
+        self._publish_markers(loop_states)
+
+        # Publish image if enabled
+        if self.publish_image:
+            self.image_pub.publish(self._cv2_to_imgmsg(annotated))
+
+        self._print_states(loop_states)
+
+        response.success = True
+        response.message = f'Captured {len(loop_states)} loops'
+        self.get_logger().info(f'[CAPTURE] {response.message}')
+        return response
+
+    # ------------------------------------------------------------------
     def destroy_node(self):
         self._worker.stop()
         if hasattr(self, "cap") and self.cap.isOpened():
             self.cap.release()
-        if self.display:
+        if self.display and self.continuous_mode:
             cv2.destroyAllWindows()
         return super().destroy_node()
 
