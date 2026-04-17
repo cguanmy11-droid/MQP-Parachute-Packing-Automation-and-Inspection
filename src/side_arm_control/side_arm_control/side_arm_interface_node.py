@@ -1122,13 +1122,14 @@ class SideArmInterfaceNode(Node):
         self._send_command('DC_SPEED,100')
 
         # Poll until Z is near home (0) or timeout
-        timeout_sec = 90.0
+        timeout_sec = 30.0
         home_tolerance_mm = 5.0
         poll_interval = 0.1
         start_time = time.time()
 
         while time.time() - start_time < timeout_sec:
             time.sleep(poll_interval)
+            self.get_logger().info(f'[RETRACT Z] {self._limit_depth}')
 
             # Check limit switch - this is the reliable indicator
             if self._limit_depth:
