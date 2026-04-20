@@ -13,6 +13,7 @@ from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from geometry_msgs.msg import Pose, PoseArray
 from sensor_msgs.msg import Image
+from std_srvs.srv import SetBool
 
 try:
     from ultralytics import YOLO
@@ -36,6 +37,7 @@ class YoloDetectorNode(Node):
         self.declare_parameter('camera_frame_id', 'camera_frame')
         self.declare_parameter('centers_topic', 'yolo/centers')
         self.declare_parameter('image_topic', 'yolo/image')
+        self.declare_parameter('enable_service', 'yolo/enable')  # Enable/disable service name
         self.declare_parameter('publish_image', True)
         self.declare_parameter('display', True)
 
@@ -52,6 +54,7 @@ class YoloDetectorNode(Node):
         self.publish_image = bool(self.get_parameter('publish_image').get_parameter_value().bool_value)
         centers_topic = self.get_parameter('centers_topic').get_parameter_value().string_value
         image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
+        enable_service = self.get_parameter('enable_service').get_parameter_value().string_value
 
         self.device = self._select_device()
         self.get_logger().info(
@@ -70,9 +73,14 @@ class YoloDetectorNode(Node):
         if self.display:
             cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
 
+        # Enable/disable service for resource management (pause during top cam capture)
+        self._processing_enabled = True
+        self.enable_srv = self.create_service(
+            SetBool, enable_service, self._enable_callback)
+
         timer_period = 1.0 / self.frame_rate
         self.timer = self.create_timer(timer_period, self._process_frame)
-        self.get_logger().info('YOLO 检测节点已启动，按 ESC 可在窗口中退出。')
+        self.get_logger().info(f'YOLO detector started. Services: {enable_service} (on/off)')
 
     def _select_device(self) -> str:
         try:
@@ -119,10 +127,26 @@ class YoloDetectorNode(Node):
 
         raise FileNotFoundError(f'未找到指定权重文件: {raw_path}')
 
+    def _enable_callback(self, request, response):
+        """Enable or disable YOLO inference processing."""
+        self._processing_enabled = request.data
+        state = "ENABLED" if request.data else "DISABLED"
+        self.get_logger().info(f'[YOLO] Processing {state}')
+        response.success = True
+        response.message = f'Processing {state}'
+        return response
+
     def _process_frame(self) -> None:
         ret, frame = self.cap.read()
         if not ret:
             self.get_logger().warning('读取摄像头失败，等待下一帧')
+            return
+
+        # Skip inference if processing is disabled (but keep camera alive)
+        if not self._processing_enabled:
+            if self.display:
+                cv2.imshow(self.window_name, frame)
+                cv2.waitKey(1)
             return
 
         results = self.model.predict(

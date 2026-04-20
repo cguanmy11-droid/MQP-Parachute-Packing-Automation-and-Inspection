@@ -47,7 +47,7 @@ from parachute_interfaces.action import InsertHook, ExecuteTrajectory, VisualSer
 from parachute_interfaces.msg import HookStatus, SideArmState, DetectedLoop
 from geometry_msgs.msg import Pose, Point
 from std_msgs.msg import String
-from std_srvs.srv import Trigger
+from std_srvs.srv import Trigger, SetBool
 import time
 
 from .state_machine import StateMachine, StowState
@@ -182,6 +182,26 @@ class PackingCoordinatorNode(Node):
             Trigger, '/top_cam/capture',
             callback_group=self._cb_group
         )
+
+        # Side camera YOLO enable/disable (to pause during top cam captures)
+        # Supports both single camera (/yolo/enable) and per-arm cameras
+        self.side_cam_enable_client = self.create_client(
+            SetBool, '/yolo/enable',
+            callback_group=self._cb_group
+        )
+        # Per-arm YOLO enable clients (for full_system.launch.py with separate cameras)
+        self.left_yolo_enable_client = None
+        self.right_yolo_enable_client = None
+        if self.enable_left_arm:
+            self.left_yolo_enable_client = self.create_client(
+                SetBool, '/side_arm_left/yolo/enable',
+                callback_group=self._cb_group
+            )
+        if self.enable_right_arm:
+            self.right_yolo_enable_client = self.create_client(
+                SetBool, '/side_arm_right/yolo/enable',
+                callback_group=self._cb_group
+            )
 
         self.verify_client = self.create_client(
             VerifyHookPosition, '/verify_hook_position',
@@ -729,12 +749,15 @@ class PackingCoordinatorNode(Node):
             self._lock_loop_positions()
             return
 
-        self.get_logger().info('[HOMING] Triggering top cam capture (in parallel with homing)...')
+        # Pause side camera to free GPU resources for top camera capture
+        self._set_side_camera_enabled(False)
+
+        self.get_logger().info('[HOMING] Triggering top cam capture (side cam paused)...')
         future = self.top_cam_capture_client.call_async(Trigger.Request())
         future.add_done_callback(self._on_top_cam_capture_homing)
 
     def _on_top_cam_capture_homing(self, future):
-        """Top cam capture done — proceed to loop lock regardless of result."""
+        """Top cam capture done — re-enable side cam and proceed to loop lock."""
         try:
             response = future.result()
             if response.success:
@@ -744,7 +767,46 @@ class PackingCoordinatorNode(Node):
         except Exception as e:
             self.get_logger().warn(f'[HOMING] Top cam error: {e}')
 
+        # Re-enable side camera after top camera capture completes
+        self._set_side_camera_enabled(True)
+
         self._lock_loop_positions()
+
+    def _set_side_camera_enabled(self, enabled: bool):
+        """Enable or disable the side camera YOLO inference.
+        """
+        request = SetBool.Request()
+        request.data = enabled
+        state = 'ENABLED' if enabled else 'PAUSED'
+        called_any = False
+
+        # Try single camera service (dual_arm_test setup)
+        if self.side_cam_enable_client.wait_for_service(timeout_sec=0.5):
+            try:
+                self.side_cam_enable_client.call_async(request)
+                called_any = True
+            except Exception:
+                pass
+
+        # Try per-arm camera services (full_system setup)
+        if self.left_yolo_enable_client and self.left_yolo_enable_client.wait_for_service(timeout_sec=0.5):
+            try:
+                self.left_yolo_enable_client.call_async(request)
+                called_any = True
+            except Exception:
+                pass
+
+        if self.right_yolo_enable_client and self.right_yolo_enable_client.wait_for_service(timeout_sec=0.5):
+            try:
+                self.right_yolo_enable_client.call_async(request)
+                called_any = True
+            except Exception:
+                pass
+
+        if called_any:
+            self.get_logger().info(f'[CAMERA] Side camera(s) {state}')
+        else:
+            self.get_logger().debug('[CAMERA] No side camera enable services available')
 
     def _lock_loop_positions(self):
         """Lane B step 2: snapshot loop positions for count + visualization."""
@@ -836,6 +898,9 @@ class PackingCoordinatorNode(Node):
     def on_enter_at_loop(self, state: StowState, event: str):
         """Verify which loop the hook is centered on via top cam + TF."""
         self.get_logger().info('[AT_LOOP] Verifying hook position against top camera...')
+
+        # Pause side camera during top camera verification to free GPU resources
+        self._set_side_camera_enabled(False)
 
         # SKIP VERIFY MODE — trust the servo result, publish a placeholder target, move on
         if self.get_parameter('skip_verify').value:
@@ -1048,6 +1113,9 @@ class PackingCoordinatorNode(Node):
     def on_enter_servo(self, state: StowState, event: str):
         """Run visual servo to center hook on detected loop."""
         self.get_logger().info(f'[SERVO] Starting visual servo on {self.current_arm} arm...')
+
+        # Ensure side camera is enabled for visual servo
+        self._set_side_camera_enabled(True)
 
         # Get the visual servo action client for the current arm
         action_name = f'/side_arm_{self.current_arm}/visual_servo'

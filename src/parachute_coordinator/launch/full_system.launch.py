@@ -478,6 +478,7 @@ def launch_setup(context, *args, **kwargs):
                     'camera_frame_id': cam_frame,
                     'centers_topic': f'/{arm_ns}/yolo/centers',
                     'image_topic': f'/{arm_ns}/yolo/image',
+                    'enable_service': f'/{arm_ns}/yolo/enable',
                     'publish_image': True,
                     'display': LaunchConfiguration('camera_display'),
                 }],
