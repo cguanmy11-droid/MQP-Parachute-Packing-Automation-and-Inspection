@@ -209,8 +209,8 @@ class ArmControlWidget(QWidget):
         layout.addWidget(self._start_btn)
 
         # Pause / Resume share the same spot — toggle visibility
-        self._pause_btn  = self._make_btn('⏸  Pause',  'pause',  '#1a1a00', '#f0c040')
-        self._resume_btn = self._make_btn('▶  Resume', 'resume', '#0d2e1a', '#00c853')
+        self._pause_btn  = self._make_btn('Pause',  'pause',  '#1a1a00', '#f0c040')
+        self._resume_btn = self._make_btn('Resume', 'resume', '#0d2e1a', '#00c853')
         self._resume_btn.setVisible(False)
         layout.addWidget(self._pause_btn)
         layout.addWidget(self._resume_btn)

@@ -18,7 +18,7 @@ Layout:
 import sys
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
-    QLabel, QTextEdit, QApplication, QFrame
+    QLabel, QTextEdit, QApplication, QFrame, QPushButton, QSizePolicy
 )
 from PyQt5.QtCore import Qt, QDateTime
 from PyQt5.QtGui import QFont, QColor, QPalette
@@ -29,6 +29,7 @@ from parachute_gui.widgets.state_machine_widget import StateMachineWidget
 from parachute_gui.widgets.control_widgets import LoopSelectorWidget, ArmControlWidget
 from parachute_gui.widgets.loop_grid_widget import LoopPerceptionPanel
 # from parachute_gui.widgets.camera_widget import CameraWidget
+from parachute_gui.manual_jog_dialog import ManualJogDialog
 
 # Max log lines shown
 MAX_LOG_LINES = 200
@@ -124,6 +125,18 @@ class MainWindow(QMainWindow):
         left_panels.addWidget(self._build_log_panel(), stretch=1)
 
         content.addLayout(left_panels)
+
+        jog_btn = QPushButton('Manual Jog')
+        jog_btn.setStyleSheet('''
+            QPushButton {
+                background: #0f3460; color: white; padding: 8px 16px;
+                border-radius: 6px; font-weight: bold;
+            }
+            QPushButton:hover { background: #1a4a8a; }
+        ''')
+        jog_btn.clicked.connect(self._open_jog_dialog)
+        self._arm_widget.layout().addWidget(jog_btn)
+
         main_layout.addLayout(content, stretch=1)
 
     def _build_header(self) -> QWidget:
@@ -265,6 +278,10 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self._bridge.shutdown()
         event.accept()
+    
+    def _open_jog_dialog(self):
+        dialog = ManualJogDialog(self._bridge._node, arm_ns='side_arm_right', parent=self)
+        dialog.show()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
