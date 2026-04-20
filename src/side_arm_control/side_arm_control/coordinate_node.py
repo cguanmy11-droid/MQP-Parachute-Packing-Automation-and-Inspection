@@ -227,10 +227,14 @@ class SideArmCoordinateNode(Node):
                     self._dc_duration = 0.0
                     self._dc_direction = 0
 
-                # Consider homed if step counts are zero (at limit switches) and depth limit hit
-                if s1 == 0 and s2 == 0 and l1:
+                # Consider homed if all limit switches are triggered
+                # (step counts may not be exactly zero due to overshoot/timing)
+                if l1 and l2 and l3:
                     self._is_homed = True
-                    # Position is now at home values (already calculated above)
+                    # Reset positions to home values when all limits hit
+                    self._position_x_mm = self.home_x_mm
+                    self._position_y_mm = self.home_y_mm
+                    self._position_z_mm = self.home_z_mm
 
         except Exception as e:
             self.get_logger().warn(f'Failed to parse state: {e}')

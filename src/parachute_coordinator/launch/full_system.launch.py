@@ -337,6 +337,18 @@ def launch_setup(context, *args, **kwargs):
                 'test_mode': False,
             }],
         ))
+
+        # Main arm planner (handles hole_center_sequence for HANDOFF state)
+        nodes.append(Node(
+            package='main_arm_control',
+            executable='main_arm_planner_node',
+            name='main_arm_planner_node',
+            output='screen',
+            parameters=[{
+                'robot_model': 'wx200',
+                'robot_name': 'wx200',
+            }],
+        ))
     else:
         # Fallback world frame if no main arm
         nodes.append(Node(
