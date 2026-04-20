@@ -42,9 +42,9 @@ from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from ament_index_python.packages import get_package_share_directory
 
-from parachute_interfaces.srv import RequestNextTarget, RotateHook, CaptureLoops, MoveToWorldPose
+from parachute_interfaces.srv import RequestNextTarget, RotateHook, CaptureLoops, MoveToWorldPose, VerifyHookPosition
 from parachute_interfaces.action import InsertHook, ExecuteTrajectory, VisualServo
-from parachute_interfaces.msg import HookStatus, SideArmState
+from parachute_interfaces.msg import HookStatus, SideArmState, DetectedLoop
 from geometry_msgs.msg import Pose, Point
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
@@ -52,6 +52,11 @@ import time
 
 from .state_machine import StateMachine, StowState
 from .motion_pattern_manager import MotionPatternManager, BUILTIN_PATTERNS
+
+import tf2_ros
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+from std_msgs.msg import Header
 
 
 class PackingCoordinatorNode(Node):
@@ -78,6 +83,7 @@ class PackingCoordinatorNode(Node):
         self.declare_parameter('enable_right_arm', True)
         # Top camera mode - if True, skip explicit capture calls (camera streams continuously)
         self.declare_parameter('top_cam_continuous', False)
+        self.declare_parameter('skip_verify', False)
 
         self.test_mode = self.get_parameter('test_mode').value
         self.current_pattern = self.get_parameter('stow_pattern').value
@@ -87,6 +93,7 @@ class PackingCoordinatorNode(Node):
         self.enable_right_arm = self.get_parameter('enable_right_arm').value
         self.dual_arm_mode = self.enable_left_arm and self.enable_right_arm
         self.top_cam_continuous = self.get_parameter('top_cam_continuous').value
+        self.skip_verify = self.get_parameter('skip_verify').value
 
         # ==================== STATE MACHINE ====================
         config_path = os.path.join(
@@ -132,6 +139,12 @@ class PackingCoordinatorNode(Node):
         self._active_goal_handle = None
         self._expected_target_position = None  # (x, y, z) for validation after servo
         self._servo_action_clients = {}  # Cache for visual servo action clients
+        self._arms_homed_done = False
+        self._capture_done = False
+        self._homing_in_progress = False
+
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
 
         # Dual arm tracking - alternates between 'left' and 'right'
         # Start with whichever arm is enabled (prefer left if both)
@@ -167,6 +180,11 @@ class PackingCoordinatorNode(Node):
         # Top camera capture service (on-demand mode)
         self.top_cam_capture_client = self.create_client(
             Trigger, '/top_cam/capture',
+            callback_group=self._cb_group
+        )
+
+        self.verify_client = self.create_client(
+            VerifyHookPosition, '/verify_hook_position',
             callback_group=self._cb_group
         )
 
@@ -287,6 +305,7 @@ class PackingCoordinatorNode(Node):
         if self.right_world_move_client:
             services['/side_arm_right/move_to_world_pose'] = self.right_world_move_client
         services['/capture_loops'] = self.capture_client
+        services['/verify_hook_position'] = self.verify_client
 
         actions = {}
         if self.left_hook_client:
@@ -557,6 +576,15 @@ class PackingCoordinatorNode(Node):
                 pass
             self._active_goal_handle = None
 
+        # Cancel any in-flight homing timer to actually stop processes in parallel
+        if self._homing_timer is not None:
+            try:
+                self._homing_timer.cancel()
+            except Exception:
+                pass
+            self._homing_timer = None
+        self._homing_in_progress = False
+
         # Send stop commands to side arms
         stop_msg = String(data='STOP_ALL')
         dc_stop = String(data='DC_SPEED,0')
@@ -607,32 +635,39 @@ class PackingCoordinatorNode(Node):
         self.get_logger().info('System ready. Send "start" to begin.')
 
     def on_enter_homing(self, state: StowState, event: str):
-        """Send HOME_ALL to both enabled arms and start polling for completion."""
-        self.get_logger().info('[HOMING] Starting side arm homing sequence...')
+        """Kick off arm homing and perception capture in parallel."""
+        self.get_logger().info('[HOMING] Starting parallel homing + capture...')
 
+        # Reset join flags
+        self._arms_homed_done = False
+        self._capture_done = False
+        self._homing_in_progress = True
+
+        # ---- Lane A: arms ----
         if self._side_arm_is_homed and self._has_homed_once:
-            self.get_logger().info('[HOMING] Arms already homed, skipping to capture')
-            self._capture_loops_after_homing()
-            return
+            self.get_logger().info('[HOMING] Arms already homed (lane A done)')
+            self._arms_homed_done = True
+        else:
+            cmd = String(data='HOME_ALL')
+            if self.enable_left_arm and self.left_cmd_pub:
+                self.left_cmd_pub.publish(cmd)
+            if self.enable_right_arm and self.right_cmd_pub:
+                self.right_cmd_pub.publish(cmd)
 
-        cmd = String()
-        cmd.data = 'HOME_ALL'
+            self._homing_start_time = time.time()
+            self._homing_timer = self.create_timer(0.5, self._check_homing_status)
 
-        # Fix: use left_cmd_pub not _left_cmd_pub
-        if self.enable_left_arm and self.left_cmd_pub:
-            self.left_cmd_pub.publish(cmd)
-        if self.enable_right_arm and self.right_cmd_pub:
-            self.right_cmd_pub.publish(cmd)
+        # ---- Lane B: perception (fires immediately, in parallel) ----
+        self._start_capture_chain()
 
-        self._homing_start_time = time.time()
-        self._homing_timer = self.create_timer(0.5, self._check_homing_status)
+        # One lane may already be done (e.g. already_homed); check now
+        self._maybe_finish_homing()
 
     def _check_homing_status(self):
-        """Poll homed state every 0.5s; transition to capture when both arms report homed."""
+        """Lane A: poll arm homed state every 0.5s."""
         timeout = 60.0
         elapsed = time.time() - self._homing_start_time
 
-        # Fix: use _left_arm_homed not _left_arm_is_homed
         left_done = not self.enable_left_arm or self._left_arm_homed
         right_done = not self.enable_right_arm or self._right_arm_homed
 
@@ -640,14 +675,16 @@ class PackingCoordinatorNode(Node):
             self._homing_timer.cancel()
             self._homing_timer = None
             self._has_homed_once = True
-            self.get_logger().info(f'[HOMING] Both arms homed in {elapsed:.1f}s')
-            self._capture_loops_after_homing()
+            self.get_logger().info(f'[HOMING] Arms homed in {elapsed:.1f}s (lane A done)')
+            self._arms_homed_done = True
+            self._maybe_finish_homing()
             return
 
         if elapsed >= timeout:
             self._homing_timer.cancel()
             self._homing_timer = None
-            self._enter_error('homing_failed', 'Homing timeout')
+            self._homing_in_progress = False
+            self._enter_error('homing_failed', 'Arm homing timeout')
             return
 
         if int(elapsed) % 10 == 0 and int(elapsed) > 0:
@@ -655,6 +692,89 @@ class PackingCoordinatorNode(Node):
             right_status = '✓' if self._right_arm_homed else '...'
             self.get_logger().info(
                 f'[HOMING] L:{left_status} R:{right_status} ({elapsed:.0f}s)')
+    
+    def _start_capture_chain(self):
+        """Lane B: trigger top-cam capture, then loop lock. Best-effort."""
+        if self.top_cam_continuous:
+            self.get_logger().info('[HOMING] Top cam in continuous mode — skipping capture')
+            self._lock_loop_positions()
+            return
+
+        if not self.top_cam_capture_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warn('[HOMING] Top cam service unavailable — skipping capture')
+            self._lock_loop_positions()
+            return
+
+        self.get_logger().info('[HOMING] Triggering top cam capture (in parallel with homing)...')
+        future = self.top_cam_capture_client.call_async(Trigger.Request())
+        future.add_done_callback(self._on_top_cam_capture_homing)
+
+    def _on_top_cam_capture_homing(self, future):
+        """Top cam capture done — proceed to loop lock regardless of result."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[HOMING] Top cam: {response.message}')
+            else:
+                self.get_logger().warn(f'[HOMING] Top cam capture failed: {response.message}')
+        except Exception as e:
+            self.get_logger().warn(f'[HOMING] Top cam error: {e}')
+
+        self._lock_loop_positions()
+
+    def _lock_loop_positions(self):
+        """Lane B step 2: snapshot loop positions for count + visualization."""
+        if not self.capture_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warn(
+                '[HOMING] Capture service unavailable — '
+                'continuing with dynamic loop count'
+            )
+            self.total_loops = 0
+            self._capture_done = True
+            self._maybe_finish_homing()
+            return
+
+        request = CaptureLoops.Request()
+        request.expected_count = self.expected_loop_count
+        request.timeout_sec = 2.0
+
+        future = self.capture_client.call_async(request)
+        future.add_done_callback(self._on_capture_response)
+
+    def _on_capture_response(self, future):
+        """Loop lock done — non-fatal if it fails, just use dynamic counting."""
+        try:
+            response = future.result()
+            if response.success:
+                self.total_loops = response.captured_count
+                self.completed_loops = 0
+                self.get_logger().info(
+                    f'[HOMING] Locked {response.captured_count} loops (lane B done)'
+                )
+            else:
+                self.get_logger().warn(
+                    f'[HOMING] Capture failed: {response.message} — '
+                    f'continuing with dynamic loop count (lane B done)'
+                )
+                self.total_loops = 0
+        except Exception as e:
+            self.get_logger().warn(
+                f'[HOMING] Capture error: {e} — continuing with dynamic count'
+            )
+            self.total_loops = 0
+
+        self._capture_done = True
+        self._maybe_finish_homing()
+
+    def _maybe_finish_homing(self):
+        """Join point — transition when both lanes have completed."""
+        if not self._homing_in_progress:
+            return  # Already finished or aborted
+
+        if self._arms_homed_done and self._capture_done:
+            self._homing_in_progress = False
+            self.get_logger().info('[HOMING] Both lanes complete → transitioning to next state')
+            self._transition('homed')
 
     def _capture_loops_after_homing(self):
         """Capture and lock loop positions after homing completes."""
@@ -689,64 +809,154 @@ class PackingCoordinatorNode(Node):
 
         self._lock_loop_positions()
 
-    def _lock_loop_positions(self):
-        """Lock current loop positions from perception."""
-        self.get_logger().info('[HOMING] Locking loop positions...')
-
-        if not self.capture_client.service_is_ready():
-            self.get_logger().warn(
-                '[HOMING] Capture service not available - proceeding without lock'
-            )
-            self._transition('homed')
-            return
-
-        request = CaptureLoops.Request()
-        request.expected_count = self.expected_loop_count
-        request.timeout_sec = 2.0
-
-        future = self.capture_client.call_async(request)
-        future.add_done_callback(self._on_capture_response)
-
-    def _on_capture_response(self, future):
-        """Callback when loop capture completes."""
-        try:
-            response = future.result()
-        except Exception as e:
-            self.get_logger().error(f'[HOMING] Capture service error: {e}')
-            self._enter_error('homing_failed', f'Loop capture failed: {e}')
-            return
-
-        if response.success:
-            self.total_loops = response.captured_count
-            self.completed_loops = 0  # Reset for new sequence
-            self.get_logger().info(
-                f'[HOMING] Captured {response.captured_count} loops - ready to stow'
-            )
-            self._transition('homed')
-        else:
-            self.get_logger().error(f'[HOMING] Capture failed: {response.message}')
-            self._enter_error('homing_failed', response.message)
-
     def on_enter_at_loop(self, state: StowState, event: str):
-        """Entered AT_LOOP — capture top cam image, then request next target from perception."""
-        # Skip explicit capture if top camera is running continuously
-        if self.top_cam_continuous:
-            self.get_logger().info('[AT_LOOP] Top camera in continuous mode - requesting target...')
-            self._request_next_target()
+        """Verify which loop the hook is centered on via top cam + TF."""
+        self.get_logger().info('[AT_LOOP] Verifying hook position against top camera...')
+
+        # SKIP VERIFY MODE — trust the servo result, publish a placeholder target, move on
+        if self.get_parameter('skip_verify').value:
+            self.get_logger().warn(
+                '[AT_LOOP] skip_verify=true — accepting SERVO result blindly'
+            )
+            self._transition('positioned')
             return
 
-        self.get_logger().info('[AT_LOOP] Capturing top camera image...')
+        hook_frame = f'{self.current_arm}_hook_link'
 
-        # Trigger a top camera capture (on-demand mode)
-        if self.top_cam_capture_client.service_is_ready():
-            future = self.top_cam_capture_client.call_async(Trigger.Request())
-            future.add_done_callback(self._on_top_cam_capture_done)
-        else:
-            self.get_logger().warn(
-                '[AT_LOOP] Top camera capture service not available — '
-                'requesting target without fresh capture'
+        # 1. Look up current hook position in world frame
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                'world', hook_frame,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=1.0),
             )
-            self._request_next_target()
+        except (tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException) as e:
+            self._enter_error('vision_failure', f'TF {hook_frame}→world failed: {e}')
+            return
+        except Exception as e:
+            self._enter_error('vision_failure', f'TF lookup error: {e}')
+            return
+
+        hook_pos = Point(
+            x=tf.transform.translation.x,
+            y=tf.transform.translation.y,
+            z=tf.transform.translation.z,
+        )
+
+        # 2. Call verify service
+        if not self.verify_client.wait_for_service(timeout_sec=2.0):
+            self._enter_error('vision_failure', '/verify_hook_position unavailable')
+            return
+
+        req = VerifyHookPosition.Request()
+        req.arm_side = self.current_arm
+        req.hook_world_pos = hook_pos
+
+        self.get_logger().info(
+            f'[AT_LOOP] Hook at ({hook_pos.x:.3f}, {hook_pos.y:.3f}, {hook_pos.z:.3f}) '
+            f'— asking top cam what loop is there'
+        )
+
+        future = self.verify_client.call_async(req)
+        future.add_done_callback(self._on_verify_response)
+
+
+    def _on_verify_response(self, future):
+        """Handle verification result — confirm, re-servo, or fail."""
+        try:
+            resp = future.result()
+        except Exception as e:
+            self._enter_error('vision_failure', f'Verify call error: {e}')
+            return
+
+        if not resp.success:
+            self.get_logger().warn(
+                f'[AT_LOOP] No loop under hook: {resp.message} — re-servoing'
+            )
+            self._transition('no_match')
+            return
+
+        # Store the confirmed target for GUI/RViz
+        self.current_target_string_id = resp.matched_loop_id
+        self.current_target_loop = self._build_loop_from_verification(resp)
+        self._expected_target_position = (
+            resp.matched_loop_pos.x,
+            resp.matched_loop_pos.y,
+            resp.matched_loop_pos.z,
+        )
+
+        # Accept or re-servo based on offset
+        ACCEPTANCE_MM = 15.0   # tune on hardware
+        if resp.offset_mm < ACCEPTANCE_MM:
+            self.get_logger().info(
+                f'[AT_LOOP] ✓ Verified on {resp.matched_loop_id} '
+                f'(offset {resp.offset_mm:.1f}mm) → INSERT'
+            )
+            self._transition('verified')
+        else:
+            self.get_logger().info(
+                f'[AT_LOOP] On {resp.matched_loop_id} but off by {resp.offset_mm:.1f}mm '
+                f'(threshold {ACCEPTANCE_MM:.1f}mm) — re-servoing'
+            )
+            self._transition('mismatch')
+
+
+    def _build_loop_from_verification(self, resp) -> DetectedLoop:
+        """Convert a verify-service response into a DetectedLoop for GUI/RViz."""
+        loop = DetectedLoop()
+        loop.header = Header()
+        loop.header.stamp = self.get_clock().now().to_msg()
+        loop.header.frame_id = resp.matched_loop_id  # 'L1', 'R2', etc.
+        loop.pose.header = loop.header
+        loop.pose.pose.position = resp.matched_loop_pos
+        # Orientation unset — we don't need it for display
+        loop.confidence = 1.0
+        # loop_id numeric: derive from string if needed
+        try:
+            num = int(resp.matched_loop_id[1:])
+            loop.loop_id = num if resp.matched_loop_id.startswith('L') else num + 100
+        except (ValueError, IndexError):
+            loop.loop_id = 0
+        return loop
+
+    # def _on_verify_response(self, future):
+    #     try:
+    #         resp = future.result()
+    #     except Exception as e:
+    #         self._enter_error('vision_failure', f'Verify error: {e}')
+    #         return
+
+    #     if not resp.success:
+    #         self.get_logger().warn('[AT_LOOP] Top cam sees no loop under hook — re-servoing')
+    #         self._transition('no_match')
+    #         return
+
+    #     # Store the confirmed target so the GUI/RViz can display it
+    #     self.current_target_string_id = resp.matched_loop_id
+    #     self.current_target_loop = self._build_loop_from_verification(resp)
+    #     self._expected_target_position = (
+    #         resp.matched_loop_pos.x, resp.matched_loop_pos.y, resp.matched_loop_pos.z
+    #     )
+
+    #     # Publish for RViz/GUI 
+    #     self._publish_current_target()
+
+    #     # Check the threshold 
+    #     if resp.offset_mm < 15.0:
+    #         self.get_logger().info(
+    #             f'[AT_LOOP] Verified on {resp.matched_loop_id} '
+    #             f'(offset {resp.offset_mm:.1f}mm) → INSERT'
+    #         )
+    #         self._transition('verified')
+    #     else:
+    #         self.get_logger().info(
+    #             f'[AT_LOOP] On {resp.matched_loop_id} but off by {resp.offset_mm:.1f}mm '
+    #             f'— re-servoing'
+    #         )
+    #         # Stash correction for SERVO to use if your servo can accept a nudge
+    #         self._transition('mismatch')
 
     def _on_top_cam_capture_done(self, future):
         """Handle top camera capture result, then request target."""
@@ -811,54 +1021,6 @@ class PackingCoordinatorNode(Node):
         # Visual servo will do fine positioning in SERVO state
         self._transition('positioned')
 
-    def on_enter_approach(self, state: StowState, event: str):
-        """Move arm to approach position (rough X/Y, retracted Z above target)."""
-        if self.current_target_loop is None:
-            self._enter_error('approach_failed', 'No target loop set')
-            return
-
-        pos = self.current_target_loop.pose.pose.position
-        approach_z_offset = 0.05  # 50mm above target
-
-        self.get_logger().info(
-            f'[APPROACH] Moving {self.current_arm} arm to approach position '
-            f'({pos.x:.3f}, {pos.y:.3f}, {pos.z + approach_z_offset:.3f})'
-        )
-
-        client = self.get_current_world_move_client()
-        if not client or not client.service_is_ready():
-            self._enter_error('approach_failed', f'{self.current_arm} move_to_world_pose not ready')
-            return
-
-        # Create approach pose with Z offset
-        req = MoveToWorldPose.Request()
-        req.target_pose = self.current_target_loop.pose
-        req.target_pose.header.frame_id = 'world'
-        # Add Z offset for approach
-        req.target_pose.pose.position.z = pos.z + approach_z_offset
-        req.speed_scale = 0.5
-
-        future = client.call_async(req)
-        future.add_done_callback(self._on_approach_complete)
-
-    def _on_approach_complete(self, future):
-        """Handle approach move completion, transition to SERVO."""
-        try:
-            result = future.result()
-        except Exception as e:
-            self._enter_error('approach_failed', f'Approach move failed: {e}')
-            return
-
-        if result.success:
-            self.get_logger().info(
-                f'[APPROACH] {self.current_arm} arm at approach position '
-                f'({result.final_x_mm:.1f}, {result.final_y_mm:.1f}, '
-                f'{result.final_z_mm:.1f})mm — starting visual servo'
-            )
-            self._transition('approached')
-        else:
-            self._enter_error('approach_failed', result.message)
-
     def on_enter_servo(self, state: StowState, event: str):
         """Run visual servo to center hook on detected loop."""
         self.get_logger().info(f'[SERVO] Starting visual servo on {self.current_arm} arm...')
@@ -882,9 +1044,9 @@ class PackingCoordinatorNode(Node):
         # Send visual servo goal
         goal = VisualServo.Goal()
         goal.arm_side = self.current_arm
-        goal.timeout_sec = 10.0  # Configurable
-        goal.goal_x_px = 0.0  # Use defaults from config
-        goal.goal_y_px = 0.0
+        goal.timeout_sec = 60.0  # Configurable
+        goal.goal_x_px = 382.0  # Use defaults from config
+        goal.goal_y_px = 137.0
 
         self.get_logger().info(f'[SERVO] Sending goal to {action_name}')
         send_future = client.send_goal_async(
@@ -1198,9 +1360,9 @@ class PackingCoordinatorNode(Node):
         service_name = f'/side_arm_{self.current_arm}/release_hook'
         client = self.create_client(Trigger, service_name)
         
-        if not client.service_is_ready():
-            self.get_logger().warn(f'[RELEASE] Waiting for {service_name}...')
-            client.wait_for_service(timeout_sec=5.0)
+        if not client.wait_for_service(timeout_sec=5.0):
+            self._enter_error('timeout', f'{service_name} unavailable')
+            return
 
         future = client.call_async(Trigger.Request())
         future.add_done_callback(self._on_release_done)

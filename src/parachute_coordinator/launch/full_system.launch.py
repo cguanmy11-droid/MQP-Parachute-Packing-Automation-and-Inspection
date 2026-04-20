@@ -601,6 +601,7 @@ def launch_setup(context, *args, **kwargs):
                     'enable_left_arm': enable_left,
                     'enable_right_arm': enable_right,
                     'top_cam_continuous': LaunchConfiguration('top_cam_continuous'),
+                    'skip_verify': LaunchConfiguration('skip_verify'),
                 }]
             )]
         ))
@@ -674,5 +675,7 @@ def generate_launch_description():
             description='Show top camera window'),
         DeclareLaunchArgument('top_cam_continuous', default_value='false',
             description='Run top camera inference continuously (false = on-demand via /top_cam/capture)'),
+        DeclareLaunchArgument('skip_verify', default_value='true',
+            description='Skip AT_LOOP verification (until verify service is built)'),
         OpaqueFunction(function=launch_setup),
     ])

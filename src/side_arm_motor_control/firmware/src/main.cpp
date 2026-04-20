@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <AccelStepper.h>
 #include <cstring>
+#include <esp_system.h>
 
 #include "pin_config.h"
 
@@ -102,7 +103,7 @@ void sendState(bool force = false) {
                    ",\"s2\":" + String(stepper2.currentPosition()) +
                    ",\"dc\":" + String(currentDcPercent) +
                    ",\"servo\":" + String(servoPulseUs - SERVO_NEUTRAL_US) + "}";
-  Serial.println(payload);
+  // Serial.println(payload);
   lastStatePublish = now;
 }
 
@@ -129,7 +130,15 @@ int readDcCurrent() {
 }
 
 void applyDcCommand(int percent) {
+  int originalPercent = percent;
   percent = constrain(percent, -100, 100);
+
+  if (percent != currentDcPercent) {
+    Serial.print("DEBUG DC: ");
+    Serial.print(currentDcPercent);
+    Serial.print(" -> ");
+    Serial.println(percent);
+  }
 
   // Safety: Don't allow motion toward an engaged limit switch
   const LimitStates limits = readLimitStates();
@@ -361,6 +370,12 @@ void processCommand(const String& cmd) {
   String verb(token);
   verb.toUpperCase();
 
+  if (verb != "REQUEST_STATE") {
+    Serial.print(verb);
+    Serial.print(',  len: ');
+    Serial.println(cmd.length());
+  }
+
   if (verb == "STEPPER_MOVE") {
     uint8_t id = static_cast<uint8_t>(parseLong(strtok_r(nullptr, ",", &savePtr), 0));
     long steps = parseLong(strtok_r(nullptr, ",", &savePtr), 0);
@@ -457,6 +472,9 @@ void checkLimits() {
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(5);
+
+  Serial.print("BOOT reset_reason=");
+  Serial.println(esp_reset_reason());
 
   pinMode(LIMIT_SW_1, INPUT_PULLUP);
   pinMode(LIMIT_SW_2, INPUT_PULLUP);

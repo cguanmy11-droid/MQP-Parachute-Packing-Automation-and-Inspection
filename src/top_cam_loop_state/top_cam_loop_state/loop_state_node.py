@@ -139,6 +139,7 @@ class _InferenceWorker:
         self._new_frame    = threading.Event()
         self._stop         = threading.Event()
         self._pending: Optional[np.ndarray] = None
+        self._result_ready = threading.Event()
 
         # Shared output: (annotated_frame, loop_states)
         self.latest_result: Optional[Tuple[np.ndarray, List[LoopState]]] = None
@@ -150,6 +151,8 @@ class _InferenceWorker:
     def submit(self, frame: np.ndarray) -> None:
         with self._lock:
             self._pending = frame.copy()
+            self.latest_result = None
+        self._result_ready.clear()         
         self._new_frame.set()
 
     def stop(self) -> None:
@@ -162,20 +165,27 @@ class _InferenceWorker:
             self._new_frame.clear()
             if self._stop.is_set():
                 break
-
             with self._lock:
                 frame = self._pending
             if frame is None:
                 continue
-
             t0 = time.time()
-            annotated, states = self._infer(frame)
+            try:
+                annotated, states = self._infer(frame)
+            except Exception as e:
+                # Log but don't die — thread must survive to service future submits
+                print(f'[WORKER] Inference error: {e}', flush=True)
+                import traceback; traceback.print_exc()
+                with self._lock:
+                    self.latest_result = None
+                self._result_ready.set()      # unblock waiter with None → handler sees timeout semantics
+                continue
             dt = time.time() - t0
             if dt > 0:
                 self.infer_fps = 0.8 * self.infer_fps + 0.2 * (1.0 / dt)
-
             with self._lock:
                 self.latest_result = (annotated, states)
+            self._result_ready.set()           # ← signal waiters
 
     def _infer(self, frame: np.ndarray):
         img_h, img_w = frame.shape[:2]
@@ -329,6 +339,7 @@ class TopCamLoopStateNode(Node):
         try:
             import torch
             self.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+            torch.set_num_threads(os.cpu_count())
         except Exception:
             self.device = "cpu"
         self.get_logger().info(f"Inference device: {self.device}")
@@ -670,21 +681,20 @@ class TopCamLoopStateNode(Node):
 
         # Submit to worker and wait for result
         self._worker.submit(frame)
+        self._worker.submit(frame)
 
         # Wait for inference to complete (with timeout)
-        timeout = 5.0
-        start = time.time()
-        result = None
-        while time.time() - start < timeout:
-            time.sleep(0.05)
-            with self._worker._lock:
-                result = self._worker.latest_result
-            if result is not None:
-                break
+        if not self._worker._result_ready.wait(timeout=10.0):
+            response.success = False
+            response.message = 'Inference timeout'
+            return response
+
+        with self._worker._lock:
+            result = self._worker.latest_result
 
         if result is None:
             response.success = False
-            response.message = 'Inference timeout'
+            response.message = 'Inference failed (see logs)'
             return response
 
         annotated, loop_states = result

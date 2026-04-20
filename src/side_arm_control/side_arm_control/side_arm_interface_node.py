@@ -287,6 +287,8 @@ class SideArmInterfaceNode(Node):
         self._current_position.y = msg.y_mm
         self._current_position.z = msg.z_mm
         self._is_homed = msg.is_homed
+        if self._limit_depth == False and msg.limit_depth:
+            self.get_logger().info('Limit switched to on')
         self._limit_depth = msg.limit_depth
         self._limit_horizontal = msg.limit_horizontal
         self._limit_vertical = msg.limit_vertical
@@ -1042,8 +1044,8 @@ class SideArmInterfaceNode(Node):
         self.get_logger().info('[RELEASE] Pulling line up...')
         
         # Move up 10k steps at 1500 speed and DC forward at 75% effort
-        self._send_command('STEPPER_MOVE,1,10000,1500')
-        self._send_command('DC_SPEED,75')
+        self._send_command('STEPPER_MOVE,1,-10000,1500')
+        self._send_command('DC_SPEED,-75')
         time.sleep(7.0)  # Wait for move to complete
         
         self.get_logger().info('[RELEASE] Running DC motor forward to release line...')
@@ -1129,7 +1131,7 @@ class SideArmInterfaceNode(Node):
 
         while time.time() - start_time < timeout_sec:
             time.sleep(poll_interval)
-            self.get_logger().info(f'[RETRACT Z] {self._limit_depth}')
+            # self.get_logger().info(f'[RETRACT Z] {self._limit_depth}')
 
             # Check limit switch - this is the reliable indicator
             if self._limit_depth:

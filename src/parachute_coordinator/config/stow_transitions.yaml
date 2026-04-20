@@ -20,25 +20,9 @@ states:
     description: "Homing side arm to known position"
     timeout_sec: 60
     transitions:
-      homed: AT_LOOP        # homing complete, proceed to first loop
-      already_homed: AT_LOOP  # already homed, skip
+      homed: SERVO        # homing complete, proceed to first loop
+      already_homed: SERVO  # already homed, skip
       homing_failed: ERROR
-      timeout: ERROR
-
-  AT_LOOP:
-    description: "Request next target loop from perception"
-    transitions:
-      positioned: APPROACH   # target acquired, move to approach position
-      no_targets: COMPLETE   # no more loops to stow
-      vision_failure: ERROR
-      timeout: ERROR
-
-  APPROACH:
-    description: "Coarse coordinate move to approach position (rough X/Y, retracted Z)"
-    timeout_sec: 30
-    transitions:
-      approached: SERVO      # at approach position, start visual servo
-      approach_failed: ERROR
       timeout: ERROR
 
   SERVO:
@@ -46,9 +30,17 @@ states:
     timeout_sec: 15
     max_retries: 2
     transitions:
-      servo_complete: INSERT  # centered on loop, proceed to insert
+      servo_complete: AT_LOOP  # centered on loop, verify at loop
       servo_failed: ERROR
       servo_timeout: ERROR
+      timeout: ERROR
+
+  AT_LOOP:
+    description: "Request next target loop from perception"
+    transitions:
+      positioned: INSERT   # in position, insert hook
+      no_targets: COMPLETE   # no more loops to stow
+      vision_failure: ERROR
       timeout: ERROR
 
   INSERT:
@@ -81,7 +73,7 @@ states:
   RELEASE:
     description: "Cycle completion, verification, and reset"
     transitions:
-      loops_remaining: AT_LOOP   # more loops to stow
+      loops_remaining: SERVO   # more loops to stow
       all_complete: COMPLETE     # done
       quality_failure: ERROR     # stow quality check failed
 
@@ -96,6 +88,6 @@ states:
     # error_source_state is tracked automatically
     transitions:
       retry: _PREVIOUS        # return to the state that errored
-      skip: AT_LOOP           # skip this loop, try next
+      skip: SERVO           # skip this loop, try next
       abort: IDLE             # stop everything, go home
       home: IDLE
