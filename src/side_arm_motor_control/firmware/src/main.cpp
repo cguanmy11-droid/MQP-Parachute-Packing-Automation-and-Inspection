@@ -103,7 +103,7 @@ void sendState(bool force = false) {
                    ",\"s2\":" + String(stepper2.currentPosition()) +
                    ",\"dc\":" + String(currentDcPercent) +
                    ",\"servo\":" + String(servoPulseUs - SERVO_NEUTRAL_US) + "}";
-  // Serial.println(payload);
+  Serial.println(payload);
   lastStatePublish = now;
 }
 
@@ -133,12 +133,12 @@ void applyDcCommand(int percent) {
   int originalPercent = percent;
   percent = constrain(percent, -100, 100);
 
-  if (percent != currentDcPercent) {
-    Serial.print("DEBUG DC: ");
-    Serial.print(currentDcPercent);
-    Serial.print(" -> ");
-    Serial.println(percent);
-  }
+  // if (percent != currentDcPercent) {
+  //   Serial.print("DEBsUG DC: ");
+  //   Serial.print(currentDcPercent);
+  //   Serial.print(" -> ");
+  //   Serial.println(percent);
+  // }
 
   // Safety: Don't allow motion toward an engaged limit switch
   const LimitStates limits = readLimitStates();
@@ -370,11 +370,11 @@ void processCommand(const String& cmd) {
   String verb(token);
   verb.toUpperCase();
 
-  if (verb != "REQUEST_STATE") {
-    Serial.print(verb);
-    Serial.print(',  len: ');
-    Serial.println(cmd.length());
-  }
+  // if (verb != "REQUEST_STATE") {
+  //   Serial.print(verb);
+  //   Serial.print(',  len: ');
+  //   Serial.println(cmd.length());
+  // }
 
   if (verb == "STEPPER_MOVE") {
     uint8_t id = static_cast<uint8_t>(parseLong(strtok_r(nullptr, ",", &savePtr), 0));

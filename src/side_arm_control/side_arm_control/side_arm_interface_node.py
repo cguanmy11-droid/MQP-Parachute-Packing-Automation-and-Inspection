@@ -287,8 +287,6 @@ class SideArmInterfaceNode(Node):
         self._current_position.y = msg.y_mm
         self._current_position.z = msg.z_mm
         self._is_homed = msg.is_homed
-        if self._limit_depth == False and msg.limit_depth:
-            self.get_logger().info('Limit switched to on')
         self._limit_depth = msg.limit_depth
         self._limit_horizontal = msg.limit_horizontal
         self._limit_vertical = msg.limit_vertical

@@ -277,9 +277,8 @@ class ManualJogDialog(QDialog):
         # Stop
         elif key == Qt.Key_Space:
             self._send('DC_SPEED,0')
-            self._send('STOP_NOW')
         elif key == Qt.Key_Return:
-            self._send('STOP_NOW')
+            self._send('STOP_ALL')
         
         # Homing
         elif text == 'h':
