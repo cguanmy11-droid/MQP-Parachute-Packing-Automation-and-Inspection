@@ -238,6 +238,15 @@ class PackingCoordinatorNode(Node):
             callback_group=self._cb_group
         )
 
+        # Main arm planner interface (hole_center_sequence)
+        self.hole_seq_pub = self.create_publisher(
+            Pose, '/main_arm/hole_center_sequence', 10
+        )
+        self.main_arm_status_sub = self.create_subscription(
+            String, '/main_arm/planner_status',
+            self._main_arm_status_callback, 10
+        )
+
         # ==================== SUBSCRIBERS ====================
         self.cmd_sub = self.create_subscription(
             String, '/stow/command',
@@ -471,6 +480,21 @@ class PackingCoordinatorNode(Node):
             self._right_arm_homed = msg.is_homed
         # Check homing based on which arms are enabled
         self._update_homing_status()
+
+    def _main_arm_status_callback(self, msg: String):
+        """Handle main arm planner status updates during HANDOFF."""
+        status = msg.data
+
+        # Only process if we're in HANDOFF state waiting for main arm
+        if self.sm.state != StowState.HANDOFF:
+            return
+
+        if 'hole_seq: done' in status:
+            self.get_logger().info('[HANDOFF] Main arm hole sequence complete')
+            self._transition('trajectory_complete')
+        elif 'hole_seq: error' in status:
+            self.get_logger().error(f'[HANDOFF] Main arm failed: {status}')
+            self._enter_error('trajectory_failure', f'Main arm sequence failed: {status}')
 
     def _update_homing_status(self):
         """Update overall homing status based on enabled arms."""
@@ -1204,7 +1228,7 @@ class PackingCoordinatorNode(Node):
         future.add_done_callback(self._on_pre_stow_rotate_done)
     
     def _on_pre_stow_rotate_done(self, future):
-        """After rotating hook, skip main arm trajectory for now."""
+        """After rotating hook, execute main arm hole center sequence."""
         try:
             response = future.result()
             if not response.success:
@@ -1214,8 +1238,14 @@ class PackingCoordinatorNode(Node):
             self._enter_error('trajectory_failure', f'Rotation error: {e}')
             return
 
-        self.get_logger().info('[HANDOFF] Hook rotated — skipping main arm trajectory')
-        self._transition('trajectory_complete')
+        # Use the current loop's pose as hole center for main arm sequence
+        if self.current_target_loop is None:
+            self.get_logger().warn('[HANDOFF] No target loop, skipping main arm')
+            self._transition('trajectory_complete')
+            return
+
+        self.get_logger().info('[HANDOFF] Hook rotated — triggering main arm hole_center_sequence...')
+        self.hole_seq_pub.publish(self.current_target_loop.pose.pose)
 
     # def _on_pre_stow_rotate_done(self, future):
     #     """After rotating hook, execute the stow trajectory."""
