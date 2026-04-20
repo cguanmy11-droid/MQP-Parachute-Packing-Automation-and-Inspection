@@ -672,19 +672,28 @@ class TopCamLoopStateNode(Node):
         """
         self.get_logger().info('[CAPTURE] Capturing frame...')
 
+        # Pause continuous processing to avoid race condition
+        was_enabled = self._processing_enabled
+        self._processing_enabled = False
+
+        # Small delay to let any in-flight inference complete
+        time.sleep(0.1)
+
         # Read a fresh frame
         ret, frame = self.cap.read()
         if not ret:
+            self._processing_enabled = was_enabled  # Restore state
             response.success = False
             response.message = 'Camera read failed'
             return response
 
-        # Submit to worker and wait for result
-        self._worker.submit(frame)
+        # Clear any stale state and submit
+        self._worker._result_ready.clear()
         self._worker.submit(frame)
 
         # Wait for inference to complete (with timeout)
-        if not self._worker._result_ready.wait(timeout=10.0):
+        if not self._worker._result_ready.wait(timeout=15.0):
+            self._processing_enabled = was_enabled  # Restore state
             response.success = False
             response.message = 'Inference timeout'
             return response
@@ -693,6 +702,7 @@ class TopCamLoopStateNode(Node):
             result = self._worker.latest_result
 
         if result is None:
+            self._processing_enabled = was_enabled  # Restore state
             response.success = False
             response.message = 'Inference failed (see logs)'
             return response
@@ -720,6 +730,9 @@ class TopCamLoopStateNode(Node):
             self.image_pub.publish(self._cv2_to_imgmsg(annotated))
 
         self._print_states(loop_states)
+
+        # Restore continuous processing state
+        self._processing_enabled = was_enabled
 
         response.success = True
         response.message = f'Captured {len(loop_states)} loops'
