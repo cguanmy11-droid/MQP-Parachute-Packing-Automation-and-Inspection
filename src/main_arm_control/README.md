@@ -152,11 +152,6 @@ The command format is identical for the left hole. Publish the hole-center pose 
 ros2 topic pub --once /main_arm/left_hole_center_sequence geometry_msgs/Pose "{position: {x: 0.2565, y: 0.1160, z: 0.060}, orientation: {x: 0.02055928805249521, y: 0.6625853327516731, z: 0.0184659342163154, w: 0.7484764537182501}}"
 ```
 
-/main_arm/right_hole_center_sequence geometry_msgs/Pose "
-
-```bash
-ros2 topic pub --once /main_arm/right_hole_center_sequence geometry_msgs/Pose "{position: {x: 0.2090, y: -0.1580, z: 0.0604}, orientation: {x: 0.021, y: 0.659, z: -0.019, w: 0.752}}"
-```
 
 ## Auto Sequence / Pick Line Bundle Function
 
