@@ -21,15 +21,15 @@ import numpy as np
 # Tune these values directly instead of guessing joint angles.
 # For this 5-DOF arm, yaw is derived from x/y, so we only command roll + pitch here.
 AUTO_SEQ_TARGET_X_M = 0.4508
-AUTO_SEQ_TARGET_Y_M = -0.0470
+AUTO_SEQ_TARGET_Y_M = -0.0270
 AUTO_SEQ_TARGET_Z_M = 0.0506
 AUTO_SEQ_TARGET_ROLL_DEG = -0.88
-AUTO_SEQ_TARGET_PITCH_DEG = 49.22
+AUTO_SEQ_TARGET_PITCH_DEG = 69.22
 
 # Final return pose after gripping.
-AUTO_SEQ_RETURN_X_M = 0.1715
+AUTO_SEQ_RETURN_X_M = 0.3015
 AUTO_SEQ_RETURN_Y_M = -0.0016
-AUTO_SEQ_RETURN_Z_M = 0.0546
+AUTO_SEQ_RETURN_Z_M = 0.0946
 AUTO_SEQ_RETURN_ROLL_DEG = -0.26
 AUTO_SEQ_RETURN_PITCH_DEG = 84.02
 # Gripper left-finger position to use at HOME pose before moving to the target pose [m]
@@ -38,7 +38,7 @@ AUTO_SEQ_HOME_OPEN_FINGER_M = 0.03797
 AUTO_SEQ_TARGET_FINGER_M = 0.01766
 
 # ----------------------------------------------------------------------
-# Hole-center sequence
+# Hole-center sequence (left / right hole)
 # ----------------------------------------------------------------------
 # 4 EE waypoints expressed in the HOLE-CENTER frame.
 # When the sequence is triggered with a (hole_center pose in base frame),
@@ -48,36 +48,60 @@ AUTO_SEQ_TARGET_FINGER_M = 0.01766
 #   droll, dpitch, dyaw are intrinsic XYZ Euler angles in the hole-center
 #   frame [deg]. The full waypoint orientation in the base frame is:
 #       R_wp_base = R_holecenter_base @ R_rel
-#
-# These defaults reproduce the 4 example poses you measured.
-# Tune any of them to micro-adjust each waypoint relative to the hole.
 #   finger_m is the desired left-finger position [m] at this waypoint
 #   (total opening = 2 * finger_m). Set to None to leave the gripper
 #   untouched at that waypoint.
+#
+# LEFT_HOLE_WAYPOINTS are the originally-measured 4 poses.
+# RIGHT_HOLE_WAYPOINTS are derived by mirroring LEFT across the local
+# XZ-plane of the hole-center frame: dy, droll, dyaw all flip sign;
+# dx, dz, dpitch and finger_m stay the same. This is the standard
+# left/right mirror for a symmetric workpiece.
 #dx height
 
-HOLE_SEQ_WAYPOINTS = [
+LEFT_HOLE_WAYPOINTS = [
     {  # pose 4
-        'dx': +0.0051, 'dy': -0.0895, 'dz': +0.0623,
+        'dx': +0.0151, 'dy': -0.0895, 'dz': +0.0623,
         'droll_deg': +26.35, 'dpitch_deg': -21.76, 'dyaw_deg': -0.54,
-        'finger_m': 0.01659,
+        'finger_m': 0.01559,
     },
     {  # pose 3
-        'dx': +0.000, 'dy': +0.03, 'dz': +0.0968,
-        'droll_deg': -47.22, 'dpitch_deg': -75.13, 'dyaw_deg': +25.84,
-        'finger_m': 0.01657,
+        'dx': -0.010, 'dy': +0.01, 'dz': +0.0968,
+        'droll_deg': -47.22, 'dpitch_deg': -65.13, 'dyaw_deg': +25.84,
+        'finger_m': 0.01357,
     },
     {  # pose 2
-        'dx': +0.0050, 'dy': +0.03, 'dz': -0.0407,
-        'droll_deg': -57.01, 'dpitch_deg': -70.61, 'dyaw_deg': +26.36,
+        'dx': +0.0050, 'dy': +0.0, 'dz': -0.0507,
+        'droll_deg': -57.01, 'dpitch_deg': -60.61, 'dyaw_deg': +26.36,
         'finger_m': 0.01657,
     },
     {  # pose 1
-        'dx': -0.0167, 'dy': -0.0386, 'dz': -0.0493,
-        'droll_deg': -60.03, 'dpitch_deg': +1.85, 'dyaw_deg': -0.62,
+        'dx': -0.0167, 'dy': -0.0486, 'dz': -0.0653,
+        'droll_deg': -60.03, 'dpitch_deg': -10, 'dyaw_deg': -0.62,
         'finger_m': 0.01657,
     },
 ]
+
+
+def _mirror_waypoint_lr(wp: dict) -> dict:
+    """Mirror a hole-center-frame waypoint across the local XZ-plane (left<->right)."""
+    return {
+        'dx':         +wp['dx'],
+        'dy':         -wp['dy'],
+        'dz':         +wp['dz'],
+        'droll_deg':  -wp['droll_deg'],
+        'dpitch_deg': +wp['dpitch_deg'],
+        'dyaw_deg':   -wp['dyaw_deg'],
+        'finger_m':    wp.get('finger_m', None),
+    }
+
+
+# Right-hole waypoints, auto-mirrored from LEFT_HOLE_WAYPOINTS.
+# Override individual entries here if the right hole needs its own tuning.
+RIGHT_HOLE_WAYPOINTS = [_mirror_waypoint_lr(w) for w in LEFT_HOLE_WAYPOINTS]
+
+# Backward-compat alias for older code that still references HOLE_SEQ_WAYPOINTS.
+HOLE_SEQ_WAYPOINTS = LEFT_HOLE_WAYPOINTS
 
 
 class MainArmPlannerNode(Node):
@@ -114,8 +138,16 @@ class MainArmPlannerNode(Node):
 
         # Trigger the hole-center waypoint sequence. The Pose payload is the
         # hole center pose expressed in the main-arm base frame.
+        # /main_arm/hole_center_sequence is kept as an alias for the LEFT hole.
         self.hole_seq_sub = self.create_subscription(
-            Pose, '/main_arm/hole_center_sequence', self.hole_center_sequence_callback, 10)
+            Pose, '/main_arm/hole_center_sequence',
+            lambda m: self.hole_center_sequence_callback(m, side='left'), 10)
+        self.left_hole_seq_sub = self.create_subscription(
+            Pose, '/main_arm/left_hole_center_sequence',
+            lambda m: self.hole_center_sequence_callback(m, side='left'), 10)
+        self.right_hole_seq_sub = self.create_subscription(
+            Pose, '/main_arm/right_hole_center_sequence',
+            lambda m: self.hole_center_sequence_callback(m, side='right'), 10)
 
         # Publishers
         self.status_pub = self.create_publisher(String, '/main_arm/planner_status', 10)
@@ -141,7 +173,9 @@ class MainArmPlannerNode(Node):
         self.get_logger().info('  - /main_arm/target_pose (Pose: position + orientation)')
         self.get_logger().info('  - /main_arm/target_joint_angles (JointState)')
         self.get_logger().info('  - /main_arm/run_auto_sequence (Empty: trigger auto demo sequence)')
-        self.get_logger().info('  - /main_arm/hole_center_sequence (Pose: hole-center pose in base frame)')
+        self.get_logger().info('  - /main_arm/hole_center_sequence (Pose: alias of left_hole_center_sequence)')
+        self.get_logger().info('  - /main_arm/left_hole_center_sequence (Pose: hole-center pose in base frame, LEFT waypoints)')
+        self.get_logger().info('  - /main_arm/right_hole_center_sequence (Pose: hole-center pose in base frame, RIGHT waypoints, mirrored)')
     
     def target_point_callback(self, msg):
         """Move end-effector to target XYZ point"""
@@ -352,12 +386,13 @@ class MainArmPlannerNode(Node):
         yaw = np.arctan2(siny_cosp, cosy_cosp)
         return float(roll), float(pitch), float(yaw)
 
-    def hole_center_sequence_callback(self, msg: Pose):
+    def hole_center_sequence_callback(self, msg: Pose, side: str = 'left'):
         """
         Trigger the 4-waypoint sequence relative to a hole center.
 
         msg.position    -> hole center XYZ in main-arm base frame [m]
         msg.orientation -> hole center orientation as quaternion in base frame
+        side            -> 'left' or 'right'; selects which waypoint set to use.
         """
         roll, pitch, yaw = self._quat_to_rpy(
             msg.orientation.x, msg.orientation.y,
@@ -378,8 +413,15 @@ class MainArmPlannerNode(Node):
                 return
             self._auto_seq_thread = threading.Thread(
                 target=self.run_hole_center_sequence,
-                args=(msg.position.x, msg.position.y, msg.position.z,
-                      np.degrees(roll), np.degrees(pitch), np.degrees(yaw)),
+                kwargs=dict(
+                    hc_x=msg.position.x,
+                    hc_y=msg.position.y,
+                    hc_z=msg.position.z,
+                    hc_roll_deg=float(np.degrees(roll)),
+                    hc_pitch_deg=float(np.degrees(pitch)),
+                    hc_yaw_deg=float(np.degrees(yaw)),
+                    side=side,
+                ),
                 daemon=True,
             )
             self._auto_seq_thread.start()
@@ -393,26 +435,41 @@ class MainArmPlannerNode(Node):
         hc_pitch_deg: float,
         hc_yaw_deg: float,
         waypoints=None,
+        side: str = 'left',
     ) -> bool:
         """
         Move the EE through the 4 waypoints defined in the HOLE-CENTER frame.
 
-        Each waypoint in `waypoints` (defaults to HOLE_SEQ_WAYPOINTS) is a dict
-        with keys: dx, dy, dz, droll_deg, dpitch_deg, dyaw_deg expressed in the
-        hole-center frame. They are transformed back to the base frame here.
+        If `waypoints` is None, choose LEFT_HOLE_WAYPOINTS or RIGHT_HOLE_WAYPOINTS
+        based on `side` ('left' or 'right'). Each waypoint dict has keys:
+        dx, dy, dz, droll_deg, dpitch_deg, dyaw_deg, finger_m, all expressed in
+        the hole-center frame. They are transformed back to the base frame here.
 
         For this 5-DOF arm only roll + pitch are commanded (yaw is implicit
         from the waist angle), so the resulting yaw of each waypoint is
         recomputed by the IK from x/y.
         """
-        wps = waypoints if waypoints is not None else HOLE_SEQ_WAYPOINTS
+        if waypoints is None:
+            side_lc = (side or 'left').lower()
+            if side_lc == 'right':
+                wps = RIGHT_HOLE_WAYPOINTS
+            elif side_lc == 'left':
+                wps = LEFT_HOLE_WAYPOINTS
+            else:
+                self.get_logger().warn(
+                    f"Unknown side '{side}', defaulting to LEFT.")
+                side_lc = 'left'
+                wps = LEFT_HOLE_WAYPOINTS
+        else:
+            side_lc = (side or 'custom').lower()
+            wps = waypoints
 
         try:
             self.get_logger().info(
-                f'=== Hole-center sequence: START ('
+                f'=== Hole-center sequence ({side_lc.upper()}): START ('
                 f'hc xyz=[{hc_x:+.4f}, {hc_y:+.4f}, {hc_z:+.4f}] m, '
                 f'rpy=[{hc_roll_deg:+.2f}, {hc_pitch_deg:+.2f}, {hc_yaw_deg:+.2f}] deg) ===')
-            self.publish_status_msg('hole_seq: start')
+            self.publish_status_msg(f'hole_seq[{side_lc}]: start')
 
             t_hc = np.array([hc_x, hc_y, hc_z], dtype=float)
             R_hc = self._rpy_to_R(
@@ -446,6 +503,36 @@ class MainArmPlannerNode(Node):
                     f'{np.degrees(yaw_abs):+.2f}] deg'
                     f'{finger_str}')
 
+                # Step A: move EE position first, keeping the current
+                # roll/pitch so the wrist orientation does not change yet.
+                # Only roll/pitch are commanded on this 5-DOF arm (yaw is
+                # derived from waist), so "current roll/pitch" fully pins the
+                # wrist attitude for this phase.
+                T_cur = np.asarray(self.bot.arm.T_sb, dtype=float)
+                cur_roll, cur_pitch, _ = self._R_to_rpy(T_cur[:3, :3])
+                self.get_logger().info(
+                    f'[{i}/{len(wps)}] step A: move position only '
+                    f'(hold rpy=[{np.degrees(cur_roll):+.2f}, '
+                    f'{np.degrees(cur_pitch):+.2f}] deg)')
+                success = self.bot.arm.set_ee_pose_components(
+                    x=float(t_abs[0]),
+                    y=float(t_abs[1]),
+                    z=float(t_abs[2]),
+                    roll=float(cur_roll),
+                    pitch=float(cur_pitch),
+                )
+                if not success:
+                    raise RuntimeError(
+                        f'IK failed on hole-center waypoint {i}/{len(wps)} '
+                        'during position phase.')
+
+                # Step B: now rotate to the target orientation at the same
+                # position. Splitting the motion prevents position and
+                # orientation from interpolating together.
+                self.get_logger().info(
+                    f'[{i}/{len(wps)}] step B: rotate to target rpy '
+                    f'[{np.degrees(roll_abs):+.2f}, '
+                    f'{np.degrees(pitch_abs):+.2f}] deg')
                 success = self.bot.arm.set_ee_pose_components(
                     x=float(t_abs[0]),
                     y=float(t_abs[1]),
@@ -455,20 +542,23 @@ class MainArmPlannerNode(Node):
                 )
                 if not success:
                     raise RuntimeError(
-                        f'IK failed on hole-center waypoint {i}/{len(wps)}.')
+                        f'IK failed on hole-center waypoint {i}/{len(wps)} '
+                        'during orientation phase.')
 
                 if finger_m is not None:
                     self._set_gripper_finger_position(float(finger_m))
 
                 time.sleep(0.2)
 
-            self.get_logger().info('=== Hole-center sequence: DONE ===')
-            self.publish_status_msg('hole_seq: done')
+            self.get_logger().info(
+                f'=== Hole-center sequence ({side_lc.upper()}): DONE ===')
+            self.publish_status_msg(f'hole_seq[{side_lc}]: done')
             return True
 
         except Exception as e:
-            self.get_logger().error(f'Hole-center sequence failed: {e}')
-            self.publish_status_msg(f'hole_seq: error: {e}')
+            self.get_logger().error(
+                f'Hole-center sequence ({side_lc.upper()}) failed: {e}')
+            self.publish_status_msg(f'hole_seq[{side_lc}]: error: {e}')
             return False
 
     def _ensure_gripper_linear_position_mode(self) -> None:
