@@ -1183,7 +1183,7 @@ class PackingCoordinatorNode(Node):
             self._transition('servo_failed')
 
     def on_enter_insert(self, state: StowState, event: str):
-        """Entered INSERT — use primitive services: vision_servo then insert_through_loop."""
+        """Entered INSERT — rotate hook up (+90°), then insert through loop."""
         retry = self.sm.retry_count
         if retry > 0:
             config = self.sm.get_state_config(StowState.INSERT)
@@ -1193,21 +1193,38 @@ class PackingCoordinatorNode(Node):
             )
             # TODO: Apply position offset to target loop
 
-        self.get_logger().info(f'[INSERT] Using {self.current_arm} arm to insert hook...')
+        self.get_logger().info(
+            f'[INSERT] Rotating {self.current_arm} hook to +90° (up)...'
+        )
 
-        # Step 1: Vision servo (disabled for now - go straight to insert)
-        # servo_service = f'/side_arm_{self.current_arm}/vision_servo'
-        # servo_client = self.create_client(Trigger, servo_service)
-        #
-        # if servo_client.wait_for_service(timeout_sec=2.0):
-        #     self.get_logger().info('[INSERT] Running vision servo...')
-        #     future = servo_client.call_async(Trigger.Request())
-        #     future.add_done_callback(self._on_vision_servo_done)
-        # else:
-        #     self.get_logger().warn('[INSERT] Vision servo not available, skipping to insert')
-        #     self._do_insert_through_loop()
+        rotate_client = self.get_current_rotate_client()
+        if not rotate_client.service_is_ready():
+            self._enter_error(
+                'timeout', f'{self.current_arm} rotate service not available'
+            )
+            return
 
-        # Go directly to insert (no vision servo)
+        request = RotateHook.Request()
+        request.angle_degrees = 90.0
+
+        future = rotate_client.call_async(request)
+        future.add_done_callback(self._on_pre_insert_rotate_done)
+
+
+    def _on_pre_insert_rotate_done(self, future):
+        """After hook is vertical, call insert_through_loop."""
+        try:
+            response = future.result()
+            if not response.success:
+                self._enter_error(
+                    'collision', f'Pre-insert rotation failed: {response.message}'
+                )
+                return
+        except Exception as e:
+            self._enter_error('collision', f'Pre-insert rotation error: {e}')
+            return
+
+        self.get_logger().info('[INSERT] Hook vertical — inserting through loop...')
         self._do_insert_through_loop()
 
     def _on_vision_servo_done(self, future):
@@ -1290,7 +1307,7 @@ class PackingCoordinatorNode(Node):
             return
 
         request = RotateHook.Request()
-        request.angle_degrees = 90.0
+        request.angle_degrees = -90.0 # up
 
         future = rotate_client.call_async(request)
         future.add_done_callback(self._on_pre_stow_rotate_done)

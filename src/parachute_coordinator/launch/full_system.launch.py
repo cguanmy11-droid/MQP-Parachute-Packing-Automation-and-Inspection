@@ -305,22 +305,23 @@ def launch_setup(context, *args, **kwargs):
                 'robot_model': 'wx200',
                 'use_sim': str(sim_mode).lower(),
                 'use_rviz': 'false',
+                'write_eeprom_on_startup': 'false'
             }.items(),
         ))
 
-        # Main arm interface
-        nodes.append(Node(
-            package='main_arm_control',
-            executable='main_arm_interface_node',
-            name='main_arm_interface_node',
-            output='screen',
-            parameters=[{
-                'robot_model': 'wx200',
-                'robot_name': 'wx200',
-                'use_sim': sim_mode,
-                'test_mode': False,
-            }],
-        ))
+        # Main arm interface (for now try only launching the planner node)
+        # nodes.append(Node(
+        #     package='main_arm_control',
+        #     executable='main_arm_interface_node',
+        #     name='main_arm_interface_node',
+        #     output='screen',
+        #     parameters=[{
+        #         'robot_model': 'wx200',
+        #         'robot_name': 'wx200',
+        #         'use_sim': sim_mode,
+        #         'test_mode': False,
+        #     }],
+        # ))
 
         # Gripper control
         nodes.append(Node(
@@ -626,7 +627,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'sim',
-            default_value='true',
+            default_value='false',
             description='Run in simulation mode'
         ),
         DeclareLaunchArgument(
@@ -636,7 +637,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'enable_left',
-            default_value='true',
+            default_value='false',
             description='Enable left side arm (V1)'
         ),
         DeclareLaunchArgument(
@@ -651,7 +652,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'enable_ground_truth',
-            default_value='true',
+            default_value='false',
             description='Enable use of ground truth node for sensor fusion'
         ),
         DeclareLaunchArgument(
@@ -660,21 +661,21 @@ def generate_launch_description():
             description='Enable state machine coordinator (set false for manual testing)'
         ),
         # Adding vision launch args
-        DeclareLaunchArgument('use_real_camera', default_value='false',
+        DeclareLaunchArgument('use_real_camera', default_value='true',
             description='Use real USB cameras with YOLO detection'),
         DeclareLaunchArgument('left_camera_index', default_value='/dev/video8',
             description='Left arm camera device index'),
-        DeclareLaunchArgument('right_camera_index', default_value='/dev/video4',
+        DeclareLaunchArgument('right_camera_index', default_value='/dev/video6',
             description='Right arm camera device index'),
         DeclareLaunchArgument('camera_display', default_value='false',
             description='Show YOLO detection windows'),
         DeclareLaunchArgument('assumed_depth', default_value='0.22',
             description='Assumed depth camera to loop plane (meters)'),
-        DeclareLaunchArgument('enable_side_cam', default_value='false',
+        DeclareLaunchArgument('enable_side_cam', default_value='true',
             description='Enable side camera pipeline'),
-        DeclareLaunchArgument('enable_top_cam', default_value='false',
+        DeclareLaunchArgument('enable_top_cam', default_value='true',
             description='Enable top camera loop state detection'),
-        DeclareLaunchArgument('top_cam_device', default_value='/dev/video6',
+        DeclareLaunchArgument('top_cam_device', default_value='/dev/video4',
             description='Top camera device path'),
         DeclareLaunchArgument('top_cam_det_weights',
             default_value=os.path.join(os.path.expanduser('~'),
