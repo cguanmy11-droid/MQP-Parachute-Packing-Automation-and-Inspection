@@ -503,6 +503,14 @@ class SideArmInterfaceNode(Node):
                 y_centered = abs(error_y) < self.servo_deadband_y_px
 
                 if x_centered and y_centered:
+                    nudge_steps = -1000
+                    nudge_speed = self.servo_step_speed
+                    self.get_logger().info(
+                        f'[VISUAL_SERVO] Centered — nudging +{nudge_steps} steps on X axis'
+                    )
+                    self._send_command(f'STEPPER_MOVE,2,{nudge_steps},{nudge_speed}')
+                    time.sleep(abs(nudge_steps) / nudge_speed + 0.2)  # wait for move + settle
+
                     goal_handle.succeed()
                     result = VisualServo.Result()
                     result.success = True
@@ -733,31 +741,19 @@ class SideArmInterfaceNode(Node):
         self.status_publisher.publish(msg)
 
     def rotate_hook_callback(self, request, response):
-        """Service callback - rotate hook by specified angle."""
-        angle = request.angle_degrees
-
-        self.get_logger().info(f'Rotating hook by {angle} degrees')
-
-        # Update current angle
-        self.current_angle += angle
-
-        # Convert degrees to servo microseconds (roughly 1000us = 90 degrees)
+        """Service callback - rotate hook to a specified angle."""
+        target_angle = request.angle_degrees
+        self.get_logger().info(
+            f'Rotating hook to {target_angle} degrees (was {self.current_angle})'
+        )
+        self.current_angle = target_angle  # absolute, not cumulative
         servo_us = int(self.current_angle * 1000.0 / 90.0)
 
         # Send servo command (works in both test and real mode for visualization)
         self._send_command(f'SERVO,{servo_us}')
 
-        if not self.test_mode:
-            # In real mode, also use DC motor as backup
-            rotation_time = abs(angle) / 90.0
-            dc_percent = 50 if angle > 0 else -50
-            self._send_command(f'DC_SPEED,{dc_percent}')
-            time.sleep(rotation_time)
-            self._send_command('DC_SPEED,0')
-        else:
-            # Simulate rotation time
-            rotation_time = abs(angle) / 90.0
-            time.sleep(rotation_time)
+        rotation_time = abs(target_angle) / 90.0
+        time.sleep(rotation_time)
 
         response.success = True
         response.final_angle = self.current_angle

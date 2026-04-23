@@ -907,6 +907,32 @@ class PackingCoordinatorNode(Node):
             self.get_logger().warn(
                 '[AT_LOOP] skip_verify=true — accepting SERVO result blindly'
             )
+            # Populate a placeholder target loop from the current hook position
+            # so HANDOFF knows where the hole center is
+            if self.current_target_loop is None:
+                try:
+                    hook_frame = f'{self.current_arm}_hook_link'
+                    tf = self._tf_buffer.lookup_transform(
+                        'world', hook_frame,
+                        rclpy.time.Time(),
+                        timeout=rclpy.duration.Duration(seconds=1.0),
+                    )
+                    placeholder = DetectedLoop()
+                    placeholder.header.frame_id = 'world'
+                    placeholder.pose.header.frame_id = 'world'
+                    placeholder.pose.pose.position.x = tf.transform.translation.x
+                    placeholder.pose.pose.position.y = tf.transform.translation.y
+                    placeholder.pose.pose.position.z = tf.transform.translation.z
+                    placeholder.pose.pose.orientation.w = 1.0
+                    self.current_target_loop = placeholder
+                    self.get_logger().info(
+                        f'[AT_LOOP] Using hook position as hole center: '
+                        f'({placeholder.pose.pose.position.x:.3f}, '
+                        f'{placeholder.pose.pose.position.y:.3f}, '
+                        f'{placeholder.pose.pose.position.z:.3f})'
+                    )
+                except Exception as e:
+                    self.get_logger().warn(f'[AT_LOOP] Could not get hook pose: {e}')
             self._transition('positioned')
             return
 
@@ -1137,7 +1163,7 @@ class PackingCoordinatorNode(Node):
         goal = VisualServo.Goal()
         goal.arm_side = self.current_arm
         goal.timeout_sec = 60.0  # Configurable
-        goal.goal_x_px = 382.0  # Use defaults from config
+        goal.goal_x_px = 368.0  # Use defaults from config
         goal.goal_y_px = 137.0
 
         self.get_logger().info(f'[SERVO] Sending goal to {action_name}')
@@ -1183,7 +1209,7 @@ class PackingCoordinatorNode(Node):
             self._transition('servo_failed')
 
     def on_enter_insert(self, state: StowState, event: str):
-        """Entered INSERT — rotate hook up (+90°), then insert through loop."""
+        """Entered INSERT — rotate hook up (to -90), then insert through loop."""
         retry = self.sm.retry_count
         if retry > 0:
             config = self.sm.get_state_config(StowState.INSERT)
@@ -1194,7 +1220,7 @@ class PackingCoordinatorNode(Node):
             # TODO: Apply position offset to target loop
 
         self.get_logger().info(
-            f'[INSERT] Rotating {self.current_arm} hook to +90° (up)...'
+            f'[INSERT] Rotating {self.current_arm} hook to -90 (up)...'
         )
 
         rotate_client = self.get_current_rotate_client()
@@ -1205,7 +1231,7 @@ class PackingCoordinatorNode(Node):
             return
 
         request = RotateHook.Request()
-        request.angle_degrees = 90.0
+        request.angle_degrees = -90.0 # up
 
         future = rotate_client.call_async(request)
         future.add_done_callback(self._on_pre_insert_rotate_done)
@@ -1299,7 +1325,7 @@ class PackingCoordinatorNode(Node):
 
     def on_enter_handoff(self, state: StowState, event: str):
         """Entered HANDOFF — rotate hook and execute stow trajectory using current arm."""
-        self.get_logger().info(f'[HANDOFF] Rotating {self.current_arm} hook to 90°...')
+        self.get_logger().info(f'[HANDOFF] Rotating {self.current_arm} hook to -90°...')
 
         rotate_client = self.get_current_rotate_client()
         if not rotate_client.service_is_ready():
@@ -1416,20 +1442,54 @@ class PackingCoordinatorNode(Node):
             self._enter_error('trajectory_failure', result.message)
 
     def on_enter_retract(self, state: StowState, event: str):
-        """Entered RETRACT — call retract_z to home Z axis only."""
-        self.get_logger().info(f'[RETRACT] Retracting {self.current_arm} hook (Z axis)...')
+        """Entered RETRACT — rotate hook down (90°), then retract Z axis."""
+        self.get_logger().info(
+            f'[RETRACT] Rotating {self.current_arm} hook to 90° (down)...'
+        )
 
+        rotate_client = self.get_current_rotate_client()
+        if not rotate_client.service_is_ready():
+            self._enter_error(
+                'timeout', f'{self.current_arm} rotate service not available'
+            )
+            return
+
+        request = RotateHook.Request()
+        request.angle_degrees = 90.0  # down
+
+        future = rotate_client.call_async(request)
+        future.add_done_callback(self._on_pre_retract_rotate_done)
+
+
+    def _on_pre_retract_rotate_done(self, future):
+        """After hook is rotated down, call retract_z."""
+        try:
+            response = future.result()
+            if not response.success:
+                self._enter_error(
+                    'excessive_force', f'Pre-retract rotation failed: {response.message}'
+                )
+                return
+        except Exception as e:
+            self._enter_error('excessive_force', f'Pre-retract rotation error: {e}')
+            return
+
+        self.get_logger().info('[RETRACT] Hook rotated down — retracting Z axis...')
+        self._do_retract_z()
+
+
+    def _do_retract_z(self):
+        """Call the retract_z service."""
         service_name = f'/side_arm_{self.current_arm}/retract_z'
         client = self.create_client(Trigger, service_name)
 
         if not client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().warn(f'[RETRACT] {service_name} not available')
             self._enter_error('timeout', f'{service_name} not available')
             return
 
         future = client.call_async(Trigger.Request())
         future.add_done_callback(self._on_retract_done)
-
+        
     def _on_capture_rotate_done(self, future):
         """After capture rotation, reset hook angle then retract."""
         try:
@@ -1501,10 +1561,10 @@ class PackingCoordinatorNode(Node):
             future.add_done_callback(self._on_hook_reset_done)
         else:
             self.get_logger().warn('[RELEASE] reset_hook_angle not available, continuing')
-            self._finish_release_cycle()
+            self._do_post_release_retract()
 
     def _on_hook_reset_done(self, future):
-        """Handle hook reset completion, then advance."""
+        """Handle hook reset completion, then retract Z before next cycle."""
         try:
             response = future.result()
             if response.success:
@@ -1513,6 +1573,39 @@ class PackingCoordinatorNode(Node):
                 self.get_logger().warn(f'[RELEASE] Hook reset issue: {response.message}')
         except Exception as e:
             self.get_logger().warn(f'[RELEASE] Hook reset error: {e}')
+
+        # NEW: retract Z before moving to next loop
+        self._do_post_release_retract()
+
+
+    def _do_post_release_retract(self):
+        """Retract Z axis to home after release, before moving to next loop."""
+        self.get_logger().info(f'[RELEASE] Retracting {self.current_arm} Z axis to home...')
+
+        service_name = f'/side_arm_{self.current_arm}/retract_z'
+        client = self.create_client(Trigger, service_name)
+
+        if not client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warn(
+                f'[RELEASE] {service_name} not available — skipping post-release retract'
+            )
+            self._finish_release_cycle()
+            return
+
+        future = client.call_async(Trigger.Request())
+        future.add_done_callback(self._on_post_release_retract_done)
+
+
+    def _on_post_release_retract_done(self, future):
+        """After post-release Z retract, finish the release cycle."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[RELEASE] Z retracted: {response.message}')
+            else:
+                self.get_logger().warn(f'[RELEASE] Z retract issue: {response.message}')
+        except Exception as e:
+            self.get_logger().warn(f'[RELEASE] Z retract error: {e}')
 
         self._finish_release_cycle()
 

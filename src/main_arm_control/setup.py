@@ -33,6 +33,7 @@ setup(
         'test_kinematics = main_arm_control.test_kinematics:main',
         'gripper_control_node = main_arm_control.gripper_control_node:main',
         'motor_health_monitor = main_arm_control.motor_health_monitor:main',
+        'main_arm_human_move_for_test = main_arm_control.main_arm_human_move_for_test:main',
         ],
     },
 )
