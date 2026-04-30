@@ -1,267 +1,345 @@
-# MQP-Parachute-Packing-Automation-and-Inspection
+# Parachute Packing Automation and Inspection
 
-Parachute Packing Automation System - Architecture Overview
-Version: v1.0 (In Development)
-Last Updated: 2024-12-02
-Project: WPI MQP - Parachute Packing Automation and Inspection
+**WPI Major Qualifying Project (MQP) 2025-2026**
 
-1. System Overview
-This system automates the packing of parachutes using a coordinated robotic setup consisting of:
+Automated parachute line packing system using coordinated robotics, computer vision, and a ROS 2 state machine.
 
-Main Arm: WidowX-200 robotic manipulator for parachute line stowing
-Side Arm: ESP32-controlled hook mechanism for loop insertion
-Perception: Camera-based system for loop detection and positioning
-Coordination: ROS 2 state machine orchestrating the complete packing sequence
+## System Overview
 
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     Parachute Packing System                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   ┌──────────────┐    ┌──────────────┐    ┌──────────────┐             │
+│   │  Top Camera  │    │ Side Cameras │    │   Operator   │             │
+│   │  (YOLO cls)  │    │  (YOLO det)  │    │     GUI      │             │
+│   └──────┬───────┘    └──────┬───────┘    └──────┬───────┘             │
+│          │                   │                   │                      │
+│          └─────────┬─────────┘                   │                      │
+│                    ▼                             │                      │
+│          ┌─────────────────┐                     │                      │
+│          │    Perception   │◄────────────────────┘                      │
+│          │  Loop Detection │                                            │
+│          │  Target Select  │                                            │
+│          └────────┬────────┘                                            │
+│                   │                                                     │
+│                   ▼                                                     │
+│          ┌─────────────────┐                                            │
+│          │   Coordinator   │                                            │
+│          │  State Machine  │                                            │
+│          └───────┬─────────┘                                            │
+│                  │                                                      │
+│        ┌─────────┼─────────┐                                            │
+│        ▼         ▼         ▼                                            │
+│   ┌─────────┐ ┌─────────┐ ┌─────────┐                                   │
+│   │  Left   │ │  Main   │ │  Right  │                                   │
+│   │Side Arm │ │  Arm    │ │Side Arm │                                   │
+│   │  (V1)   │ │ (WX200) │ │  (V2)   │                                   │
+│   └─────────┘ └─────────┘ └─────────┘                                   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
-2. Package Structure
-2.1 Existing/Reusable Packages
+| Component | Hardware | Purpose |
+|-----------|----------|---------|
+| **Main Arm** | WidowX-200 (Interbotix) | Stows parachute lines around hooks |
+| **Left Side Arm** | ESP32 + 3-axis gantry (V1) | Inserts hook through loops (positive Y) |
+| **Right Side Arm** | ESP32 + 3-axis gantry (V2) | Inserts hook through loops (negative Y) |
+| **Top Camera** | USB camera + YOLO | Detects loop state (stowed/unstowed) |
+| **Side Cameras** | USB cameras + YOLO | Tracks loop positions for visual servoing |
 
-interbotix_xs_sdk: WidowX-200 low-level driver (existing, no modifications)
-interbotix_xs_modules: High-level Python API for arm control (existing, no modifications)
+---
 
-2.2 New Custom Packages
-Package NamePurposeStatusparachute_interfacesCustom ROS 2 messages, services, and actions✅ Implementedparachute_perceptionLoop detection and target selection🔄 In Developmentside_arm_controlESP32 hook arm interface and control🔄 In Developmentmain_arm_controlWidowX-200 motion planning and execution🔄 In Developmentparachute_coordinatorHigh-level state machine and orchestration🔄 In Development
+## Prerequisites
 
-3. System Architecture (ASCII Diagram)
-┌─────────────────────────────────────────────────────────────────┐
-│                    Parachute Packing System                     │
-└─────────────────────────────────────────────────────────────────┘
+- **OS**: Ubuntu 22.04
+- **ROS 2**: Humble
+- **Python**: 3.10+
+- **Hardware** (for non-simulation):
+  - WidowX-200 robot arm
+  - ESP32-based gantry controllers (1-2 units)
+  - USB cameras (1-3 units)
 
-╔═══════════════════════════════════════════════════════════════════╗
-║                      Perception Layer                             ║
-╚═══════════════════════════════════════════════════════════════════╝
+---
 
-┌──────────────────┐
-│  Camera          │
-│  【Hardware】     │
-└────────┬─────────┘
-         │ /camera/image_raw
-         ▼
-┌───────────────────────────────────────────────────────┐
-│  parachute_perception Package                         │
-│  Location: src/parachute_perception/                  │
-└───────────────────────────────────────────────────────┘
-         │
-    ┌────┴────┐
-    ▼         ▼
-┌─────────────────┐    ┌──────────────────────┐
-│ loop_detector   │    │ target_selector      │
-│ _node           │───▶│ _node                │
-│ 【New】          │    │ 【New】               │
-│                 │    │                      │
-│ Detects loops   │    │ Selects rightmost    │
-│ in camera feed  │    │ loop as target       │
-└─────────────────┘    └──────────┬───────────┘
-         │                        │
-         │ /detected_loops        │ Service: /request_next_target
-         │                        │
-         └────────────────────────┘
+## Installation
 
-╔═══════════════════════════════════════════════════════════════════╗
-║                    Coordination Layer                             ║
-╚═══════════════════════════════════════════════════════════════════╝
+### 1. Clone the Repository
 
-┌───────────────────────────────────────────────────────┐
-│  parachute_coordinator Package                        │
-│  Location: src/parachute_coordinator/                 │
-└───────────────────────────────────────────────────────┘
-         │
-         ▼
-┌────────────────────────────────────────┐
-│  packing_coordinator_node 【New】       │
-│                                        │
-│  State Machine:                        │
-│  1. Request target loop                │
-│  2. Insert hook                        │
-│  3. Rotate hook (90°)                  │
-│  4. Execute stowing trajectory         │
-│  5. Rotate hook (90°)            │
-│  6. Retract hook                       │
-└────┬──────────────────┬────────────────┘
-     │                  │
-     │ Calls Services   │ Calls Actions
-     ▼                  ▼
+```bash
+mkdir -p ~/ros2_ws/src
+cd ~/ros2_ws/src
+git clone https://github.com/YOUR_ORG/MQP-Parachute-Packing-Automation-and-Inspection.git
+cd MQP-Parachute-Packing-Automation-and-Inspection
+```
 
-╔═══════════════════════════════════════════════════════════════════╗
-║                      Control Layer                                ║
-╚═══════════════════════════════════════════════════════════════════╝
+### 2. Install Interbotix Dependencies
 
-┌─────────────────────────────┐  ┌─────────────────────────────┐
-│  side_arm_control Package   │  │  main_arm_control Package   │
-│  Location: src/side_arm_     │  │  Location: src/main_arm_    │
-│  control/                    │  │  control/                   │
-└─────────────────────────────┘  └─────────────────────────────┘
-         │                                  │
-    ┌────┴────┐                        ┌────┴────┐
-    ▼         ▼                        ▼         ▼
-┌──────────┐ ┌──────────┐    ┌──────────┐ ┌──────────┐
-│ side_arm │ │ hook_    │    │ main_arm │ │ main_arm │
-│ interface│ │ verifi-  │    │ interface│ │ planner  │
-│ _node    │ │ cation   │    │ _node    │ │ _node    │
-│ 【New】   │ │ _node    │    │ 【New】   │ │ 【New】   │
-│          │ │ 【New】   │    │          │ │          │
-│ ESP32↔   │ │          │    │ WidowX   │ │ Motion   │
-│ ROS2     │ │ Verifies │    │ control  │ │ planning │
-│ bridge   │ │ insertion│    │          │ │          │
-└─────┬────┘ └──────────┘    └─────┬────┘ └──────────┘
-      │                            │
-      │ Actions:                   │ Actions:
-      │ /side_arm/insert_hook      │ /main_arm/execute_trajectory
-      │ Services:                  │
-      │ /side_arm/rotate_hook      │
-      │ /side_arm/retract_hook     │
-      ▼                            ▼
-┌──────────────┐            ┌──────────────┐
-│  ESP32       │            │  WidowX-200  │
-│  【Hardware】 │            │  【Hardware】 │
-│  + Hook Arm  │            │  Robotic Arm │
-└──────────────┘            └──────────────┘
+```bash
+# Import Interbotix repositories
+vcs import src < interbotix.repos
 
-4. Custom Interfaces (parachute_interfaces)
-4.1 Messages
-MessagePurposeDetectedLoop.msgSingle loop with pose and confidenceDetectedLoops.msgArray of detected loopsHookStatus.msgSide arm hook state and positionArmStatus.msgMain arm state and current pose
-4.2 Services
-ServicePurposeRequestNextTarget.srvRequest next target loop from perceptionVerifyHookInsertion.srvVerify hook successfully insertedPlanToHook.srvPlan trajectory relative to hook positionRotateHook.srvRotate hook by specified angle
-4.3 Actions
-ActionPurposeInsertHook.actionInsert hook through target loop (with feedback)ExecuteTrajectory.actionExecute main arm stowing motion (with feedback)
+# Or manually clone (if vcs not available):
+# cd src
+# git clone -b humble https://github.com/Interbotix/interbotix_ros_core.git
+# git clone -b humble https://github.com/Interbotix/interbotix_ros_manipulators.git
+# git clone -b humble https://github.com/Interbotix/interbotix_ros_toolboxes.git
+```
 
-5. Key Nodes
-5.1 Perception Nodes
+### 3. Install Python Dependencies
 
-loop_detector_node: Detects parachute loops, publishes positions
-target_selector_node: Selects rightmost loop as next target
-hook_verification_node: Verifies successful hook insertion
+```bash
+pip install -r requirements.txt
 
-5.2 Control Nodes
+# For YOLO detection (top camera):
+pip install ultralytics
 
-side_arm_interface_node: Controls ESP32 hook arm, provides action servers
-main_arm_interface_node: Low-level WidowX-200 control interface
-main_arm_planner_node: Motion planning for stowing trajectories
+# For GUI:
+pip install PyQt5
+```
 
-5.3 Coordinator Node
+### 4. Install ROS 2 Dependencies
 
-packing_coordinator_node: State machine orchestrating complete packing sequence
+```bash
+cd ~/ros2_ws
+rosdep install --from-paths src --ignore-src -r -y
+```
 
+### 5. Build
 
-6. Data Flow
-Camera → loop_detector → target_selector → [Service Call]
-                                                ↓
-                        packing_coordinator ← [Response]
-                                ↓
-                          [Action Call]
-                                ↓
-                    ┌───────────┴───────────┐
-                    ▼                       ▼
-            side_arm_interface      main_arm_interface
-                    ↓                       ↓
-                ESP32 Hook              WidowX-200
-
-7. Packing Sequence
-
-Detect & Select: Perception identifies loops, selects rightmost
-Insert Hook: Side arm inserts hook through target loop
-Verify: Confirm hook insertion successful
-Rotate Pre-Stow: Rotate hook 90° for line clearance
-Stow Line: Main arm executes stowing trajectory around hook
-Rotate Post-Stow: Rotate hook back -90°
-Retract: Retract hook to clear for next loop
-Repeat: Continue until all loops processed
-
-
-8. Development Status
-✅ Completed
-
-Package structure created
-Custom interfaces defined and built
-Basic node skeletons implemented
-Test mode with dummy data functional
-Launch file for system integration
-
-🔄 In Progress
-
-Camera integration and loop detection algorithm
-ESP32 firmware and micro-ROS interface
-WidowX-200 motion planning integration
-Full sequence testing and validation
-
-📋 Planned
-
-Computer vision optimization
-Trajectory refinement
-Safety interlocks and error recovery
-Performance optimization
-Documentation and user guides
-
-
-9. Build and Launch
-Build System
-bash# Build all packages
+```bash
+cd ~/ros2_ws
 colcon build
-
-# Build specific package
-colcon build --packages-select parachute_interfaces
-
-# Source workspace
 source install/setup.bash
-Launch System
-bash# Launch complete test system
-ros2 launch parachute_coordinator test_system.launch.py
-
-# Launch individual nodes
-ros2 run parachute_perception loop_detector_node
-ros2 run side_arm_control side_arm_interface_node
-ros2 run main_arm_control main_arm_interface_node
-ros2 run parachute_coordinator packing_coordinator_node
 ```
 
 ---
 
-## 10. Dependencies
+## Quick Start
 
-### ROS 2 Packages
-- `rclpy` - Python client library
-- `geometry_msgs` - Pose and point messages
-- `sensor_msgs` - Camera and image messages
-- `std_msgs` - Standard message types
+### Full System (Simulation)
 
-### Hardware
-- WidowX-200 Robot Arm (Interbotix)
-- ESP32 Development Board
-- USB Camera(s)
-- Stepper motor + driver for hook arm
-- Limit switches
+Both side arms + main arm with simulated vision:
 
-### External Libraries
-- OpenCV (cv_bridge) - Image processing
-- NumPy - Numerical operations
-- (Future) PyTorch/TensorFlow - Deep learning for perception
+```bash
+ros2 launch parachute_coordinator full_system.launch.py sim:=true vision_test:=true
+```
+
+Start the stowing sequence:
+```bash
+ros2 topic pub --once /stow/command std_msgs/String "data: start"
+```
+
+### Full System (Hardware)
+
+```bash
+ros2 launch parachute_coordinator full_system.launch.py \
+    sim:=false \
+    use_real_camera:=true \
+    enable_top_cam:=true \ 
+    left_camera_index:=/dev/video8 \ 
+    right_camera_index:=/dev/video6 \
+    top_cam_device:=/dev/video2 \
+```
+
+Note: you likely need to specify the correct ports for the cameras and ESP32 for the side arms. 
+It is possible to set environment variables to bypass this step but in order to find the correct ports 
+initially, you can run the following, and update the index values above accordingly or in the launch file.
+
+```bash
+sudo apt update
+sudo apt install v4l-utils
+v4l2-ctl --list-devices
+# Rerun this last command with and without the cameras plugged in to determine which camera is which 
+```
+
+
+### Single Side Arm Testing
+
+```bash
+# Left arm only, simulation
+ros2 launch parachute_coordinator full_system.launch.py \
+    sim:=true enable_right:=false vision_test:=true
+
+# Right arm only, hardware
+ros2 launch parachute_coordinator full_system.launch.py \
+    sim:=false enable_left:=false
+```
+
+### Operator GUI
+
+```bash
+ros2 run parachute_gui operator_console
+```
 
 ---
 
-## 11. File Locations
+## Launch Files
+
+| Launch File | Description |
+|-------------|-------------|
+| `full_system.launch.py` | Complete system: dual arms, main arm, vision, state machine |
+| `state_machine_demo.launch.py` | Single side arm + state machine (legacy) |
+| `full_stow_demo.launch.py` | Single-loop stow demonstration |
+| `dual_arm_test.launch.py` | Dual arm testing without coordinator |
+| `dual_side_arm.launch.py` | Both side arms, no main arm |
+
+### Key Launch Arguments
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `sim` | `true` | Simulation mode (no hardware) |
+| `enable_main_arm` | `true` | Enable WidowX-200 |
+| `enable_left` | `true` | Enable left side arm (V1) |
+| `enable_right` | `true` | Enable right side arm (V2) |
+| `vision_test` | `false` | Use simulated loop positions |
+| `use_real_camera` | `false` | Enable side cameras with YOLO |
+| `enable_top_cam` | `false` | Enable top camera for loop state |
+| `enable_coordinator` | `true` | Enable state machine |
+
+---
+
+## Control Commands
+
+After launching, control the system via `/stow/command`:
+
+```bash
+# Start stowing
+ros2 topic pub --once /stow/command std_msgs/String "data: start"
+
+# Pause/Resume
+ros2 topic pub --once /stow/command std_msgs/String "data: pause"
+ros2 topic pub --once /stow/command std_msgs/String "data: resume"
+
+# Error recovery
+ros2 topic pub --once /stow/command std_msgs/String "data: retry"
+ros2 topic pub --once /stow/command std_msgs/String "data: skip"
+ros2 topic pub --once /stow/command std_msgs/String "data: abort"
+
+# Change motion pattern
+ros2 topic pub --once /stow/command std_msgs/String "data: pattern:square_stow"
 ```
-parachute_packing_ws/
-├── src/
-│   ├── parachute_interfaces/       # Custom messages/services/actions
-│   ├── parachute_perception/       # Loop detection and selection
-│   ├── side_arm_control/           # ESP32 hook arm control
-│   ├── main_arm_control/           # WidowX-200 control
-│   └── parachute_coordinator/      # High-level orchestration
-├── build/                          # Build artifacts
-├── install/                        # Installed packages
-└── log/                           # Build logs
 
-12. Future Enhancements
+---
 
-Integration with MoveIt for advanced motion planning
-Multi-camera perception for improved accuracy
-Machine learning for loop detection robustness
-Real-time trajectory adaptation
-Web-based monitoring interface
-Automated error recovery strategies
+## Package Structure
 
+```
+src/
+├── parachute_coordinator/     # State machine and system orchestration
+├── parachute_perception/      # Loop detection, target selection, sensor fusion
+├── parachute_interfaces/      # ROS 2 messages, services, actions
+├── parachute_gui/             # Operator console (PyQt5)
+├── main_arm_control/          # WidowX-200 control and motion planning
+├── side_arm_control/          # Side arm interface and visualization
+├── side_arm_motor_control/    # ESP32 serial bridge
+├── yolo_detect_ros/           # Side camera YOLO detection
+├── top_cam_loop_state/        # Top camera loop state classification
+├── top_cam_yolo/              # YOLO training for top camera
+└── widowx_custom_perception/  # Color segmentation (legacy)
+```
 
-Institution: Worcester Polytechnic Institute
-Project Type: Major Qualifying Project (MQP)
-Academic Year: 2025-2026
+---
+
+## Hardware Configuration
+
+### Serial Ports
+
+Side arms connect via USB serial. Default ports:
+- Left arm: `/dev/ttyUSB0`
+- Right arm: `/dev/ttyUSB1`
+
+Override with launch arguments:
+```bash
+ros2 launch parachute_coordinator full_system.launch.py \
+    left_serial_port:=/dev/ttyACM0
+```
+
+Note: Using the USB hub bought by the 2025-2026 MQP, there are some particularities to the connections.
+Based on the serial bandwith of the USB hub, only connect 1 camera to the hub at a time, it can also hold the 
+connection to the ESP32s and the Main arm port. With the processor management, it can be done but sometimes causes
+latency issues, so if you run into issues, double check your port bandwith. 
+
+### Camera Devices
+
+| Camera | Default Device | Launch Argument |
+|--------|----------------|-----------------|
+| Left side | `/dev/video8` | `left_camera_index` |
+| Right side | `/dev/video4` | `right_camera_index` |
+| Top | `/dev/video6` | `top_cam_device` |
+
+---
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [docs/commands.md](docs/commands.md) | Complete launch command reference |
+| [docs/SYSTEM_CATALOG.md](docs/SYSTEM_CATALOG.md) | All nodes, topics, and services |
+| [docs/STATE_MACHINE_PLAN.md](docs/STATE_MACHINE_PLAN.md) | Coordinator state machine design |
+| [docs/SIDE_ARM_MOTION_PLAN.md](docs/SIDE_ARM_MOTION_PLAN.md) | Side arm motion planning |
+| [docs/ARCHITECTURE_EN.md](docs/ARCHITECTURE_EN.md) | Detailed system architecture |
+| [src/parachute_gui/README.md](src/parachute_gui/README.md) | Operator GUI usage |
+
+---
+
+## Dependencies
+
+### requirements.txt
+```
+numpy==1.26.4
+opencv-python==4.9.0.80
+transforms3d
+scipy
+vcstool
+```
+
+### interbotix.repos
+
+Interbotix ROS 2 packages for WidowX-200 control:
+- `interbotix_ros_core`
+- `interbotix_ros_manipulators`
+- `interbotix_ros_toolboxes`
+- `moveit_visual_tools`
+
+Usage:
+```bash
+vcs import src < interbotix.repos
+```
+
+---
+
+## Troubleshooting
+
+### Rebuild after changes
+```bash
+colcon build --packages-select parachute_coordinator side_arm_control
+source install/setup.bash
+```
+
+### Check running nodes
+```bash
+ros2 node list
+```
+
+### View TF tree
+```bash
+ros2 run tf2_tools view_frames
+```
+
+### Check coordinator state
+```bash
+ros2 topic echo /coordinator/state
+```
+
+---
+
+## License
+
+Worcester Polytechnic Institute - Major Qualifying Project
+
+## Team
+
+MQP 2025-2026 - Parachute Packing Automation and Inspection
+
