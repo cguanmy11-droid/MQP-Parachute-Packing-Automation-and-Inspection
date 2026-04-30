@@ -30,6 +30,7 @@ from parachute_gui.widgets.control_widgets import LoopSelectorWidget, ArmControl
 from parachute_gui.widgets.loop_grid_widget import LoopPerceptionPanel
 # from parachute_gui.widgets.camera_widget import CameraWidget
 from parachute_gui.manual_jog_dialog import ManualJogDialog
+from parachute_gui.handoff_confirm_dialog import HandoffConfirmDialog
 
 # Max log lines shown
 MAX_LOG_LINES = 200
@@ -40,6 +41,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._bridge = ros_bridge
         self._log_lines = []
+        self._confirm_dialog = None
 
         self.setWindowTitle('Parachute Packing Operator Console')
         self.resize(1600, 800)
@@ -215,6 +217,7 @@ class MainWindow(QMainWindow):
         self._bridge.current_arm_changed.connect(self._on_arm_changed)
         self._bridge.left_arm_status.connect(self._arm_widget.update_arm_status)
         self._bridge.right_arm_status.connect(self._arm_widget.update_arm_status)
+        self._bridge.target_loop_updated.connect(self._on_target_loop_updated)
 
         # Camera feeds
         # self._bridge.side_camera_image.connect(self._side_camera.update_image)
@@ -234,6 +237,16 @@ class MainWindow(QMainWindow):
         self._state_widget.set_state(state)
         self._arm_widget.update_state(state)
         self._log_message(f'State → {state}', color='#00b4d8')
+
+        # Show / hide the handoff confirmation popup based on state
+        if 'AWAITING_CONFIRM' in state:
+            if self._confirm_dialog is None:
+                self._show_handoff_confirm()
+        else:
+            # Close any open dialog if state moved on
+            if self._confirm_dialog is not None:
+                self._confirm_dialog.close()
+                self._confirm_dialog = None
 
     def _on_arm_changed(self, arm: str):
         self._arm_badge.setText(f'ARM: {arm.upper()}')
@@ -282,6 +295,40 @@ class MainWindow(QMainWindow):
     def _open_jog_dialog(self):
         dialog = ManualJogDialog(self._bridge._node, arm_ns='side_arm_right', parent=self)
         dialog.show()
+    
+    def _show_handoff_confirm(self):
+        """Show the handoff confirmation dialog; button clicks publish commands."""
+        # Grab current context from the arm badge (crude but simple)
+        arm_text = self._arm_badge.text().replace('ARM: ', '').lower()
+
+        # Loop ID: you don't currently track this in MainWindow, so use '?'.
+        # If you want real IDs, add a signal from ROSBridge or read from
+        # self._perception_panel's current target.
+        loop_id = getattr(self, '_current_target_loop_id', '?')
+
+        self._confirm_dialog = HandoffConfirmDialog(
+            arm=arm_text, loop_id=loop_id, parent=self
+        )
+        self._confirm_dialog.confirm_clicked.connect(self._on_handoff_confirm)
+        self._confirm_dialog.retry_clicked.connect(self._on_handoff_retry)
+        self._confirm_dialog.finished.connect(self._on_confirm_dialog_closed)
+        self._confirm_dialog.show()  # non-blocking so ROS callbacks keep running
+        self._log_message('Waiting for operator handoff confirmation...', color='#ffaa00')
+
+    def _on_handoff_confirm(self):
+        self._bridge.send_command('confirm')
+        self._log_message('Operator: HANDOFF CONFIRMED', color='#69f000')
+
+    def _on_handoff_retry(self):
+        self._bridge.send_command('retry')
+        self._log_message('Operator: RETRY requested', color='#e94560')
+
+    def _on_confirm_dialog_closed(self, _result):
+        self._confirm_dialog = None
+    
+    def _on_target_loop_updated(self, loop):
+        # Assuming the emitted object has a header.frame_id like 'L1', 'R2'
+        self._current_target_loop_id = getattr(loop.header, 'frame_id', '?')
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

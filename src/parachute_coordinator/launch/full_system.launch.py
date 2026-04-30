@@ -151,8 +151,8 @@ def create_side_arm_nodes(arm_name: str, config_path: str, sim_mode: bool):
             'servo_timeout_sec': interface_cfg.get('servo_timeout_sec', 10.0),
             'servo_goal_x': interface_cfg.get('servo_goal_x', 320.0),
             'servo_goal_y': interface_cfg.get('servo_goal_y', 238.0),
-            'servo_min_speed': interface_cfg.get('servo_min_speed', 400),
-            'servo_max_speed': interface_cfg.get('servo_max_speed', 1100),
+            'servo_min_speed': interface_cfg.get('servo_min_speed', 500),
+            'servo_max_speed': interface_cfg.get('servo_max_speed', 2000),
             'image_width_px': interface_cfg.get('image_width_px', 640),
         }],
         output='screen',
@@ -616,6 +616,7 @@ def launch_setup(context, *args, **kwargs):
                     'enable_right_arm': enable_right,
                     'top_cam_continuous': LaunchConfiguration('top_cam_continuous'),
                     'skip_verify': LaunchConfiguration('skip_verify'),
+                    'enable_main_arm': LaunchConfiguration('enable_main_arm')
                 }]
             )]
         ))

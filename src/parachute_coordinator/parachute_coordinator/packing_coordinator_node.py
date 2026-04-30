@@ -84,6 +84,7 @@ class PackingCoordinatorNode(Node):
         # Top camera mode - if True, skip explicit capture calls (camera streams continuously)
         self.declare_parameter('top_cam_continuous', False)
         self.declare_parameter('skip_verify', False)
+        self.declare_parameter('enable_main_arm', True)
 
         self.test_mode = self.get_parameter('test_mode').value
         self.current_pattern = self.get_parameter('stow_pattern').value
@@ -94,6 +95,7 @@ class PackingCoordinatorNode(Node):
         self.dual_arm_mode = self.enable_left_arm and self.enable_right_arm
         self.top_cam_continuous = self.get_parameter('top_cam_continuous').value
         self.skip_verify = self.get_parameter('skip_verify').value
+        self.enable_main_arm = self.get_parameter('enable_main_arm').value
 
         # ==================== STATE MACHINE ====================
         config_path = os.path.join(
@@ -146,6 +148,9 @@ class PackingCoordinatorNode(Node):
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
+        self._awaiting_operator_confirm = False
+        self._pending_confirm_event = None
+
         # Dual arm tracking - alternates between 'left' and 'right'
         # Start with whichever arm is enabled (prefer left if both)
         if self.enable_left_arm:
@@ -163,6 +168,19 @@ class PackingCoordinatorNode(Node):
         self._has_homed_once = False  # Only home once at startup
         self._homing_timer = None
         self._homing_start_time = None
+
+        self._left_hole_orientation = {
+            'x': 0.02055928805249521,
+            'y': 0.6625853327516731,
+            'z': 0.0184659342163154,
+            'w': 0.7484764537182501,
+        }
+        self._right_hole_orientation = {
+            'x': 0.021,
+            'y': 0.659,
+            'z': -0.019,
+            'w': 0.752,
+        }
 
         # ==================== CALLBACK GROUP ====================
         self._cb_group = ReentrantCallbackGroup()
@@ -304,6 +322,9 @@ class PackingCoordinatorNode(Node):
         # Current arm publisher (for GUI)
         self.current_arm_pub = self.create_publisher(String, '/coordinator/current_arm', 10)
         self.status_timer = self.create_timer(1.0, self._publish_status)
+        # Per-side publishers 
+        self.left_hole_seq_pub = self.create_publisher(Pose, '/main_arm/left_hole_center_sequence', 10)
+        self.right_hole_seq_pub = self.create_publisher(Pose, '/main_arm/right_hole_center_sequence', 10)
 
         # ==================== SERVICE CHECK ====================
         self._check_services()
@@ -473,6 +494,51 @@ class PackingCoordinatorNode(Node):
                 f'Available patterns: {self.pattern_manager.list_patterns()}'
             )
             return
+        
+        if cmd == 'confirm':
+            if self._awaiting_operator_confirm:
+                event = self._pending_confirm_event
+                self._awaiting_operator_confirm = False
+                self._pending_confirm_event = None
+                self.get_logger().info(f'[CONFIRM] Operator confirmed — firing "{event}"')
+                self._transition(event)
+            else:
+                self.get_logger().warn('No confirmation pending — ignoring "confirm"')
+            return
+
+        if cmd == 'retry':
+            if self._awaiting_operator_confirm:
+                self._awaiting_operator_confirm = False
+                self._pending_confirm_event = None
+                self.get_logger().info('[CONFIRM] Operator requested retry — re-entering HANDOFF')
+                # Re-fire on_enter_handoff
+                self.on_enter_handoff(self.sm.state, 'operator_retry')
+            else:
+                self.get_logger().warn('No confirmation pending — ignoring "retry"')
+            return
+        
+        if cmd.startswith('jumpto:'):
+            target_state_name = cmd.split(':', 1)[1].upper()
+            try:
+                target = StowState[target_state_name]
+            except KeyError:
+                self.get_logger().error(
+                    f'Unknown state: {target_state_name}. '
+                    f'Valid: {[s.name for s in StowState]}'
+                )
+                return
+
+            old = self.sm.state_name
+            self.sm.current_state = self.sm._states[target.name]
+            self.get_logger().warn(f'[JUMP] Forced transition: {old} → {target.name}')
+            self.state_pub.publish(String(data=target.name))
+
+            # Fire the on_enter handler for the new state
+            handler_name = f'on_enter_{target.name.lower()}'
+            handler = getattr(self, handler_name, None)
+            if handler:
+                handler(target, 'forced_jump')
+            return
 
         # State-specific commands — forward as events to the state machine
         if self.sm.can_transition(cmd):
@@ -502,19 +568,33 @@ class PackingCoordinatorNode(Node):
         self._update_homing_status()
 
     def _main_arm_status_callback(self, msg: String):
-        """Handle main arm planner status updates during HANDOFF."""
         status = msg.data
-
-        # Only process if we're in HANDOFF state waiting for main arm
         if self.sm.state != StowState.HANDOFF:
             return
 
-        if 'hole_seq: done' in status:
-            self.get_logger().info('[HANDOFF] Main arm hole sequence complete')
-            self._transition('trajectory_complete')
-        elif 'hole_seq: error' in status:
+        if 'hole_seq' in status and 'done' in status:
+            self.get_logger().info(f'[HANDOFF] Main arm: {status}')
+            # NEW: pause for operator confirmation instead of transitioning
+            self._request_operator_confirm('trajectory_complete')
+        elif 'hole_seq' in status and 'error' in status:
             self.get_logger().error(f'[HANDOFF] Main arm failed: {status}')
             self._enter_error('trajectory_failure', f'Main arm sequence failed: {status}')
+
+
+    def _request_operator_confirm(self, event_on_confirm: str):
+        """Wait for operator to send 'confirm' or 'retry' via /stow/command."""
+        self._awaiting_operator_confirm = True
+        self._pending_confirm_event = event_on_confirm
+        self.get_logger().info(
+            '=' * 50
+        )
+        self.get_logger().info(
+            '[HANDOFF] Waiting for operator confirmation. '
+            'Send "confirm" to continue or "retry" to re-run HANDOFF.'
+        )
+        self.get_logger().info('=' * 50)
+        # Publish a dedicated status the GUI can listen for
+        self.state_pub.publish(String(data=f'{self.sm.state_name} (AWAITING_CONFIRM)'))
 
     def _update_homing_status(self):
         """Update overall homing status based on enabled arms."""
@@ -902,39 +982,23 @@ class PackingCoordinatorNode(Node):
         # Pause side camera during top camera verification to free GPU resources
         self._set_side_camera_enabled(False)
 
-        # SKIP VERIFY MODE — trust the servo result, publish a placeholder target, move on
+        # SKIP VERIFY MODE — skip hook position check, still use perception
         if self.get_parameter('skip_verify').value:
-            self.get_logger().warn(
-                '[AT_LOOP] skip_verify=true — accepting SERVO result blindly'
-            )
-            # Populate a placeholder target loop from the current hook position
-            # so HANDOFF knows where the hole center is
-            if self.current_target_loop is None:
-                try:
-                    hook_frame = f'{self.current_arm}_hook_link'
-                    tf = self._tf_buffer.lookup_transform(
-                        'world', hook_frame,
-                        rclpy.time.Time(),
-                        timeout=rclpy.duration.Duration(seconds=1.0),
-                    )
-                    placeholder = DetectedLoop()
-                    placeholder.header.frame_id = 'world'
-                    placeholder.pose.header.frame_id = 'world'
-                    placeholder.pose.pose.position.x = tf.transform.translation.x
-                    placeholder.pose.pose.position.y = tf.transform.translation.y
-                    placeholder.pose.pose.position.z = tf.transform.translation.z
-                    placeholder.pose.pose.orientation.w = 1.0
-                    self.current_target_loop = placeholder
-                    self.get_logger().info(
-                        f'[AT_LOOP] Using hook position as hole center: '
-                        f'({placeholder.pose.pose.position.x:.3f}, '
-                        f'{placeholder.pose.pose.position.y:.3f}, '
-                        f'{placeholder.pose.pose.position.z:.3f})'
-                    )
-                except Exception as e:
-                    self.get_logger().warn(f'[AT_LOOP] Could not get hook pose: {e}')
-            self._transition('positioned')
-            return
+            if self.current_target_loop is not None:
+                pos = self.current_target_loop.pose.pose.position
+                self.get_logger().info(
+                    f'[AT_LOOP] skip_verify=true — using target {self.current_target_string_id} '
+                    f'from selector: ({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f})'
+                )
+                self._transition('positioned')
+                return
+            else:
+                self.get_logger().warn(
+                    '[AT_LOOP] skip_verify=true but no current_target_loop — '
+                    'requesting from selector'
+                )
+                self._request_next_target()  # will populate current_target_loop and transition
+                return
 
         hook_frame = f'{self.current_arm}_hook_link'
 
@@ -1162,7 +1226,7 @@ class PackingCoordinatorNode(Node):
         # Send visual servo goal
         goal = VisualServo.Goal()
         goal.arm_side = self.current_arm
-        goal.timeout_sec = 60.0  # Configurable
+        goal.timeout_sec = 75.0  # Configurable
         goal.goal_x_px = 368.0  # Use defaults from config
         goal.goal_y_px = 137.0
 
@@ -1339,7 +1403,7 @@ class PackingCoordinatorNode(Node):
         future.add_done_callback(self._on_pre_stow_rotate_done)
     
     def _on_pre_stow_rotate_done(self, future):
-        """After rotating hook, execute main arm hole center sequence."""
+        """After rotating hook, move Y up, then run main arm."""
         try:
             response = future.result()
             if not response.success:
@@ -1349,14 +1413,72 @@ class PackingCoordinatorNode(Node):
             self._enter_error('trajectory_failure', f'Rotation error: {e}')
             return
 
-        # Use the current loop's pose as hole center for main arm sequence
-        if self.current_target_loop is None:
-            self.get_logger().warn('[HANDOFF] No target loop, skipping main arm')
-            self._transition('trajectory_complete')
+        # NEW: vertical motion before handoff
+        self._do_pre_handoff_vertical()
+
+
+    def _do_pre_handoff_vertical(self):
+        """Move Y axis (stepper 1) up before handoff."""
+        steps = -8000     # up 
+        speed = 1500
+
+        self.get_logger().info(
+            f'[HANDOFF] Moving {self.current_arm} Y axis {steps} steps @ {speed}...'
+        )
+        cmd = String(data=f'STEPPER_MOVE,1,{steps},{speed}')
+        self.get_current_cmd_pub().publish(cmd)
+
+        # Wait for the motion to complete before publishing hole-center pose.
+        # Duration = steps/speed plus a small settle buffer.
+        wait_sec = (abs(steps) / speed) + 0.3
+        self._start_oneshot_timer(wait_sec, self._pre_handoff_vertical_done)
+
+
+    def _pre_handoff_vertical_done(self):
+        """After vertical motion settles, publish hole-center to main arm."""
+        if self.current_target_loop is None or not self.enable_main_arm:
+            reason = 'main arm disabled' if not self.enable_main_arm else 'no target loop'
+            self.get_logger().info(
+                f'[HANDOFF] Skipping main arm ({reason}) — requesting operator confirm'
+            )
+            self._request_operator_confirm('trajectory_complete')
             return
 
-        self.get_logger().info('[HANDOFF] Hook rotated — triggering main arm hole_center_sequence...')
-        self.hole_seq_pub.publish(self.current_target_loop.pose.pose)
+        # Build and publish hole-center pose (existing logic)
+        hole_pose = Pose()
+        hole_pose.position = self.current_target_loop.pose.pose.position
+        hole_pose.position.z = 0.060
+
+        if self.current_arm == 'left':
+            q = self._left_hole_orientation
+            pub = self.left_hole_seq_pub
+            topic_name = 'left_hole_center_sequence'
+        else:
+            q = self._right_hole_orientation
+            pub = self.right_hole_seq_pub
+            topic_name = 'right_hole_center_sequence'
+
+        hole_pose.orientation.x = q['x']
+        hole_pose.orientation.y = q['y']
+        hole_pose.orientation.z = q['z']
+        hole_pose.orientation.w = q['w']
+
+        self.get_logger().info(
+            f'[HANDOFF] Publishing to /main_arm/{topic_name}: '
+            f'pos=({hole_pose.position.x:.3f}, {hole_pose.position.y:.3f}, '
+            f'{hole_pose.position.z:.3f}), '
+            f'quat=({q["x"]:.3f}, {q["y"]:.3f}, {q["z"]:.3f}, {q["w"]:.3f})'
+        )
+        pub.publish(hole_pose)
+
+
+    def _start_oneshot_timer(self, delay_sec: float, callback):
+        """ROS 2 timers are always repeating; cancel after first fire."""
+        timer = None
+        def _wrapper():
+            timer.cancel()
+            callback()
+        timer = self.create_timer(delay_sec, _wrapper)
 
     # def _on_pre_stow_rotate_done(self, future):
     #     """After rotating hook, execute the stow trajectory."""
@@ -1462,7 +1584,7 @@ class PackingCoordinatorNode(Node):
 
 
     def _on_pre_retract_rotate_done(self, future):
-        """After hook is rotated down, call retract_z."""
+        """After hook rotated down, do vertical motion, then retract Z."""
         try:
             response = future.result()
             if not response.success:
@@ -1474,7 +1596,28 @@ class PackingCoordinatorNode(Node):
             self._enter_error('excessive_force', f'Pre-retract rotation error: {e}')
             return
 
-        self.get_logger().info('[RETRACT] Hook rotated down — retracting Z axis...')
+        self.get_logger().info('[RETRACT] Hook rotated — doing post-handoff vertical motion...')
+        self._do_post_handoff_vertical()
+
+
+    def _do_post_handoff_vertical(self):
+        """Move Y axis (stepper 1) to undo the pre-handoff vertical motion."""
+        steps = 8000      # down
+        speed = 1500
+
+        self.get_logger().info(
+            f'[RETRACT] Moving {self.current_arm} Y axis {steps} steps @ {speed}...'
+        )
+        cmd = String(data=f'STEPPER_MOVE,1,{steps},{speed}')
+        self.get_current_cmd_pub().publish(cmd)
+
+        wait_sec = (abs(steps) / speed) + 0.3
+        self._start_oneshot_timer(wait_sec, self._post_handoff_vertical_done)
+
+
+    def _post_handoff_vertical_done(self):
+        """After vertical motion settles, retract Z axis."""
+        self.get_logger().info('[RETRACT] Vertical motion done — retracting Z axis...')
         self._do_retract_z()
 
 
@@ -1529,12 +1672,48 @@ class PackingCoordinatorNode(Node):
         self._transition('retracted')
 
     def on_enter_release(self, state: StowState, event: str):
-        """Entered RELEASE — release line, then verify and prepare for next loop."""
-        self.get_logger().info(f'[RELEASE] {self.current_arm} arm: Releasing line...')
+        """Entered RELEASE — rotate hook down, then release line."""
+        self.get_logger().info(
+            f'[RELEASE] Rotating {self.current_arm} hook down before release...'
+        )
 
+        rotate_client = self.get_current_rotate_client()
+        if not rotate_client.service_is_ready():
+            self._enter_error(
+                'timeout', f'{self.current_arm} rotate service not available'
+            )
+            return
+
+        request = RotateHook.Request()
+        request.angle_degrees = 90.0  # down
+
+        future = rotate_client.call_async(request)
+        future.add_done_callback(self._on_pre_release_rotate_done)
+
+
+    def _on_pre_release_rotate_done(self, future):
+        """After hook is down, call release_hook."""
+        try:
+            response = future.result()
+            if not response.success:
+                self.get_logger().warn(
+                    f'[RELEASE] Pre-release rotation issue: {response.message} — '
+                    f'continuing anyway'
+                )
+        except Exception as e:
+            self.get_logger().warn(
+                f'[RELEASE] Pre-release rotation error: {e} — continuing anyway'
+            )
+
+        self.get_logger().info('[RELEASE] Hook down — releasing line...')
+        self._do_release()
+
+
+    def _do_release(self):
+        """Call the release_hook service."""
         service_name = f'/side_arm_{self.current_arm}/release_hook'
         client = self.create_client(Trigger, service_name)
-        
+
         if not client.wait_for_service(timeout_sec=5.0):
             self._enter_error('timeout', f'{service_name} unavailable')
             return

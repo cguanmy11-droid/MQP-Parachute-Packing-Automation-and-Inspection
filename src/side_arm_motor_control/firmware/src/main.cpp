@@ -59,6 +59,21 @@ bool limit1Latched = false;
 bool limit2Latched = false;
 bool limit3Latched = false;
 
+// Add debouncing to limit noise on limit switches
+constexpr uint8_t LIMIT_DEBOUNCE_COUNT = 5;   // must see the same state this many times
+constexpr unsigned long LIMIT_POLL_INTERVAL_MS = 2;  // minimum time between samples
+
+struct LimitDebounce {
+  bool state;         // confirmed/debounced state
+  uint8_t pressed_count;
+  uint8_t released_count;
+};
+
+LimitDebounce debounce1 = {false, 0, 0};
+LimitDebounce debounce2 = {false, 0, 0};
+LimitDebounce debounce3 = {false, 0, 0};
+unsigned long lastLimitPoll = 0;
+
 String serialBuffer;
 
 struct LimitStates {
@@ -67,12 +82,51 @@ struct LimitStates {
   bool sw3;
 };
 
+// OLD VERSION - without debounce
+// LimitStates readLimitStates() {
+//   return {
+//       digitalRead(LIMIT_SW_1) == LOW,
+//       digitalRead(LIMIT_SW_2) == LOW,
+//       digitalRead(LIMIT_SW_3) == LOW,
+//   };
+// }
+
+void updateLimitDebounce(LimitDebounce& deb, bool raw) {
+  if (raw) {
+    deb.released_count = 0;
+    if (deb.pressed_count < LIMIT_DEBOUNCE_COUNT) {
+      deb.pressed_count++;
+      if (deb.pressed_count >= LIMIT_DEBOUNCE_COUNT) {
+        deb.state = true;
+      }
+    }
+  } else {
+    deb.pressed_count = 0;
+    if (deb.released_count < LIMIT_DEBOUNCE_COUNT) {
+      deb.released_count++;
+      if (deb.released_count >= LIMIT_DEBOUNCE_COUNT) {
+        deb.state = false;
+      }
+    }
+  }
+}
+
 LimitStates readLimitStates() {
-  return {
-      digitalRead(LIMIT_SW_1) == LOW,
-      digitalRead(LIMIT_SW_2) == LOW,
-      digitalRead(LIMIT_SW_3) == LOW,
-  };
+  const unsigned long now = millis();
+  if (now - lastLimitPoll >= LIMIT_POLL_INTERVAL_MS) {
+    lastLimitPoll = now;
+
+    // Raw reads (LOW = pressed, because INPUT_PULLUP)
+    const bool raw1 = (digitalRead(LIMIT_SW_1) == LOW);
+    const bool raw2 = (digitalRead(LIMIT_SW_2) == LOW);
+    const bool raw3 = (digitalRead(LIMIT_SW_3) == LOW);
+
+    updateLimitDebounce(debounce1, raw1);
+    updateLimitDebounce(debounce2, raw2);
+    updateLimitDebounce(debounce3, raw3);
+  }
+
+  return {debounce1.state, debounce2.state, debounce3.state};
 }
 
 // ===== SERVO HELPER (added from File 1) =====

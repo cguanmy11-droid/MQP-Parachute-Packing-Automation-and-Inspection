@@ -573,10 +573,10 @@ class SideArmInterfaceNode(Node):
         feedback = ReleaseHook.Feedback()
 
         # Use defaults if not specified
-        pull_steps = request.pull_steps if request.pull_steps > 0 else 10000
-        pull_speed = request.pull_speed if request.pull_speed > 0 else 1500
-        dc_speed = request.dc_speed_percent if request.dc_speed_percent > 0 else 50
-        dc_duration = request.dc_duration_sec if request.dc_duration_sec > 0 else 3.0
+        pull_steps = request.pull_steps if request.pull_steps > 0 else 12000
+        pull_speed = request.pull_speed if request.pull_speed > 0 else 1200
+        dc_speed = request.dc_speed_percent if request.dc_speed_percent > 0 else 75
+        dc_duration = request.dc_duration_sec if request.dc_duration_sec > 0 else 6.0
 
         self.get_logger().info(
             f'[RELEASE] Starting: pull={pull_steps} steps @ {pull_speed}, '
@@ -1040,7 +1040,7 @@ class SideArmInterfaceNode(Node):
         # Move up 10k steps at 1500 speed and DC forward at 75% effort
         self._send_command('STEPPER_MOVE,1,-10000,1500')
         self._send_command('DC_SPEED,-75')
-        time.sleep(7.0)  # Wait for move to complete
+        time.sleep(13.0)  # Wait for move to complete
         
         self.get_logger().info('[RELEASE] Running DC motor forward to release line...')
         
