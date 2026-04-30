@@ -45,14 +45,14 @@ class DetectionSimulatorNode(Node):
         self.declare_parameter('min_detection_range', 0.02)    # meters
 
         # Detection simulation parameters
-        self.declare_parameter('detection_noise_stddev', 0.003)  # meters
+        self.declare_parameter('detection_noise_stddev', 0.00005)  # meters
         self.declare_parameter('confidence_base', 0.90)
         self.declare_parameter('confidence_noise', 0.05)
         self.declare_parameter('false_negative_rate', 0.0)  # Probability of missing a visible loop
 
         # Debug parameters
         self.declare_parameter('debug_bypass_fov', False)  # Bypass FOV/range checks for debugging
-        self.declare_parameter('debug_verbose', True)  # Print verbose debug info
+        self.declare_parameter('debug_verbose', False)  # Print verbose debug info
 
         # Publishing rate
         self.declare_parameter('publish_rate', 5.0)  # Hz
@@ -221,7 +221,8 @@ class DetectionSimulatorNode(Node):
 
         # Always log detection status for debugging
         if detected_msg.total_count > 0:
-            self.get_logger().info(f'Published {detected_msg.total_count} simulated detections')
+            # self.get_logger().info(f'Published {detected_msg.total_count} simulated detections')
+            pass
         else:
             self.get_logger().debug(f'No loops in camera FOV (checked {len(gt.positions)} ground truth loops)')
 

@@ -12,7 +12,7 @@ from rclpy.node import Node
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point, PointStamped
 from std_msgs.msg import ColorRGBA
-from parachute_interfaces.msg import DetectedLoops
+from parachute_interfaces.msg import DetectedLoops, DetectedLoop
 import tf2_ros
 from tf2_geometry_msgs import do_transform_point
 from builtin_interfaces.msg import Time
@@ -49,20 +49,33 @@ class LoopVisualizerNode(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         # Publisher for RViz markers
-        self.marker_pub = self.create_publisher(MarkerArray, '/detected_loop_markers', 10)
-        self.grid_pub = self.create_publisher(MarkerArray, '/camera_fov_grid', 10)
+        self.declare_parameter('markers_topic', '/detected_loop_markers')
+        self.declare_parameter('grid_topic', '/camera_fov_grid')
+
+        self.marker_pub = self.create_publisher(MarkerArray, self.get_parameter('markers_topic').value, 10)
+        self.grid_pub = self.create_publisher(MarkerArray, self.get_parameter('grid_topic').value, 10)
 
         # Subscriber for detected loops
+        self.declare_parameter('input_topic', '/detected_loops')
+        self.declare_parameter('target_topic', '/target_loop')
+
         self.loops_sub = self.create_subscription(
             DetectedLoops,
-            '/detected_loops',
+            self.get_parameter('input_topic').value,
             self.loops_callback,
+            10
+        )
+        self.target_sub = self.create_subscription(
+            DetectedLoop,
+            self.get_parameter('target_topic').value,
+            self.target_loop_callback,
             10
         )
 
         # Store last received loops for visualization
         self.current_loops = []
         self.current_loops_frame = ''
+        self.target_loop_id = None
         self.last_msg_time = self.get_clock().now()
         self._had_detections = False
 
@@ -109,6 +122,11 @@ class LoopVisualizerNode(Node):
                 tf2_ros.ExtrapolationException) as e:
             self.get_logger().debug(f'TF lookup failed: {e}')
             return point, False
+
+    def target_loop_callback(self, msg: DetectedLoop):
+        """Publish color visual markers for target loop."""
+        self.target_loop_id = msg.loop_id
+        self.get_logger().debug(f'Target loop set to: {self.target_loop_id}')
 
     def publish_markers(self):
         """Publish visualization markers for all detected loops."""
@@ -169,12 +187,12 @@ class LoopVisualizerNode(Node):
             return
 
         # Find the rightmost loop (highest X in output frame) to highlight as target
-        rightmost_idx = -1
-        max_x = float('-inf')
-        for i, (loop, pos) in enumerate(transformed_positions):
-            if pos.x > max_x:
-                max_x = pos.x
-                rightmost_idx = i
+        # rightmost_idx = -1
+        # max_x = float('-inf')
+        # for i, (loop, pos) in enumerate(transformed_positions):
+        #     if pos.x > max_x:
+        #         max_x = pos.x
+        #         rightmost_idx = i
 
         # Create sphere markers for each detected loop
         for i, (loop, pos) in enumerate(transformed_positions):
@@ -196,7 +214,7 @@ class LoopVisualizerNode(Node):
             marker.scale.z = scale * 2
 
             # Color - highlight rightmost loop as target
-            if i == rightmost_idx:
+            if self.target_loop_id is not None and i == self.target_loop_id:
                 marker.color = selected_color
             else:
                 # Adjust color based on confidence if available
@@ -372,9 +390,14 @@ class LoopVisualizerNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = LoopVisualizerNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

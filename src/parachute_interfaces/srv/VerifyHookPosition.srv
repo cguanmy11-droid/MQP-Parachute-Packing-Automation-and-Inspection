@@ -1,0 +1,9 @@
+# Check hook position matches target loop   
+string arm_side            # 'left' or 'right'
+geometry_msgs/Point hook_world_pos   # current hook position from TF
+---
+bool success               # top cam found a loop under the hook
+string matched_loop_id     # 'L1', 'R2', etc., or '' if none
+geometry_msgs/Point matched_loop_pos  # world pos of matched loop
+float64 offset_mm          # distance between hook and matched loop center
+string message

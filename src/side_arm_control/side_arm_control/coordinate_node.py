@@ -29,11 +29,13 @@ from parachute_interfaces.action import MoveToCoordinate
 class SideArmCoordinateNode(Node):
     """
     Coordinate system node that:
-    - Subscribes to /side_arm/state (raw ESP32 JSON)
-    - Publishes /side_arm/parsed_state (parsed with mm coordinates)
-    - Provides service /side_arm/move_to_position
-    - Provides action /side_arm/move_to_coordinate
-    - Publishes commands to /side_arm/command
+    - Subscribes to state (raw ESP32 JSON)
+    - Publishes parsed_state (parsed with mm coordinates)
+    - Provides service move_to_position
+    - Provides action move_to_coordinate
+    - Publishes commands to command topic
+
+    Topics use relative names for namespace support (e.g., /side_arm_left/command).
 
     Supports both hardware and simulation modes:
     - simulation_mode=false: Requires serial connection, mirrors hardware
@@ -47,19 +49,31 @@ class SideArmCoordinateNode(Node):
         self.declare_parameter('simulation_mode', False)  # Enable simulation
 
         # ========== CALIBRATION PARAMETERS (to be tuned) ==========
-        self.declare_parameter('steps_per_mm_horizontal', 80.0)   # Stepper2 - belt drive
-        self.declare_parameter('steps_per_mm_vertical', 200.0)    # Stepper1 - lead screw
-        self.declare_parameter('dc_mm_per_second', 10.0)          # DC motor travel rate
-        self.declare_parameter('dc_speed_percent', 50)            # Default DC speed
+        self.declare_parameter('steps_per_mm_horizontal', 400.0)   # Stepper2 - belt drive
+        self.declare_parameter('steps_per_mm_vertical', 400.0)    # Stepper1 - lead screw
+        self.declare_parameter('dc_mm_per_second', 6.0)          # DC motor travel rate
+        self.declare_parameter('dc_speed_percent', 75)            # Default DC speed
 
         # Speed defaults
-        self.declare_parameter('default_speed_horizontal', 800.0)  # steps/s
-        self.declare_parameter('default_speed_vertical', 400.0)    # steps/s
+        self.declare_parameter('default_speed_horizontal', 1500.0)  # steps/s
+        self.declare_parameter('default_speed_vertical', 1500.0)    # steps/s
 
         # Workspace limits (soft limits in mm)
         self.declare_parameter('max_x_mm', 300.0)
         self.declare_parameter('max_y_mm', 200.0)
         self.declare_parameter('max_z_mm', 150.0)
+
+        # Home position - where the carriage is after homing (limit switch position)
+        # V1: homes to (0, 0, 0), V2: homes to (max_x, 0, 0)
+        self.declare_parameter('home_x_mm', 0.0)
+        self.declare_parameter('home_y_mm', 0.0)
+        self.declare_parameter('home_z_mm', 0.0)
+
+        # Position invert - whether steps add or subtract from home position
+        # V1: false (steps increase position from 0), V2: true (steps decrease from max)
+        self.declare_parameter('position_invert_x', False)
+        self.declare_parameter('position_invert_y', False)
+        self.declare_parameter('position_invert_z', False)
 
         # Simulation speed (mm/s for simulated motion)
         self.declare_parameter('sim_speed_mm_per_sec', 50.0)
@@ -92,27 +106,27 @@ class SideArmCoordinateNode(Node):
         # Callback group for concurrent callbacks
         self._cb_group = ReentrantCallbackGroup()
 
-        # Publishers
-        self._cmd_pub = self.create_publisher(String, '/side_arm/command', 10)
-        self._state_pub = self.create_publisher(SideArmState, '/side_arm/parsed_state', 10)
+        # Publishers (relative topics for namespace support)
+        self._cmd_pub = self.create_publisher(String, 'command', 10)
+        self._state_pub = self.create_publisher(SideArmState, 'parsed_state', 10)
 
-        # Subscribers
+        # Subscribers (relative topics for namespace support)
         self._raw_state_sub = self.create_subscription(
-            String, '/side_arm/state', self._raw_state_callback, 10)
+            String, 'state', self._raw_state_callback, 10)
 
         # Subscribe to commands to track DC movements from any source
         self._cmd_sub = self.create_subscription(
-            String, '/side_arm/command', self._command_callback, 10)
+            String, 'command', self._command_callback, 10)
 
-        # Services
+        # Services (relative topics for namespace support)
         self._move_srv = self.create_service(
-            MoveToPosition, '/side_arm/move_to_position',
+            MoveToPosition, 'move_to_position',
             self._move_to_position_callback,
             callback_group=self._cb_group)
 
-        # Action server
+        # Action server (relative topics for namespace support)
         self._move_action = ActionServer(
-            self, MoveToCoordinate, '/side_arm/move_to_coordinate',
+            self, MoveToCoordinate, 'move_to_coordinate',
             self._move_to_coordinate_callback,
             callback_group=self._cb_group)
 
@@ -134,7 +148,7 @@ class SideArmCoordinateNode(Node):
                 f'  Simulation speed: {self.sim_speed_mm_per_sec} mm/s'
             )
             # In simulation mode, initialize as homed
-            self._is_homed = True
+            self._is_homed = False # changed from true
 
     def _load_parameters(self):
         """Load ROS parameters into instance variables."""
@@ -155,6 +169,16 @@ class SideArmCoordinateNode(Node):
         self.max_y_mm = self.get_parameter('max_y_mm').value
         self.max_z_mm = self.get_parameter('max_z_mm').value
 
+        # Home position (where carriage is after homing)
+        self.home_x_mm = self.get_parameter('home_x_mm').value
+        self.home_y_mm = self.get_parameter('home_y_mm').value
+        self.home_z_mm = self.get_parameter('home_z_mm').value
+
+        # Position invert flags
+        self.position_invert_x = self.get_parameter('position_invert_x').value
+        self.position_invert_y = self.get_parameter('position_invert_y').value
+        self.position_invert_z = self.get_parameter('position_invert_z').value
+
     def _raw_state_callback(self, msg: String):
         """Parse raw STATE JSON from ESP32."""
         data = msg.data.strip()
@@ -171,30 +195,46 @@ class SideArmCoordinateNode(Node):
             with self._state_lock:
                 self._current_state = state
 
-                # Convert step positions to mm
+                # Convert step positions to mm (relative to home position)
                 s1 = int(state.get('s1', 0))  # Vertical (stepper1)
                 s2 = int(state.get('s2', 0))  # Horizontal (stepper2)
 
-                self._position_y_mm = s1 / self.steps_per_mm_vertical
-                self._position_x_mm = s2 / self.steps_per_mm_horizontal
+                # Calculate position: home + steps (or home - steps if inverted)
+                step_x_mm = s2 / self.steps_per_mm_horizontal
+                step_y_mm = s1 / self.steps_per_mm_vertical
+
+                if self.position_invert_x:
+                    self._position_x_mm = self.home_x_mm - step_x_mm
+                else:
+                    self._position_x_mm = self.home_x_mm + step_x_mm
+
+                if self.position_invert_y:
+                    self._position_y_mm = self.home_y_mm - step_y_mm
+                else:
+                    self._position_y_mm = self.home_y_mm + step_y_mm
 
                 # Check homing status (all limits triggered and positions zeroed)
                 l1 = bool(int(state.get('l1', 0)))  # Depth limit
                 l2 = bool(int(state.get('l2', 0)))  # Horizontal limit
                 l3 = bool(int(state.get('l3', 0)))  # Vertical limit
 
-                # Reset Z position to 0 when depth limit is hit
+                # Reset Z position to home when depth limit is hit
                 if l1:
-                    self._position_z_mm = 0.0
+                    self._position_z_mm = self.home_z_mm
                     self._dc_move_start = None
                     self._dc_target_z_mm = None
-                    self._dc_start_z_mm = 0.0
+                    self._dc_start_z_mm = self.home_z_mm
                     self._dc_duration = 0.0
                     self._dc_direction = 0
 
-                # Consider homed if all positions are at zero (after limits hit)
-                if s1 == 0 and s2 == 0 and l1:
+                # Consider homed if all limit switches are triggered
+                # (step counts may not be exactly zero due to overshoot/timing)
+                if l1 and l2 and l3:
                     self._is_homed = True
+                    # Reset positions to home values when all limits hit
+                    self._position_x_mm = self.home_x_mm
+                    self._position_y_mm = self.home_y_mm
+                    self._position_z_mm = self.home_z_mm
 
         except Exception as e:
             self.get_logger().warn(f'Failed to parse state: {e}')
@@ -206,8 +246,8 @@ class SideArmCoordinateNode(Node):
             self._update_simulated_position()
 
         # If no hardware state and not in simulation mode, nothing to publish
-        if self._current_state is None and not self.simulation_mode:
-            return
+        # if self._current_state is None and not self.simulation_mode:
+        #     return
 
         with self._state_lock:
             msg = SideArmState()
@@ -233,7 +273,7 @@ class SideArmCoordinateNode(Node):
             msg.x_mm = float(self._position_x_mm)
             msg.y_mm = float(self._position_y_mm)
             msg.z_mm = float(self._position_z_mm)
-            msg.is_homed = self._is_homed or self.simulation_mode  # Always homed in sim
+            msg.is_homed = self._is_homed # or self.simulation_mode  # Always homed in sim (jk)
 
         self._state_pub.publish(msg)
 
@@ -379,9 +419,9 @@ class SideArmCoordinateNode(Node):
                     self._sim_start_x_mm = self._position_x_mm
                     self._sim_start_y_mm = self._position_y_mm
                     self._sim_start_z_mm = self._position_z_mm
-                    self._sim_target_x_mm = 0.0
-                    self._sim_target_y_mm = 0.0
-                    self._sim_target_z_mm = 0.0
+                    self._sim_target_x_mm = self.home_x_mm # change this to home position
+                    self._sim_target_y_mm = self.home_y_mm
+                    self._sim_target_z_mm = self.home_z_mm
                     self._sim_move_start = time.time()
                     self._is_homed = True
                     self.get_logger().info('[SIM] Homing all axes to (0, 0, 0)')
@@ -391,7 +431,7 @@ class SideArmCoordinateNode(Node):
                     self._sim_start_z_mm = self._position_z_mm
                     self._sim_target_x_mm = self._position_x_mm
                     self._sim_target_y_mm = self._position_y_mm
-                    self._sim_target_z_mm = 0.0
+                    self._sim_target_z_mm = self.home_z_mm
                     self._sim_move_start = time.time()
                     self.get_logger().info('[SIM] Homing Z axis')
                 elif cmd_upper == 'HOME,1':  # Stepper1 (Y)
@@ -399,7 +439,7 @@ class SideArmCoordinateNode(Node):
                     self._sim_start_y_mm = self._position_y_mm
                     self._sim_start_z_mm = self._position_z_mm
                     self._sim_target_x_mm = self._position_x_mm
-                    self._sim_target_y_mm = 0.0
+                    self._sim_target_y_mm = self.home_y_mm
                     self._sim_target_z_mm = self._position_z_mm
                     self._sim_move_start = time.time()
                     self.get_logger().info('[SIM] Homing Y axis')
@@ -407,7 +447,7 @@ class SideArmCoordinateNode(Node):
                     self._sim_start_x_mm = self._position_x_mm
                     self._sim_start_y_mm = self._position_y_mm
                     self._sim_start_z_mm = self._position_z_mm
-                    self._sim_target_x_mm = 0.0
+                    self._sim_target_x_mm = self.home_x_mm
                     self._sim_target_y_mm = self._position_y_mm
                     self._sim_target_z_mm = self._position_z_mm
                     self._sim_move_start = time.time()
@@ -533,7 +573,10 @@ class SideArmCoordinateNode(Node):
         return int(mm * self.steps_per_mm_horizontal)
 
     def _mm_to_steps_vertical(self, mm: float) -> int:
-        return int(mm * self.steps_per_mm_vertical)
+        steps = int(mm * self.steps_per_mm_vertical)
+        if self.position_invert_y:
+            steps = -steps
+        return steps
 
     def _mm_to_dc_duration(self, delta_mm: float) -> float:
         """Calculate duration in seconds to move DC motor given distance in mm."""
@@ -587,11 +630,15 @@ class SideArmCoordinateNode(Node):
                 speed_x = int(self.default_speed_horizontal * speed_scale)
                 speed_y = int(self.default_speed_vertical * speed_scale)
 
-                # Send stepper commands
+                # Send stepper commands (with delay to ensure firmware processes both)
                 if abs(steps_x) > 0:
                     self._send_command(f'STEPPER_MOVE,2,{steps_x},{speed_x}')
                     hw_time_x = abs(dx) / (speed_x / self.steps_per_mm_horizontal)
                     estimated_time = max(estimated_time, hw_time_x)
+                    time.sleep(0.05) # 50 ms delay
+
+                if abs(steps_x) > 0 and abs(steps_y) > 0:
+                    time.sleep(0.05)  # 50ms delay between commands for firmware
 
                 if abs(steps_y) > 0:
                     self._send_command(f'STEPPER_MOVE,1,{steps_y},{speed_y}')
@@ -687,11 +734,21 @@ class SideArmCoordinateNode(Node):
             steps_x = self._mm_to_steps_horizontal(dx)
             steps_y = self._mm_to_steps_vertical(dy)
 
-            # Start stepper movements
+            # Start stepper movements (with delay to ensure firmware processes both)
             if abs(steps_x) > 0:
                 self._send_command(f'STEPPER_MOVE,2,{steps_x},{speed_x}')
+            if abs(steps_x) > 0 and abs(steps_y) > 0:
+                time.sleep(0.05)  # 50ms delay between commands for firmware
             if abs(steps_y) > 0:
                 self._send_command(f'STEPPER_MOVE,1,{steps_y},{speed_y}')
+
+            # Update expected position immediately (don't wait for STATE feedback)
+            # This prevents hanging if serial bridge doesn't return state
+            with self._state_lock:
+                if abs(steps_x) > 0:
+                    self._position_x_mm = x
+                if abs(steps_y) > 0:
+                    self._position_y_mm = y
 
             # DC motor with timed stop
             if abs(dz) > 0.5:
@@ -797,7 +854,8 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

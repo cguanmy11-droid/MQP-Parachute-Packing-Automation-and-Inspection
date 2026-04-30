@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 from typing import Optional
@@ -40,9 +41,11 @@ class SideArmSerialBridge(Node):
 
         self._serial: Optional[serial.Serial] = None
         self._serial_lock = threading.Lock()
+        self._shutdown_event = threading.Event()  # Signal for clean shutdown
         self._reader_thread = threading.Thread(target=self._serial_reader, daemon=True)
         self._reader_active = threading.Event()
         self._reconnect_timer = None
+        self._state_request_timer = None
 
         self._state_pub = self.create_publisher(String, self.state_topic, 10)
         self._cmd_sub = self.create_subscription(String, self.command_topic, self._command_callback, 10)
@@ -50,7 +53,7 @@ class SideArmSerialBridge(Node):
 
         if self.auto_request_state and self.state_request_hz > 0:
             period = 1.0 / self.state_request_hz
-            self.create_timer(period, self._request_state_timer)
+            self._state_request_timer = self.create_timer(period, self._request_state_timer)
 
         self._connect_serial()
         self._reader_active.set()
@@ -99,19 +102,23 @@ class SideArmSerialBridge(Node):
                 return False
 
     def _serial_reader(self) -> None:
-        while rclpy.ok():
-            self._reader_active.wait()
+        while not self._shutdown_event.is_set() and rclpy.ok():
+            # Wait for active signal or shutdown (check every 100ms)
+            self._reader_active.wait(timeout=0.1)
+            if self._shutdown_event.is_set():
+                break
             if not self._serial:
                 time.sleep(0.1)
                 continue
             try:
                 line = self._serial.readline().decode('utf-8').strip()
             except SerialException as exc:
-                self.get_logger().error(f'Serial read failed: {exc}')
+                if not self._shutdown_event.is_set():
+                    self.get_logger().error(f'Serial read failed: {exc}')
                 self._serial = None
                 continue
 
-            if line:
+            if line and not self._shutdown_event.is_set():
                 if self.ignore_limit_switch and line.startswith("STATE"):
                     # zero out l1/l2/l3 if present
                     try:
@@ -125,7 +132,8 @@ class SideArmSerialBridge(Node):
                         pass
                 msg = String()
                 msg.data = line
-                self._state_pub.publish(msg)
+                if not self._shutdown_event.is_set() and self.context.ok():
+                    self._state_pub.publish(msg)
 
     # endregion
 
@@ -146,6 +154,35 @@ class SideArmSerialBridge(Node):
 
     # endregion
 
+    def cleanup(self) -> None:
+        """Clean shutdown of threads and resources."""
+        self.get_logger().info('Shutting down serial bridge...')
+
+        # Signal shutdown to reader thread
+        self._shutdown_event.set()
+        self._reader_active.set()  # Wake up thread if waiting
+
+        # Cancel timers
+        if self._reconnect_timer is not None:
+            self._reconnect_timer.cancel()
+        if self._state_request_timer is not None:
+            self._state_request_timer.cancel()
+
+        # Wait for reader thread to finish (with timeout)
+        if self._reader_thread.is_alive():
+            self._reader_thread.join(timeout=1.0)
+
+        # Close serial connection
+        with self._serial_lock:
+            if self._serial is not None:
+                try:
+                    self._serial.close()
+                except Exception:
+                    pass
+                self._serial = None
+
+        self.get_logger().info('Serial bridge shutdown complete')
+
 
 def main() -> None:
     rclpy.init()
@@ -155,8 +192,10 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        node.cleanup()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

@@ -1,0 +1,193 @@
+# Side Arm Configuration - Version 1
+# This file contains all parameters for the side arm system.
+# To switch arm versions, change the arm_config launch argument.
+#
+# Usage:
+#   ros2 launch parachute_coordinator dual_arm_test.launch.py arm_config:=side_arm_v1.yaml
+#   ros2 launch parachute_coordinator dual_arm_test.launch.py arm_config:=side_arm_v2.yaml
+
+# =============================================================================
+# ARM IDENTITY
+# =============================================================================
+side_arm:
+  # Identifier for this arm configuration
+  arm_id: "v1"
+  description: "Side Arm Version 1 - Original gantry configuration"
+
+  # URDF/Xacro file to use (relative to side_arm_control/urdf/)
+  urdf_file: "side_arm.urdf.xacro"
+
+  # Frame prefix for TF frames and joint names (for multi-arm setups)
+  # Examples: "" (no prefix), "left_", "right_"
+  # With prefix="left_", frames become: left_side_arm_origin, left_hook_link, etc.
+  frame_prefix: ""
+
+  # Namespace for topics/services (for multi-arm setups)
+  # Examples: "side_arm", "side_arm_left", "side_arm_right"
+  namespace: "side_arm"
+
+# =============================================================================
+# HARDWARE COMMUNICATION
+# =============================================================================
+serial_bridge:
+  # Serial port for ESP32 connection
+  # Can also be set via SIDE_ARM_PORT environment variable
+  serial_port: "/dev/ttyUSB0"
+  baud_rate: 115200
+
+  # State polling
+  state_request_hz: 10.0
+  auto_request_state: true
+
+# =============================================================================
+# MOTOR CALIBRATION
+# =============================================================================
+# These values are specific to each arm's mechanical setup
+coordinate_node:
+  # Stepper motor calibration
+  # Stepper2 (X-axis) - belt drive
+  steps_per_mm_horizontal: 300.0
+  # Stepper1 (Y-axis) - lead screw
+  steps_per_mm_vertical: 100.0
+
+  # DC motor calibration (Z-axis)
+  dc_mm_per_second: 4.0
+  dc_speed_percent: 50
+
+  # Default motion speeds (steps/sec)
+  default_speed_horizontal: 1200.0
+  default_speed_vertical: 500.0
+
+  # Simulation motion speed (mm/sec)
+  sim_speed_mm_per_sec: 50.0
+
+  # Homing position - V1 homes to origin (0, 0, 0)
+  home_x_mm: 0.0
+  home_y_mm: 0.0
+  home_z_mm: 0.0
+
+  # Position invert - V1 steps increase from 0
+  position_invert_x: false
+  position_invert_y: false
+  position_invert_z: false
+
+# =============================================================================
+# WORKSPACE LIMITS
+# =============================================================================
+# Physical travel limits in millimeters
+workspace:
+  max_x_mm: 300.0
+  max_y_mm: 200.0
+  max_z_mm: 150.0
+
+# =============================================================================
+# HOOK POSITIONING
+# =============================================================================
+# These offsets define where the hook is in side_arm_origin frame
+# when the arm carriage is at position (0, 0, 0).
+# Calibrated from: ros2 run tf2_ros tf2_echo side_arm_origin hook_link
+interface_node:
+  # TF frame name for this arm (must match prefix + "side_arm_origin")
+  # With frame_prefix="left_", this becomes "left_side_arm_origin"
+  side_arm_frame: "side_arm_origin"
+
+  # Hook offset from origin when homed (mm)
+  # Values from TF when arm is homed: (0.010, 0.210, -0.156) meters
+  hook_offset_x_mm: 10.0
+  hook_offset_y_mm: 210.0
+  hook_offset_z_mm: -156.0
+
+  # Axis inversion for coordinate mapping
+  # These control how target position maps to carriage movement:
+  #   invert=false: carriage = target - hook_offset (normal)
+  #   invert=true:  carriage = hook_offset - target (inverted)
+  #
+  # With TF rotation (roll=90°, yaw=180°), world axes remap:
+  #   World X → -Side_arm X
+  #   World Y →  Side_arm Z
+  #   World Z →  Side_arm Y
+  #
+  # Set based on physical arm direction - test and adjust if motion is backwards
+  invert_x: false  # Changed from true - was causing 340mm error
+  invert_y: false
+  invert_z: false
+
+  # Insertion parameters (mm)
+  approach_offset_z: 50.0
+  insert_depth_z: 30.0
+
+  # Vision servo parameters
+  enable_vision_servo: true
+  servo_kp_x: 1.2
+  servo_deadband_px: 5.0
+  servo_timeout_sec: 10.0
+  servo_min_speed: 400
+  servo_max_speed: 1100
+  image_width_px: 640
+
+# =============================================================================
+# VISUALIZATION
+# =============================================================================
+visualizer:
+  # Hook mesh orientation (radians)
+  roll: -1.5708
+  pitch: 0.0
+  yaw: -1.5708
+
+  # Hook mesh offset (meters)
+  offset_x: -0.01
+  offset_y: 0.009
+  offset_z: 0.07
+
+  # Mesh scale
+  scale: 0.001
+
+  # Servo rotation axis and scale
+  servo_axis: "pitch"
+  servo_scale: 0.001
+
+  # TF publishing options
+  publish_hook_tf: false
+  hook_frame_id: "side_arm_hook"
+  publish_camera_tf: false
+  camera_frame_id: "camera_frame"
+
+  # Camera offset (meters) - only used if publish_camera_tf is true
+  camera_offset_x: 0.0
+  camera_offset_y: 0.0
+  camera_offset_z: 0.05
+  camera_roll: 0.0
+  camera_pitch: 3.1416
+  camera_yaw: 0.0
+
+# =============================================================================
+# JOINT STATE PUBLISHER
+# =============================================================================
+joint_state_publisher:
+  servo_scale: 0.001
+  publish_rate: 50.0
+
+  # Test mode positions (meters)
+  test_x: 0.15
+  test_y: 0.10
+  test_z: 0.05
+  test_servo: 0.0
+
+# =============================================================================
+# TF TRANSFORM
+# =============================================================================
+# Position of side_arm_origin relative to world frame
+# This defines where the arm is mounted in the workspace
+tf_transform:
+  # Translation (meters)
+  x: 0.37
+  y: 0.41
+  z: -0.26
+  # Rotation (radians)
+  roll: 1.5708
+  pitch: 0.0
+  yaw: 3.1416
+  # Parent frame
+  parent_frame: "world"
+  # Child frame (the arm's root frame)
+  child_frame: "side_arm_origin"

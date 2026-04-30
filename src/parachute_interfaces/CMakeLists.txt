@@ -21,7 +21,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ArmStatus.msg"
   "msg/SideArmState.msg"
   "msg/LoopState.msg"
-  "msg/LoopStateArray.msg"
+  "msg/LoopStateArray.msg"  
   "srv/VerifyHookInsertion.srv"
   "srv/RequestNextTarget.srv"
   "srv/PlanToHook.srv"
@@ -29,9 +29,13 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/MoveToPosition.srv"
   "srv/MoveToWorldPose.srv"
   "srv/GetCalibratedLoops.srv"
+  "srv/CaptureLoops.srv"
+  "srv/VerifyHookPosition.srv"
   "action/InsertHook.action"
   "action/ExecuteTrajectory.action"
   "action/MoveToCoordinate.action"
+  "action/VisualServo.action"
+  "action/ReleaseHook.action"
   DEPENDENCIES geometry_msgs std_msgs action_msgs
 )
 

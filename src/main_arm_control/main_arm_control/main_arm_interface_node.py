@@ -17,7 +17,6 @@ import modern_robotics as mr
 from std_msgs.msg import String, Float32
 from interbotix_xs_modules.xs_robot.arm import InterbotixManipulatorXS
 import time
-from interbotix_xs_msgs.msg import JointSingleCommand
 
 class MainArmInterfaceNode(Node):
     def __init__(self):
@@ -72,71 +71,47 @@ class MainArmInterfaceNode(Node):
                     robot_name=robot_name,
                     moving_time=moving_time,
                     accel_time=accel_time,
+                    gripper_name=None,
                 )
                 if self.use_sim:
                     self.get_logger().info('Running in SIMULATION MODE')
-                    self.get_logger().info('Robot controlled via RViz simulation')
                 else: 
                     self.get_logger().info('Robot arm initialized successfully')
                 
-                # Now initialize using the Interbotix Node instead
-                # super().__init__('main_arm_interface_node')
-                
                 # Go to home pose on startup
                 self.bot.arm.go_to_home_pose()
-                # Gripper position control
-                self.declare_parameter('gripper_step', 0.003)    # increment per X/Y press
-                self.declare_parameter('gripper_open', 0.037)    # fully open position
-                self.declare_parameter('gripper_closed', 0.015)  # fully closed position
-
-                self.gripper_pwm = 0          # current PWM (0 = stopped)
-                self.gripper_pwm_max = 350    # max close force
-                self.gripper_pwm_step = 50    # step per X/Y press
-
                 self.current_pose_name = 'home'
             except Exception as e:
                 self.get_logger().error(f'Failed to initialize robot: {e}')
                 self.bot = None
         else:
             self.get_logger().info('Running in TEST MODE - no robot initialization')
-            # super().__init__('main_arm_interface_node')
-        
 
         # Action server for trajectory execution
         self.action_server = ActionServer(self, ExecuteTrajectory, '/main_arm/execute_trajectory', self.execute_trajectory_callback)
         
         # Subscribers for simple pose and gripper commands
         self.pose_cmd_sub = self.create_subscription(String, '/main_arm/pose_command', self.pose_command_callback, 10)
-        self.pose_cmd_sub = self.create_subscription(String, '/main_arm/gripper_command', self.gripper_command_callback, 10)
-        # self.gripper_effort_sub = self.create_subscription(Float32, '/main_arm/gripper_effort', self.gripper_effort_callback, 10)
         self.ee_increment_sub = self.create_subscription(Twist, '/main_arm/ee_increment', self.ee_increment_callback, 10)
-        # Add this subscriber for testing positions
         self.test_position_sub = self.create_subscription(Pose, '/main_arm/test_position', self.test_position_callback, 10)
-        # subscriber for points with a specific pitch
         self.target_point_sub = self.create_subscription(Point, '/main_arm/target_point', self.target_point_callback, 10)
         self.target_pitch_sub = self.create_subscription(Float32, '/main_arm/target_pitch', self.target_pitch_callback, 10)
         self.latest_target_pitch = 0.0
 
-        # Timer to process joystick commands - runs faster than the Xbox publishes
-        # so we never miss a command. Only processes if a new command is waiting.
+        # Timer to process joystick commands
         self.joy_timer = self.create_timer(0.05, self.process_joy_increment)
 
         # Publisher for arm and pose status
         self.status_publisher = self.create_publisher(ArmStatus, '/main_arm/status', 10)
         self.simple_status_publisher = self.create_publisher(String, '/main_arm/simple_status', 10)
         self.pose_publisher = self.create_publisher(Pose, '/main_arm/current_pose', 10)
-
+        
         # Publisher for trajectory waypoints visualization (MarkerArray with LINE_STRIP + spheres)
         self.waypoints_marker_pub = self.create_publisher(MarkerArray, '/main_arm/trajectory_markers', 10)
         
-        # Timer to publish status
-        self.timer = self.create_timer(1.0, self.publish_status)
-        self.gripper_pwm_pub = self.create_publisher(JointSingleCommand, '/wx200/commands/joint_single', 10)
-
         # State tracking
         self.current_state = ArmStatus.STATE_IDLE
         self.current_pose_name = 'home' if self.bot else 'unknown'
-        self.gripper_effort = 0.5  # Default gripper effort (0.0-1.0)
         self.is_moving = False
         self.error_message = ""
         
@@ -398,51 +373,6 @@ class MainArmInterfaceNode(Node):
             self.current_state = ArmStatus.STATE_ERROR
             self.error_message = str(e)
             self.get_logger().error(f'Failed to move to {command}: {e}')
-    
-    def gripper_command_callback(self, msg):
-        """Gripper control via PWM: open/close snap, inc/dec step"""
-        command = msg.data.lower().strip()
-        self.get_logger().info(f'Received gripper command: {command}')
-
-        if self.bot is None:
-            if self.test_mode:
-                self.get_logger().info(f'TEST: gripper {command}')
-            return
-
-        try:
-            if command == 'open':
-                self.bot.gripper.release()
-                self.gripper_pwm = 0
-                self.get_logger().info('Gripper OPEN (release)')
-
-            elif command == 'close':
-                self.bot.gripper.grasp()
-                self.gripper_pwm = self.gripper_pwm_max
-                self.get_logger().info('Gripper CLOSE (full grasp)')
-
-            elif command == 'inc':
-                self.gripper_pwm = max(0, self.gripper_pwm - self.gripper_pwm_step)
-                cmd = JointSingleCommand()
-                cmd.name = 'gripper'
-                cmd.cmd = float(self.gripper_pwm)
-                self.gripper_pwm_pub.publish(cmd)
-                self.get_logger().info(f'Gripper PWM: {self.gripper_pwm}')
-
-            elif command == 'dec':
-                self.gripper_pwm = min(
-                    self.gripper_pwm_max,
-                    self.gripper_pwm + self.gripper_pwm_step)
-                cmd = JointSingleCommand()
-                cmd.name = 'gripper'
-                cmd.cmd = float(self.gripper_pwm)
-                self.gripper_pwm_pub.publish(cmd)
-                self.get_logger().info(f'Gripper PWM: {self.gripper_pwm}')
-
-            else:
-                self.get_logger().warn(f'Unknown gripper command: {command}')
-
-        except Exception as e:
-            self.get_logger().error(f'Gripper command failed: {e}')
 
     def target_pitch_callback(self, msg: Float32):
         self.latest_target_pitch = float(msg.data)
@@ -609,8 +539,8 @@ class MainArmInterfaceNode(Node):
                 moving_time=self.joy_moving_time,
                 accel_time=self.joy_accel_time
             )
-            self.get_logger().info(
-                f'Joystick control active (moving_time={self.joy_moving_time}s)')
+            # self.get_logger().info(
+            #     f'Joystick control active (moving_time={self.joy_moving_time}s)')
 
 
     def process_joy_increment(self):
@@ -642,7 +572,7 @@ class MainArmInterfaceNode(Node):
                             moving_time=moving_time,
                             accel_time=accel_time
                         )
-                        self.get_logger().info('Joystick idle - restored normal timing')
+                        # self.get_logger().info('Joystick idle - restored normal timing')
             return
 
         self.latest_ee_increment = None
@@ -716,20 +646,6 @@ class MainArmInterfaceNode(Node):
             self.get_logger().warn(
                 f'Joy increment failed: {e}',
                 throttle_duration_sec=1.0)
-    
-    # def gripper_effort_callback(self, msg):
-    #     """Update gripper effort setting"""
-    #     self.gripper_effort = max(0.0, min(1.0, msg.data))
-    #     self.get_logger().info(f'Gripper effort set to: {self.gripper_effort:.2f}')
-
-    #     if self.bot is None and not self.use_sim:
-    #         self.get_logger().warn('No robot available')
-    #         return
-        
-    #     try:
-    #         self.bot.gripper.set_pressure(self.gripper_effort)
-    #     except Exception as e:
-    #         self.get_logger().error(f'Gripper command failed: {e}')
     
     # Make sure shut down is clean exit
     def shutdown(self):
@@ -889,18 +805,17 @@ class MainArmInterfaceNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = MainArmInterfaceNode()
-    
+
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info('Keyboard interrupt')
+        pass
     finally:
         node.shutdown()
         node.destroy_node()
-        try:
+        if rclpy.ok():
             rclpy.shutdown()
-        except Exception:
-            pass
+
 
 if __name__ == '__main__':
     main()

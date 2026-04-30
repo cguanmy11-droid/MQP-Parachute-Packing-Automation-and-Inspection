@@ -103,7 +103,7 @@ class LoopCalibrationNode(Node):
         # Side arm state tracking
         self.side_arm_is_homed = False
         self.side_arm_position = (0.0, 0.0, 0.0)  # x_mm, y_mm, z_mm
-stepper
+
         # ==================== SUBSCRIBERS ====================
         self.detection_sub = self.create_subscription(
             DetectedLoops,

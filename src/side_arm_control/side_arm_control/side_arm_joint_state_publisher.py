@@ -3,17 +3,20 @@
 Side Arm Joint State Publisher
 
 Bridges between side arm state messages and URDF joint states.
-Subscribes to /side_arm/parsed_state and converts to joint_states
+Subscribes to parsed_state and converts to joint_states
 for the robot_state_publisher to move the URDF.
 
 This node is agnostic to whether the state comes from real hardware
 or simulation - it just converts whatever state it receives.
 
 Joint mapping (with axis corrections for URDF):
-  - joint_x: -x_mm / 1000.0 (horizontal, prismatic, negated for URDF axis)
-  - joint_y: y_mm / 1000.0 (vertical, prismatic)
-  - joint_z: -z_mm / 1000.0 (depth, prismatic, negated for URDF orientation)
-  - joint_servo: servo_angle (rotation, revolute)
+  - {prefix}joint_x: -x_mm / 1000.0 (horizontal, prismatic, negated for URDF axis)
+  - {prefix}joint_y: y_mm / 1000.0 (vertical, prismatic)
+  - {prefix}joint_z: -z_mm / 1000.0 (depth, prismatic, negated for URDF orientation)
+  - {prefix}joint_servo: servo_angle (rotation, revolute)
+
+For dual-arm setups, use the joint_prefix parameter to prefix joint names.
+Topics use relative names for namespace support.
 """
 
 import rclpy
@@ -31,6 +34,10 @@ class SideArmJointStatePublisher(Node):
         # Parameters
         self.declare_parameter('servo_scale', 0.001)  # rad per microsecond offset
         self.declare_parameter('publish_rate', 50.0)  # Hz
+        self.declare_parameter('joint_prefix', '')    # Prefix for joint names (e.g., "left_")
+
+        # Get joint prefix for multi-arm support
+        self.joint_prefix = self.get_parameter('joint_prefix').value
 
         # State storage (current position in meters)
         self.x_m = 0.0
@@ -41,17 +48,17 @@ class SideArmJointStatePublisher(Node):
         self.last_state_time = self.get_clock().now()
         self.state_received = False
 
-        # Publisher for joint states
+        # Publisher for joint states (relative topic - will be namespaced)
         self.joint_pub = self.create_publisher(
             JointState,
-            'joint_states',  # Will be namespaced to /side_arm/joint_states
+            'joint_states',
             10
         )
 
-        # Subscriber for parsed state (works for both hardware and simulation)
+        # Subscriber for parsed state (relative topic for namespace support)
         self.state_sub = self.create_subscription(
             SideArmState,
-            '/side_arm/parsed_state',
+            'parsed_state',
             self.state_callback,
             10
         )
@@ -59,7 +66,7 @@ class SideArmJointStatePublisher(Node):
         # Subscriber for raw state (servo angle from hardware)
         self.raw_state_sub = self.create_subscription(
             String,
-            '/side_arm/state',
+            'state',
             self.raw_state_callback,
             10
         )
@@ -67,7 +74,7 @@ class SideArmJointStatePublisher(Node):
         # Subscriber for commands (to track servo in simulation mode)
         self.cmd_sub = self.create_subscription(
             String,
-            '/side_arm/command',
+            'command',
             self.command_callback,
             10
         )
@@ -76,9 +83,7 @@ class SideArmJointStatePublisher(Node):
         publish_rate = self.get_parameter('publish_rate').value
         self.timer = self.create_timer(1.0 / publish_rate, self.publish_joint_states)
 
-        self.get_logger().info('Side Arm Joint State Publisher initialized')
-        self.get_logger().info('  Subscribing to /side_arm/parsed_state')
-        self.get_logger().info('  Subscribing to /side_arm/command (for servo simulation)')
+        self.get_logger().info(f'Side Arm Joint State Publisher initialized (prefix="{self.joint_prefix}")')
         self.get_logger().info(f'  Publishing at {publish_rate} Hz')
 
     def state_callback(self, msg: SideArmState):
@@ -122,7 +127,11 @@ class SideArmJointStatePublisher(Node):
         # Create joint state message
         js = JointState()
         js.header.stamp = self.get_clock().now().to_msg()
-        js.name = ['joint_x', 'joint_y', 'joint_z', 'joint_servo']
+
+        # Apply joint prefix for multi-arm support
+        p = self.joint_prefix
+        js.name = [f'{p}joint_x', f'{p}joint_y', f'{p}joint_z', f'{p}joint_servo']
+
         # Apply axis corrections for URDF orientation:
         # - X is negated because URDF joint_x has axis="-1 0 0"
         # - Z is negated to match the side_arm_origin frame orientation
@@ -137,15 +146,20 @@ class SideArmJointStatePublisher(Node):
             time_waiting = (self.get_clock().now() - self.last_state_time).nanoseconds / 1e9
             if time_waiting > 5.0 and int(time_waiting) % 5 == 0:
                 self.get_logger().warn(
-                    'No state received yet. Waiting for /side_arm/parsed_state...')
+                    'No state received yet. Waiting for parsed_state...')
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = SideArmJointStatePublisher()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

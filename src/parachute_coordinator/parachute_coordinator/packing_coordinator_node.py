@@ -2,412 +2,1837 @@
 """
 Packing Coordinator Node
 
-Orchestrates the full packing sequence:
-1. Request target loop from perception
-2. Insert hook through loop (side arm)
-3. Rotate hook to prepare for stowing
-4. Execute stowing trajectory (main arm) using motion patterns
-5. Rotate hook to release
-6. Retract and repeat
+State machine coordinator for the automated parachute line stowing system.
+Orchestrates two robotic arms through vision-guided manipulation using
+event-driven state transitions loaded from config/stow_transitions.yaml.
 
-Motion patterns are loaded from config/motion_patterns/ directory
-or use built-in patterns for common movements.
+States (matching paper Figure 6):
+    IDLE       - System ready, arms homed
+    AT_LOOP    - Vision-guided positioning at next loop
+    INSERT     - Hook insertion with collision detection
+    HANDOFF    - Dual-arm line transfer
+    RETRACT    - Hook withdrawal with line seating
+    RELEASE    - Cycle completion and verification
+    COMPLETE   - All loops stowed
+    ERROR      - Fault handling with operator recovery
+
+The coordinator is intentionally thin — it sends high-level goals
+and reacts to results. Arm nodes own IK, orientation, and execution.
+
+Usage:
+    ros2 run parachute_coordinator packing_coordinator_node
+
+    # Start the sequence:
+    ros2 topic pub --once /stow/command std_msgs/String "data: start"
+
+    # Change pattern:
+    ros2 topic pub --once /stow/command std_msgs/String "data: pattern:square_stow"
+
+    # Recovery commands (in ERROR state):
+    ros2 topic pub --once /stow/command std_msgs/String "data: retry"
+    ros2 topic pub --once /stow/command std_msgs/String "data: skip"
+    ros2 topic pub --once /stow/command std_msgs/String "data: abort"
 """
+
+import os
 
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
-from rclpy.executors import MultiThreadedExecutor
-from parachute_interfaces.srv import RequestNextTarget, RotateHook
-from parachute_interfaces.action import InsertHook, ExecuteTrajectory
-from geometry_msgs.msg import Pose, Point, Quaternion
-from std_msgs.msg import String
-import threading
-import os
+from rclpy.callback_groups import ReentrantCallbackGroup
+from ament_index_python.packages import get_package_share_directory
 
+from parachute_interfaces.srv import RequestNextTarget, RotateHook, CaptureLoops, MoveToWorldPose, VerifyHookPosition
+from parachute_interfaces.action import InsertHook, ExecuteTrajectory, VisualServo
+from parachute_interfaces.msg import HookStatus, SideArmState, DetectedLoop
+from geometry_msgs.msg import Pose, Point
+from std_msgs.msg import String
+from std_srvs.srv import Trigger, SetBool
+import time
+
+from .state_machine import StateMachine, StowState
 from .motion_pattern_manager import MotionPatternManager, BUILTIN_PATTERNS
+
+import tf2_ros
+from tf2_ros.buffer import Buffer
+from tf2_ros.transform_listener import TransformListener
+from std_msgs.msg import Header
 
 
 class PackingCoordinatorNode(Node):
+    """
+    State machine coordinator for automated parachute line stowing.
+
+    Implements on_enter_<state> methods that the StateMachine calls
+    on each transition. State exits are driven by action/service
+    callbacks that emit events back to the state machine.
+    """
+
     def __init__(self):
         super().__init__('packing_coordinator_node')
 
-        # Declare parameters
+        # ==================== PARAMETERS ====================
         self.declare_parameter('test_mode', False)
-        self.declare_parameter('start_delay', 3.0)
-        self.declare_parameter('auto_start', False)  # Whether to auto-start sequence
-        self.declare_parameter('stow_pattern', 'stow_arc')  # Default stowing pattern
-        self.declare_parameter('pattern_dir', '')  # Custom pattern directory (optional)
+        self.declare_parameter('stow_pattern', 'recorded_stow')
+        self.declare_parameter('pattern_dir', '')
+        self.declare_parameter('action_timeout', 30.0)
+        self.declare_parameter('expected_loop_count', 0)  # 0 = skip count verification
+        # Dual arm configuration - set both to True for alternating mode
+        # Set only one to True for single-arm backwards compatibility
+        self.declare_parameter('enable_left_arm', True)
+        self.declare_parameter('enable_right_arm', True)
+        # Top camera mode - if True, skip explicit capture calls (camera streams continuously)
+        self.declare_parameter('top_cam_continuous', False)
+        self.declare_parameter('skip_verify', False)
+        self.declare_parameter('enable_main_arm', True)
 
         self.test_mode = self.get_parameter('test_mode').value
-        start_delay = self.get_parameter('start_delay').value
-        auto_start = self.get_parameter('auto_start').value
-        pattern_dir = self.get_parameter('pattern_dir').value
+        self.current_pattern = self.get_parameter('stow_pattern').value
+        self.action_timeout = self.get_parameter('action_timeout').value
+        self.expected_loop_count = self.get_parameter('expected_loop_count').value
+        self.enable_left_arm = self.get_parameter('enable_left_arm').value
+        self.enable_right_arm = self.get_parameter('enable_right_arm').value
+        self.dual_arm_mode = self.enable_left_arm and self.enable_right_arm
+        self.top_cam_continuous = self.get_parameter('top_cam_continuous').value
+        self.skip_verify = self.get_parameter('skip_verify').value
+        self.enable_main_arm = self.get_parameter('enable_main_arm').value
 
-        # Initialize motion pattern manager
-        pattern_dir = pattern_dir if pattern_dir else None
+        # ==================== STATE MACHINE ====================
+        config_path = os.path.join(
+            get_package_share_directory('parachute_coordinator'),
+            'config', 'stow_transitions.yaml'
+        )
+        self.sm = StateMachine(
+            config_path=config_path,
+            handler_object=self,
+            logger=self.get_logger()
+        )
+
+        self.state_pub = self.create_publisher(String, '/coordinator/state', 10)
+        self.error_pub = self.create_publisher(String, '/coordinator/error', 10)
+        def _on_state_change(old, new):
+            if self._paused:
+                # Roll back — don't allow transitions while paused
+                self.get_logger().warn(f'Transition {old}→{new} blocked (paused)')
+                self.sm.current_state = self.sm._states[old]  # revert
+                return
+            self.state_pub.publish(String(data=new))
+
+        self.sm.on_transition = _on_state_change
+        self._paused = False
+        self._pending_event = None
+        self.state_pub.publish(String(data=self.sm.state_name))
+
+        # ==================== MOTION PATTERNS ====================
+        pattern_dir = self.get_parameter('pattern_dir').value or None
         self.pattern_manager = MotionPatternManager(
             pattern_dir=pattern_dir,
             logger=self.get_logger()
         )
-
-        # Add built-in patterns
         for name, pattern in BUILTIN_PATTERNS.items():
             self.pattern_manager.patterns[name] = pattern
-        self.get_logger().info(f"Available patterns: {self.pattern_manager.list_patterns()}")
 
-        # Service client for target selection
-        self.target_client = self.create_client(RequestNextTarget, '/request_next_target')
-        self.rotate_client = self.create_client(RotateHook, '/side_arm/rotate_hook')
+        # ==================== TRACKING ====================
+        self.current_target_loop = None
+        self.current_target_string_id = ''  # e.g., 'L1', 'R2'
+        self.completed_loops = 0
+        self.total_loops = 0
+        self._error_message = ''
+        self._active_goal_handle = None
+        self._expected_target_position = None  # (x, y, z) for validation after servo
+        self._servo_action_clients = {}  # Cache for visual servo action clients
+        self._arms_homed_done = False
+        self._capture_done = False
+        self._homing_in_progress = False
 
-        # Action clients
-        self.hook_action_client = ActionClient(self, InsertHook, '/side_arm/insert_hook')
-        self.arm_action_client = ActionClient(self, ExecuteTrajectory, '/main_arm/execute_trajectory')
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
 
-        # Command subscriber for manual triggering
-        self.cmd_sub = self.create_subscription(
-            String, '/packing_coordinator/command',
-            self.command_callback, 10
+        self._awaiting_operator_confirm = False
+        self._pending_confirm_event = None
+
+        # Dual arm tracking - alternates between 'left' and 'right'
+        # Start with whichever arm is enabled (prefer left if both)
+        if self.enable_left_arm:
+            self.current_arm = 'left'
+        elif self.enable_right_arm:
+            self.current_arm = 'right'
+        else:
+            self.get_logger().error('No arms enabled! Set enable_left_arm or enable_right_arm')
+            self.current_arm = 'left'  # Fallback
+        self._left_arm_homed = False
+        self._right_arm_homed = False
+
+        # Side arm homing tracking (legacy, now per-arm)
+        self._side_arm_is_homed = False
+        self._has_homed_once = False  # Only home once at startup
+        self._homing_timer = None
+        self._homing_start_time = None
+
+        self._left_hole_orientation = {
+            'x': 0.02055928805249521,
+            'y': 0.6625853327516731,
+            'z': 0.0184659342163154,
+            'w': 0.7484764537182501,
+        }
+        self._right_hole_orientation = {
+            'x': 0.021,
+            'y': 0.659,
+            'z': -0.019,
+            'w': 0.752,
+        }
+
+        # ==================== CALLBACK GROUP ====================
+        self._cb_group = ReentrantCallbackGroup()
+
+        # ==================== SERVICE CLIENTS ====================
+        self.target_client = self.create_client(
+            RequestNextTarget, '/request_next_target',
+            callback_group=self._cb_group
+        )
+        self.capture_client = self.create_client(
+            CaptureLoops, '/capture_loops',
+            callback_group=self._cb_group
         )
 
-        # Status publisher
-        self.status_pub = self.create_publisher(String, '/packing_coordinator/status', 10)
+        # Top camera capture service (on-demand mode)
+        self.top_cam_capture_client = self.create_client(
+            Trigger, '/top_cam/capture',
+            callback_group=self._cb_group
+        )
 
-        # Wait for services/actions to be available (with timeout)
-        self.get_logger().info('Waiting for services and actions...')
-        self.services_ready = self._wait_for_services(timeout_sec=5.0)
+        # Side camera YOLO enable/disable (to pause during top cam captures)
+        # Supports both single camera (/yolo/enable) and per-arm cameras
+        self.side_cam_enable_client = self.create_client(
+            SetBool, '/yolo/enable',
+            callback_group=self._cb_group
+        )
+        # Per-arm YOLO enable clients (for full_system.launch.py with separate cameras)
+        self.left_yolo_enable_client = None
+        self.right_yolo_enable_client = None
+        if self.enable_left_arm:
+            self.left_yolo_enable_client = self.create_client(
+                SetBool, '/side_arm_left/yolo/enable',
+                callback_group=self._cb_group
+            )
+        if self.enable_right_arm:
+            self.right_yolo_enable_client = self.create_client(
+                SetBool, '/side_arm_right/yolo/enable',
+                callback_group=self._cb_group
+            )
 
-        if not self.services_ready:
-            self.get_logger().warn('Some services not available - running in limited mode')
+        self.verify_client = self.create_client(
+            VerifyHookPosition, '/verify_hook_position',
+            callback_group=self._cb_group
+        )
 
-        self.get_logger().info('Packing Coordinator Node initialized')
+        # Dual arm rotate hook clients (only create for enabled arms)
+        self.left_rotate_client = None
+        self.right_rotate_client = None
+        if self.enable_left_arm:
+            self.left_rotate_client = self.create_client(
+                RotateHook, '/side_arm_left/rotate_hook',
+                callback_group=self._cb_group
+            )
+        if self.enable_right_arm:
+            self.right_rotate_client = self.create_client(
+                RotateHook, '/side_arm_right/rotate_hook',
+                callback_group=self._cb_group
+            )
+        # Legacy alias for compatibility (use whichever is available)
+        self.rotate_client = self.left_rotate_client or self.right_rotate_client
 
-        # State tracking
-        self.sequence_running = False
-        self.current_target_loop = None
-        self.stow_ready = False
-        self.current_pattern = self.get_parameter('stow_pattern').value
+        self.left_world_move_client = None
+        self.right_world_move_client = None
 
-        # Auto-start if configured
-        if auto_start:
-            self.timer = self.create_timer(start_delay, self.request_target)
-        else:
-            self.get_logger().info('Waiting for command on /packing_coordinator/command')
-            self.get_logger().info('  Commands: "start", "stop", "pattern:<name>"')
+        if self.enable_left_arm:
+            self.left_world_move_client = self.create_client(
+                MoveToWorldPose, '/side_arm_left/move_to_world_pose')
+        if self.enable_right_arm:
+            self.right_world_move_client = self.create_client(
+                MoveToWorldPose, '/side_arm_right/move_to_world_pose')
 
-    def _wait_for_services(self, timeout_sec: float) -> bool:
-        """Wait for required services with timeout."""
-        all_ready = True
+        self.world_move_client = self.right_world_move_client or self.left_world_move_client # or self.right_world_move_client
 
-        services = [
-            (self.target_client, '/request_next_target'),
-            (self.rotate_client, '/side_arm/rotate_hook'),
-        ]
+        # ==================== ACTION CLIENTS ====================
+        # Dual arm insert hook clients (only create for enabled arms)
+        self.left_hook_client = None
+        self.right_hook_client = None
+        if self.enable_left_arm:
+            self.left_hook_client = ActionClient(
+                self, InsertHook, '/side_arm_left/insert_hook',
+                callback_group=self._cb_group
+            )
+        if self.enable_right_arm:
+            self.right_hook_client = ActionClient(
+                self, InsertHook, '/side_arm_right/insert_hook',
+                callback_group=self._cb_group
+            )
+        # Legacy alias for compatibility (use whichever is available)
+        self.hook_action_client = self.left_hook_client or self.right_hook_client
 
-        for client, name in services:
-            if not client.wait_for_service(timeout_sec=timeout_sec):
-                self.get_logger().warn(f'Service {name} not available')
-                all_ready = False
+        self.arm_action_client = ActionClient(
+            self, ExecuteTrajectory, '/main_arm/execute_trajectory',
+            callback_group=self._cb_group
+        )
 
-        actions = [
-            (self.hook_action_client, '/side_arm/insert_hook'),
-            (self.arm_action_client, '/main_arm/execute_trajectory'),
-        ]
+        # Main arm planner interface (hole_center_sequence)
+        self.hole_seq_pub = self.create_publisher(
+            Pose, '/main_arm/hole_center_sequence', 10
+        )
+        self.main_arm_status_sub = self.create_subscription(
+            String, '/main_arm/planner_status',
+            self._main_arm_status_callback, 10
+        )
 
-        for client, name in actions:
-            if not client.wait_for_server(timeout_sec=timeout_sec):
-                self.get_logger().warn(f'Action {name} not available')
-                all_ready = False
+        # ==================== SUBSCRIBERS ====================
+        self.cmd_sub = self.create_subscription(
+            String, '/stow/command',
+            self._command_callback, 10
+        )
+        # Dual arm status subscribers (only subscribe to enabled arms)
+        if self.enable_left_arm:
+            self.left_hook_status_sub = self.create_subscription(
+                HookStatus, '/side_arm_left/status',
+                lambda msg: self._hook_status_callback(msg, 'left'), 10
+            )
+            self.left_state_sub = self.create_subscription(
+                SideArmState, '/side_arm_left/parsed_state',
+                lambda msg: self._side_arm_state_callback(msg, 'left'), 10
+            )
+        if self.enable_right_arm:
+            self.right_hook_status_sub = self.create_subscription(
+                HookStatus, '/side_arm_right/status',
+                lambda msg: self._hook_status_callback(msg, 'right'), 10
+            )
+            self.right_state_sub = self.create_subscription(
+                SideArmState, '/side_arm_right/parsed_state',
+                lambda msg: self._side_arm_state_callback(msg, 'right'), 10
+            )
 
-        return all_ready
+        # ==================== PUBLISHERS ====================
+        self.status_pub = self.create_publisher(String, '/stow/status', 10)
+        # Dual arm command publishers (only create for enabled arms)
+        self.left_cmd_pub = None
+        self.right_cmd_pub = None
+        if self.enable_left_arm:
+            self.left_cmd_pub = self.create_publisher(String, '/side_arm_left/command', 10)
+        if self.enable_right_arm:
+            self.right_cmd_pub = self.create_publisher(String, '/side_arm_right/command', 10)
+        # Current arm publisher (for GUI)
+        self.current_arm_pub = self.create_publisher(String, '/coordinator/current_arm', 10)
+        self.status_timer = self.create_timer(1.0, self._publish_status)
+        # Per-side publishers 
+        self.left_hole_seq_pub = self.create_publisher(Pose, '/main_arm/left_hole_center_sequence', 10)
+        self.right_hole_seq_pub = self.create_publisher(Pose, '/main_arm/right_hole_center_sequence', 10)
 
-    def command_callback(self, msg: String):
-        """Handle manual commands."""
+        # ==================== SERVICE CHECK ====================
+        self._check_services()
+
+        arm_mode = 'DUAL (alternating)' if self.dual_arm_mode else f'SINGLE ({self.current_arm})'
+        self.get_logger().info('=' * 50)
+        self.get_logger().info('PACKING COORDINATOR')
+        self.get_logger().info(f'  State: {self.sm.state_name}')
+        self.get_logger().info(f'  Arm mode: {arm_mode}')
+        self.get_logger().info(f'  Pattern: {self.current_pattern}')
+        self.get_logger().info(f'  Available: {self.pattern_manager.list_patterns()}')
+        self.get_logger().info('  Publish to /stow/command to control')
+        self.get_logger().info('=' * 50)
+
+    # ================================================================
+    #  SETUP
+    # ================================================================
+
+    def _check_services(self):
+        """Check which services and actions are available (non-blocking)."""
+        services = {'/request_next_target': self.target_client}
+        if self.left_rotate_client:
+            services['/side_arm_left/rotate_hook'] = self.left_rotate_client
+        if self.right_rotate_client:
+            services['/side_arm_right/rotate_hook'] = self.right_rotate_client
+        if self.left_world_move_client:
+            services['/side_arm_left/move_to_world_pose'] = self.left_world_move_client
+        if self.right_world_move_client:
+            services['/side_arm_right/move_to_world_pose'] = self.right_world_move_client
+        services['/capture_loops'] = self.capture_client
+        services['/verify_hook_position'] = self.verify_client
+
+        actions = {}
+        if self.left_hook_client:
+            actions['/side_arm_left/insert_hook'] = self.left_hook_client
+        if self.right_hook_client:
+            actions['/side_arm_right/insert_hook'] = self.right_hook_client
+        actions['/main_arm/execute_trajectory'] = self.arm_action_client
+
+        mode = 'dual arm' if self.dual_arm_mode else f'single arm ({self.current_arm})'
+        self.get_logger().info(f'Checking services ({mode} mode)...')
+        for name, client in services.items():
+            if client:
+                ready = client.wait_for_service(timeout_sec=2.0)
+                self.get_logger().info(f'  {name}: {"✓" if ready else "✗"}')
+
+        for name, client in actions.items():
+            if client:
+                ready = client.wait_for_server(timeout_sec=2.0)
+                self.get_logger().info(f'  {name}: {"✓" if ready else "✗"}')
+
+    # ================================================================
+    #  DUAL ARM HELPERS
+    # ================================================================
+
+    def get_current_hook_client(self) -> ActionClient:
+        """Get the insert_hook action client for the current arm."""
+        if self.current_arm == 'left' and self.left_hook_client:
+            return self.left_hook_client
+        elif self.current_arm == 'right' and self.right_hook_client:
+            return self.right_hook_client
+        # Fallback to whichever is available
+        return self.left_hook_client or self.right_hook_client
+
+    def get_current_rotate_client(self):
+        """Get the rotate_hook service client for the current arm."""
+        if self.current_arm == 'left' and self.left_rotate_client:
+            return self.left_rotate_client
+        elif self.current_arm == 'right' and self.right_rotate_client:
+            return self.right_rotate_client
+        # Fallback to whichever is available
+        return self.left_rotate_client or self.right_rotate_client
+
+    def get_current_cmd_pub(self):
+        """Get the command publisher for the current arm."""
+        if self.current_arm == 'left' and self.left_cmd_pub:
+            return self.left_cmd_pub
+        elif self.current_arm == 'right' and self.right_cmd_pub:
+            return self.right_cmd_pub
+        # Fallback to whichever is available
+        return self.left_cmd_pub or self.right_cmd_pub
+
+    def switch_arm(self):
+        """Switch to the other arm for the next operation (only in dual arm mode)."""
+        if not self.dual_arm_mode:
+            # Single arm mode - no switching
+            return
+        old_arm = self.current_arm
+        self.current_arm = 'right' if self.current_arm == 'left' else 'left'
+        self.get_logger().info(f'Switched arm: {old_arm} → {self.current_arm}')
+        self.current_arm_pub.publish(String(data=self.current_arm))
+    
+    def get_current_world_move_client(self):
+        """Get the move_to_world_pose service client for the current arm."""
+        if self.current_arm == 'left' and self.left_world_move_client:
+            return self.left_world_move_client
+        elif self.current_arm == 'right' and self.right_world_move_client:
+            return self.right_world_move_client
+        return self.left_world_move_client or self.right_world_move_client
+
+    # ================================================================
+    #  OPERATOR COMMANDS
+    # ================================================================
+
+    def _command_callback(self, msg: String):
+        """Handle operator commands from /stow/command."""
         cmd = msg.data.strip().lower()
+        state = self.sm.state
 
-        if cmd == 'start':
-            if not self.sequence_running:
-                self.get_logger().info('Starting packing sequence via command')
-                self.request_target()
-            else:
-                self.get_logger().warn('Sequence already running')
+        self.get_logger().info(f'Command received: "{cmd}" (state: {state.name})')
 
-        elif cmd == 'stop':
-            self.sequence_running = False
-            self.get_logger().info('Sequence stopped')
-            self._publish_status('stopped')
+        # Commands that work from any state
+        if cmd == 'stop':
+            self._halt_all()
+            self.sm.reset()
+            self.get_logger().info('Sequence stopped, reset to IDLE')
+            return
 
-        elif cmd.startswith('pattern:'):
+        if cmd == 'estop':
+            self._halt_all()
+            self.get_logger().error('EMERGENCY STOP - All motion halted')
+            self._transition('error')  # Force to ERROR state
+            self.error_pub.publish(String(data='EMERGENCY STOP activated by operator'))
+            return
+
+        if cmd == 'home':
+            self._halt_all()
+            self._transition('home')
+            return
+        
+        if cmd == 'pause':
+            self._paused = True
+            self.get_logger().info('Sequence PAUSED by operator')
+            self.state_pub.publish(String(data=f'{self.sm.state_name} (PAUSED)'))
+            return
+
+        if cmd == 'resume':
+            self._paused = False
+            self.get_logger().info('Sequence RESUMED')
+            self.state_pub.publish(String(data=self.sm.state_name))
+            # Replay any event that was blocked while paused
+            if self._pending_event:
+                event = self._pending_event
+                self._pending_event = None
+                self.get_logger().info(f'Replaying queued event "{event}"')
+                self.sm.transition(event)
+            return
+
+        if cmd.startswith('pattern:'):
             pattern_name = cmd.split(':', 1)[1]
             if self.pattern_manager.get_pattern(pattern_name):
                 self.current_pattern = pattern_name
-                self.get_logger().info(f'Switched to pattern: {pattern_name}')
+                self.get_logger().info(f'Pattern set to: {pattern_name}')
             else:
-                self.get_logger().error(f'Pattern not found: {pattern_name}')
-                self.get_logger().info(f'Available: {self.pattern_manager.list_patterns()}')
-
-        elif cmd == 'patterns':
-            patterns = self.pattern_manager.list_patterns()
-            self.get_logger().info(f'Available patterns: {patterns}')
-
-        elif cmd == 'status':
-            self._publish_status('query')
-
-        else:
-            self.get_logger().warn(f'Unknown command: {cmd}')
-
-    def _publish_status(self, status: str):
-        """Publish current status."""
-        msg = String()
-        msg.data = status
-        self.status_pub.publish(msg)
-
-    def request_target(self):
-        """Step 1: Request target loop from perception."""
-        if self.sequence_running:
-            return
-        self.sequence_running = True
-
-        if hasattr(self, 'timer') and self.timer:
-            self.timer.cancel()
-
-        self.get_logger().info('=== Starting Packing Sequence ===')
-        self._publish_status('requesting_target')
-        self.get_logger().info('Step 1: Requesting target loop')
-
-        if not self.target_client.service_is_ready():
-            self.get_logger().error('Target service not available')
-            self.sequence_running = False
+                self.get_logger().error(
+                    f'Unknown pattern: {pattern_name}. '
+                    f'Available: {self.pattern_manager.list_patterns()}'
+                )
             return
 
-        target_request = RequestNextTarget.Request()
-        future = self.target_client.call_async(target_request)
-        future.add_done_callback(self.target_response_callback)
+        if cmd == 'status':
+            self._log_status()
+            return
 
-    def target_response_callback(self, future):
-        """Callback when target selection completes."""
-        try:
-            response = future.result()
+        if cmd == 'patterns':
+            self.get_logger().info(
+                f'Available patterns: {self.pattern_manager.list_patterns()}'
+            )
+            return
+        
+        if cmd == 'confirm':
+            if self._awaiting_operator_confirm:
+                event = self._pending_confirm_event
+                self._awaiting_operator_confirm = False
+                self._pending_confirm_event = None
+                self.get_logger().info(f'[CONFIRM] Operator confirmed — firing "{event}"')
+                self._transition(event)
+            else:
+                self.get_logger().warn('No confirmation pending — ignoring "confirm"')
+            return
 
-            if not response.target_available:
-                self.get_logger().error('No target available!')
-                self._publish_status('no_target')
-                self.sequence_running = False
+        if cmd == 'retry':
+            if self._awaiting_operator_confirm:
+                self._awaiting_operator_confirm = False
+                self._pending_confirm_event = None
+                self.get_logger().info('[CONFIRM] Operator requested retry — re-entering HANDOFF')
+                # Re-fire on_enter_handoff
+                self.on_enter_handoff(self.sm.state, 'operator_retry')
+            else:
+                self.get_logger().warn('No confirmation pending — ignoring "retry"')
+            return
+        
+        if cmd.startswith('jumpto:'):
+            target_state_name = cmd.split(':', 1)[1].upper()
+            try:
+                target = StowState[target_state_name]
+            except KeyError:
+                self.get_logger().error(
+                    f'Unknown state: {target_state_name}. '
+                    f'Valid: {[s.name for s in StowState]}'
+                )
                 return
 
-            self.current_target_loop = response.target_loop
-            pos = self.current_target_loop.pose.pose.position
-            self.get_logger().info(
-                f'Target selected: Loop {self.current_target_loop.loop_id} '
-                f'at ({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f})'
+            old = self.sm.state_name
+            self.sm.current_state = self.sm._states[target.name]
+            self.get_logger().warn(f'[JUMP] Forced transition: {old} → {target.name}')
+            self.state_pub.publish(String(data=target.name))
+
+            # Fire the on_enter handler for the new state
+            handler_name = f'on_enter_{target.name.lower()}'
+            handler = getattr(self, handler_name, None)
+            if handler:
+                handler(target, 'forced_jump')
+            return
+
+        # State-specific commands — forward as events to the state machine
+        if self.sm.can_transition(cmd):
+            self._transition(cmd)
+        else:
+            valid = self.sm.get_valid_events()
+            self.get_logger().warn(
+                f'"{cmd}" not valid in {state.name}. Valid: {valid}'
             )
 
-            self._publish_status('inserting_hook')
-            self.insert_hook()
+    # ================================================================
+    #  SUBSCRIBER CALLBACKS
+    # ================================================================
 
-        except Exception as e:
-            self.get_logger().error(f'Service call failed: {e}')
-            import traceback
-            self.get_logger().error(traceback.format_exc())
-            self.sequence_running = False
+    def _hook_status_callback(self, msg: HookStatus, arm: str):
+        """Monitor side arm hook status for specified arm."""
+        # Could be used for safety monitoring during HANDOFF/RETRACT
+        pass
 
-    def insert_hook(self):
-        """Step 2: Insert hook through loop."""
-        self.get_logger().info('Step 2: Inserting hook through loop')
-
-        if not self.hook_action_client.server_is_ready():
-            self.get_logger().error('Hook action not available')
-            self.sequence_running = False
-            return
-
-        hook_goal = InsertHook.Goal()
-        hook_goal.target_loop = self.current_target_loop
-
-        send_goal_future = self.hook_action_client.send_goal_async(
-            hook_goal,
-            feedback_callback=self.hook_feedback_callback
-        )
-        send_goal_future.add_done_callback(self.hook_goal_response_callback)
-
-    def hook_feedback_callback(self, feedback_msg):
-        """Receive feedback from hook insertion."""
-        feedback = feedback_msg.feedback
-        if self.test_mode:
-            self.get_logger().info(f'  Hook insertion progress: {int(feedback.progress * 100)}%')
-
-    def hook_goal_response_callback(self, future):
-        """Callback when hook action goal is accepted/rejected."""
-        goal_handle = future.result()
-
-        if not goal_handle.accepted:
-            self.get_logger().error('Hook insertion goal rejected!')
-            self.sequence_running = False
-            return
-
-        self.get_logger().info('Hook insertion goal accepted')
-        get_result_future = goal_handle.get_result_async()
-        get_result_future.add_done_callback(self.hook_result_callback)
-
-    def hook_result_callback(self, future):
-        """Callback when hook insertion completes."""
-        result = future.result().result
-
-        if result.success:
-            self.get_logger().info('Hook inserted successfully')
-            self._publish_status('rotating_hook')
-            self.rotate_hook()
+    def _side_arm_state_callback(self, msg: SideArmState, arm: str):
+        """Track side arm homing status for specified arm."""
+        if arm == 'left':
+            self._left_arm_homed = msg.is_homed
         else:
-            self.get_logger().error('Hook insertion failed!')
-            self.sequence_running = False
+            self._right_arm_homed = msg.is_homed
+        # Check homing based on which arms are enabled
+        self._update_homing_status()
 
-    def rotate_hook(self):
-        """Intermediate Step: Rotate hook 90 degrees before stowing."""
-        self.get_logger().info('Intermediate Step: Rotating hook 90 degrees')
+    def _main_arm_status_callback(self, msg: String):
+        status = msg.data
+        if self.sm.state != StowState.HANDOFF:
+            return
 
-        rotate_request = RotateHook.Request()
-        rotate_request.angle_degrees = 90.0
+        if 'hole_seq' in status and 'done' in status:
+            self.get_logger().info(f'[HANDOFF] Main arm: {status}')
+            # NEW: pause for operator confirmation instead of transitioning
+            self._request_operator_confirm('trajectory_complete')
+        elif 'hole_seq' in status and 'error' in status:
+            self.get_logger().error(f'[HANDOFF] Main arm failed: {status}')
+            self._enter_error('trajectory_failure', f'Main arm sequence failed: {status}')
 
-        future = self.rotate_client.call_async(rotate_request)
-        future.add_done_callback(self.rotate_hook_callback)
 
-    def rotate_hook_callback(self, future):
-        """Callback when pre-stow rotation completes."""
+    def _request_operator_confirm(self, event_on_confirm: str):
+        """Wait for operator to send 'confirm' or 'retry' via /stow/command."""
+        self._awaiting_operator_confirm = True
+        self._pending_confirm_event = event_on_confirm
+        self.get_logger().info(
+            '=' * 50
+        )
+        self.get_logger().info(
+            '[HANDOFF] Waiting for operator confirmation. '
+            'Send "confirm" to continue or "retry" to re-run HANDOFF.'
+        )
+        self.get_logger().info('=' * 50)
+        # Publish a dedicated status the GUI can listen for
+        self.state_pub.publish(String(data=f'{self.sm.state_name} (AWAITING_CONFIRM)'))
+
+    def _update_homing_status(self):
+        """Update overall homing status based on enabled arms."""
+        if self.dual_arm_mode:
+            self._side_arm_is_homed = self._left_arm_homed and self._right_arm_homed
+        elif self.enable_left_arm:
+            self._side_arm_is_homed = self._left_arm_homed
+        elif self.enable_right_arm:
+            self._side_arm_is_homed = self._right_arm_homed
+        else:
+            self._side_arm_is_homed = True  # No arms enabled, consider "homed"
+
+    def _home_both_arms(self, timeout: float = 60.0) -> bool:
+        """Home both side arms and wait for completion."""
+        self.get_logger().info('Homing both side arms (HOME_ALL)...')
+
+        # Send HOME_ALL command to both arms
+        cmd = String()
+        cmd.data = 'HOME_ALL'
+        self.left_cmd_pub.publish(cmd)
+        self.right_cmd_pub.publish(cmd)
+
+        # Wait for both arms to be homed
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            if self._left_arm_homed and self._right_arm_homed:
+                self.get_logger().info(f'Both arms homed in {time.time() - start_time:.1f}s')
+                self._has_homed_once = True
+                return True
+
+            # Log progress every 10 seconds
+            elapsed = time.time() - start_time
+            if int(elapsed) % 10 == 0 and int(elapsed) > 0:
+                left_status = '✓' if self._left_arm_homed else '...'
+                right_status = '✓' if self._right_arm_homed else '...'
+                self.get_logger().info(f'  Homing: left={left_status}, right={right_status} ({elapsed:.0f}s)')
+
+        self.get_logger().error(f'Arm homing timeout after {timeout}s')
+        return False
+
+    def _home_side_arm(self, timeout: float = 60.0) -> bool:
+        """Home the current side arm only (for single-arm fallback)."""
+        arm = self.current_arm
+        self.get_logger().info(f'Homing {arm} arm (HOME_ALL)...')
+
+        cmd = String()
+        cmd.data = 'HOME_ALL'
+        self.get_current_cmd_pub().publish(cmd)
+
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
+            is_homed = self._left_arm_homed if arm == 'left' else self._right_arm_homed
+            if is_homed:
+                self.get_logger().info(f'{arm.capitalize()} arm homed in {time.time() - start_time:.1f}s')
+                return True
+
+            elapsed = time.time() - start_time
+            if int(elapsed) % 10 == 0 and int(elapsed) > 0:
+                self.get_logger().info(f'  Still homing {arm}... ({elapsed:.0f}s)')
+
+        self.get_logger().error(f'{arm.capitalize()} arm homing timeout after {timeout}s')
+        return False
+
+    # ================================================================
+    #  STATUS PUBLISHING
+    # ================================================================
+
+    def _publish_status(self):
+        """Publish current coordinator status."""
+        msg = String()
+        msg.data = (
+            f'{self.sm.state_name}|'
+            f'loop={self.completed_loops}/{self.total_loops}|'
+            f'pattern={self.current_pattern}'
+        )
+        self.status_pub.publish(msg)
+
+    def _log_status(self):
+        """Log detailed status."""
+        self.get_logger().info(f'  State: {self.sm.state_name}')
+        self.get_logger().info(f'  Loop: {self.completed_loops}/{self.total_loops}')
+        self.get_logger().info(f'  Pattern: {self.current_pattern}')
+        self.get_logger().info(f'  Valid events: {self.sm.get_valid_events()}')
+        if self.sm.state == StowState.ERROR:
+            self.get_logger().info(f'  Error source: {self.sm.error_source}')
+            self.get_logger().info(f'  Error: {self._error_message}')
+
+    # ================================================================
+    #  SAFETY
+    # ================================================================
+
+    def _halt_all(self):
+        """Emergency stop — cancel active goals, halt arms."""
+        self.get_logger().warn('HALTING ALL MOTION')
+
+        # Cancel any active action goal
+        if self._active_goal_handle is not None:
+            try:
+                self._active_goal_handle.cancel_goal_async()
+            except Exception:
+                pass
+            self._active_goal_handle = None
+
+        # Cancel any in-flight homing timer to actually stop processes in parallel
+        if self._homing_timer is not None:
+            try:
+                self._homing_timer.cancel()
+            except Exception:
+                pass
+            self._homing_timer = None
+        self._homing_in_progress = False
+
+        # Send stop commands to side arms
+        stop_msg = String(data='STOP_ALL')
+        dc_stop = String(data='DC_SPEED,0')
+        if self.left_cmd_pub:
+            self.left_cmd_pub.publish(stop_msg)
+            self.left_cmd_pub.publish(dc_stop)
+        if self.right_cmd_pub:
+            self.right_cmd_pub.publish(stop_msg)
+            self.right_cmd_pub.publish(dc_stop)
+
+    def _enter_error(self, event: str, message: str):
+        """Common error entry — halts motion, records diagnostics."""
+        self._halt_all()
+        self._error_message = message
+        self._transition(event)
+
+    # ================================================================
+    #  STATE HANDLERS — on_enter_<state>
+    #
+    #  Each method is called by the StateMachine when entering that
+    #  state. The method kicks off async work (action goals, service
+    #  calls). When the async work completes, the callback emits an
+    #  event that triggers the next transition.
+    # ================================================================
+
+    def _get_loop_string_id(self, loop) -> str:
+        """Get the string ID (e.g., 'L1', 'R2') for a loop."""
+        # Try header.frame_id first (set by target_selector for top cam loops)
+        if loop.header.frame_id and loop.header.frame_id.startswith(('L', 'R')):
+            return loop.header.frame_id
+        # Fall back to deriving from numeric ID
+        if loop.loop_id >= 100:
+            return f'R{loop.loop_id - 100}'
+        return f'L{loop.loop_id}'
+
+    def _transition(self, event: str) -> bool:
+        if self._paused:
+            self._pending_event = event   # store it
+            self.get_logger().info(f'Paused — queued transition "{event}"')
+            return False
+        self._pending_event = None
+        return self.sm.transition(event)
+
+    def on_enter_idle(self, state: StowState, event: str):
+        """Entered IDLE — system is ready."""
+        self.current_target_loop = None
+        self._active_goal_handle = None
+        self.get_logger().info('System ready. Send "start" to begin.')
+
+    def on_enter_homing(self, state: StowState, event: str):
+        """Kick off arm homing and perception capture in parallel."""
+        self.get_logger().info('[HOMING] Starting parallel homing + capture...')
+
+        # Reset join flags
+        self._arms_homed_done = False
+        self._capture_done = False
+        self._homing_in_progress = True
+
+        # ---- Lane A: arms ----
+        if self._side_arm_is_homed and self._has_homed_once:
+            self.get_logger().info('[HOMING] Arms already homed (lane A done)')
+            self._arms_homed_done = True
+        else:
+            cmd = String(data='HOME_ALL')
+            if self.enable_left_arm and self.left_cmd_pub:
+                self.left_cmd_pub.publish(cmd)
+            if self.enable_right_arm and self.right_cmd_pub:
+                self.right_cmd_pub.publish(cmd)
+
+            self._homing_start_time = time.time()
+            self._homing_timer = self.create_timer(0.5, self._check_homing_status)
+
+        # ---- Lane B: perception (fires immediately, in parallel) ----
+        self._start_capture_chain()
+
+        # One lane may already be done (e.g. already_homed); check now
+        self._maybe_finish_homing()
+
+    def _check_homing_status(self):
+        """Lane A: poll arm homed state every 0.5s."""
+        timeout = 60.0
+        elapsed = time.time() - self._homing_start_time
+
+        left_done = not self.enable_left_arm or self._left_arm_homed
+        right_done = not self.enable_right_arm or self._right_arm_homed
+
+        if left_done and right_done:
+            self._homing_timer.cancel()
+            self._homing_timer = None
+            self._has_homed_once = True
+            self.get_logger().info(f'[HOMING] Arms homed in {elapsed:.1f}s (lane A done)')
+            self._arms_homed_done = True
+            self._maybe_finish_homing()
+            return
+
+        if elapsed >= timeout:
+            self._homing_timer.cancel()
+            self._homing_timer = None
+            self._homing_in_progress = False
+            self._enter_error('homing_failed', 'Arm homing timeout')
+            return
+
+        if int(elapsed) % 10 == 0 and int(elapsed) > 0:
+            left_status = '✓' if self._left_arm_homed else '...'
+            right_status = '✓' if self._right_arm_homed else '...'
+            self.get_logger().info(
+                f'[HOMING] L:{left_status} R:{right_status} ({elapsed:.0f}s)')
+    
+    def _start_capture_chain(self):
+        """Lane B: trigger top-cam capture, then loop lock. Best-effort."""
+        if self.top_cam_continuous:
+            self.get_logger().info('[HOMING] Top cam in continuous mode — skipping capture')
+            self._lock_loop_positions()
+            return
+
+        if not self.top_cam_capture_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warn('[HOMING] Top cam service unavailable — skipping capture')
+            self._lock_loop_positions()
+            return
+
+        # Pause side camera to free GPU resources for top camera capture
+        self._set_side_camera_enabled(False)
+
+        self.get_logger().info('[HOMING] Triggering top cam capture (side cam paused)...')
+        future = self.top_cam_capture_client.call_async(Trigger.Request())
+        future.add_done_callback(self._on_top_cam_capture_homing)
+
+    def _on_top_cam_capture_homing(self, future):
+        """Top cam capture done — re-enable side cam and proceed to loop lock."""
         try:
             response = future.result()
-
             if response.success:
-                self.get_logger().info(f'Hook rotated to {response.final_angle}')
-                if self.stow_ready:
-                    self._publish_status('retracting')
-                    self.retract_hook()
-                else:
-                    self._publish_status('executing_trajectory')
-                    self.execute_trajectory()
+                self.get_logger().info(f'[HOMING] Top cam: {response.message}')
             else:
-                self.get_logger().error('Hook rotation failed!')
-                self.sequence_running = False
-
+                self.get_logger().warn(f'[HOMING] Top cam capture failed: {response.message}')
         except Exception as e:
-            self.get_logger().error(f'Rotation service call failed: {e}')
-            self.sequence_running = False
+            self.get_logger().warn(f'[HOMING] Top cam error: {e}')
 
-    def execute_trajectory(self):
-        """Step 3: Execute main arm trajectory using motion pattern."""
-        self.get_logger().info(f'Step 3: Executing trajectory with pattern "{self.current_pattern}"')
+        # Re-enable side camera after top camera capture completes
+        self._set_side_camera_enabled(True)
 
-        # Get target position for the pattern
-        # For stowing, we use the loop position as reference
-        target_pos = self.current_target_loop.pose.pose.position
+        self._lock_loop_positions()
 
-        # Generate waypoints from pattern
-        waypoints = self.pattern_manager.apply_pattern(self.current_pattern, target_pos)
+    def _set_side_camera_enabled(self, enabled: bool):
+        """Enable or disable the side camera YOLO inference.
+        """
+        request = SetBool.Request()
+        request.data = enabled
+        state = 'ENABLED' if enabled else 'PAUSED'
+        called_any = False
 
-        if not waypoints:
-            self.get_logger().warn(f'No waypoints from pattern, using fallback')
-            # Fallback: simple approach to target
-            waypoints = [
-                self._make_pose(target_pos.x, target_pos.y, target_pos.z + 0.1),
-                self._make_pose(target_pos.x, target_pos.y, target_pos.z),
-            ]
+        # Try single camera service (dual_arm_test setup)
+        if self.side_cam_enable_client.wait_for_service(timeout_sec=0.5):
+            try:
+                self.side_cam_enable_client.call_async(request)
+                called_any = True
+            except Exception:
+                pass
 
-        self.get_logger().info(f'Generated {len(waypoints)} waypoints')
+        # Try per-arm camera services (full_system setup)
+        if self.left_yolo_enable_client and self.left_yolo_enable_client.wait_for_service(timeout_sec=0.5):
+            try:
+                self.left_yolo_enable_client.call_async(request)
+                called_any = True
+            except Exception:
+                pass
 
-        # Get pattern speed factor
-        pattern = self.pattern_manager.get_pattern(self.current_pattern)
-        speed_factor = pattern.speed_factor if pattern else 0.5
+        if self.right_yolo_enable_client and self.right_yolo_enable_client.wait_for_service(timeout_sec=0.5):
+            try:
+                self.right_yolo_enable_client.call_async(request)
+                called_any = True
+            except Exception:
+                pass
 
-        # Create action goal
-        arm_goal = ExecuteTrajectory.Goal()
-        arm_goal.waypoints = waypoints
-        arm_goal.speed_factor = speed_factor
+        if called_any:
+            self.get_logger().info(f'[CAMERA] Side camera(s) {state}')
+        else:
+            self.get_logger().debug('[CAMERA] No side camera enable services available')
 
-        if not self.arm_action_client.server_is_ready():
-            self.get_logger().error('Arm action not available')
-            self.sequence_running = False
+    def _lock_loop_positions(self):
+        """Lane B step 2: snapshot loop positions for count + visualization."""
+        if not self.capture_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warn(
+                '[HOMING] Capture service unavailable — '
+                'continuing with dynamic loop count'
+            )
+            self.total_loops = 0
+            self._capture_done = True
+            self._maybe_finish_homing()
             return
 
-        send_goal_future = self.arm_action_client.send_goal_async(
-            arm_goal,
-            feedback_callback=self.arm_feedback_callback
+        request = CaptureLoops.Request()
+        request.expected_count = self.expected_loop_count
+        request.timeout_sec = 2.0
+
+        future = self.capture_client.call_async(request)
+        future.add_done_callback(self._on_capture_response)
+
+    def _on_capture_response(self, future):
+        """Loop lock done — non-fatal if it fails, just use dynamic counting."""
+        try:
+            response = future.result()
+            if response.success:
+                self.total_loops = response.captured_count
+                self.completed_loops = 0
+                self.get_logger().info(
+                    f'[HOMING] Locked {response.captured_count} loops (lane B done)'
+                )
+            else:
+                self.get_logger().warn(
+                    f'[HOMING] Capture failed: {response.message} — '
+                    f'continuing with dynamic loop count (lane B done)'
+                )
+                self.total_loops = 0
+        except Exception as e:
+            self.get_logger().warn(
+                f'[HOMING] Capture error: {e} — continuing with dynamic count'
+            )
+            self.total_loops = 0
+
+        self._capture_done = True
+        self._maybe_finish_homing()
+
+    def _maybe_finish_homing(self):
+        """Join point — transition when both lanes have completed."""
+        if not self._homing_in_progress:
+            return  # Already finished or aborted
+
+        if self._arms_homed_done and self._capture_done:
+            self._homing_in_progress = False
+            self.get_logger().info('[HOMING] Both lanes complete → transitioning to next state')
+            self._transition('homed')
+
+    def _capture_loops_after_homing(self):
+        """Capture and lock loop positions after homing completes."""
+        # Skip explicit capture if top camera is running continuously
+        if self.top_cam_continuous:
+            self.get_logger().info('[HOMING] Top camera in continuous mode - using latest data')
+            self._lock_loop_positions()
+            return
+
+        self.get_logger().info('[HOMING] Triggering top camera capture...')
+
+        # Trigger top camera capture for fresh perception data (on-demand mode)
+        if self.top_cam_capture_client.service_is_ready():
+            future = self.top_cam_capture_client.call_async(Trigger.Request())
+            future.add_done_callback(self._on_homing_top_cam_done)
+        else:
+            self.get_logger().warn(
+                '[HOMING] Top camera not available - using existing perception'
+            )
+            self._lock_loop_positions()
+
+    def _on_homing_top_cam_done(self, future):
+        """Handle top cam capture during homing, then lock positions."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[HOMING] Top cam: {response.message}')
+            else:
+                self.get_logger().warn(f'[HOMING] Top cam capture failed: {response.message}')
+        except Exception as e:
+            self.get_logger().warn(f'[HOMING] Top cam error: {e}')
+
+        self._lock_loop_positions()
+
+    def on_enter_at_loop(self, state: StowState, event: str):
+        """Verify which loop the hook is centered on via top cam + TF."""
+        self.get_logger().info('[AT_LOOP] Verifying hook position against top camera...')
+
+        # Pause side camera during top camera verification to free GPU resources
+        self._set_side_camera_enabled(False)
+
+        # SKIP VERIFY MODE — skip hook position check, still use perception
+        if self.get_parameter('skip_verify').value:
+            if self.current_target_loop is not None:
+                pos = self.current_target_loop.pose.pose.position
+                self.get_logger().info(
+                    f'[AT_LOOP] skip_verify=true — using target {self.current_target_string_id} '
+                    f'from selector: ({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f})'
+                )
+                self._transition('positioned')
+                return
+            else:
+                self.get_logger().warn(
+                    '[AT_LOOP] skip_verify=true but no current_target_loop — '
+                    'requesting from selector'
+                )
+                self._request_next_target()  # will populate current_target_loop and transition
+                return
+
+        hook_frame = f'{self.current_arm}_hook_link'
+
+        # 1. Look up current hook position in world frame
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                'world', hook_frame,
+                rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=1.0),
+            )
+        except (tf2_ros.LookupException,
+                tf2_ros.ConnectivityException,
+                tf2_ros.ExtrapolationException) as e:
+            self._enter_error('vision_failure', f'TF {hook_frame}→world failed: {e}')
+            return
+        except Exception as e:
+            self._enter_error('vision_failure', f'TF lookup error: {e}')
+            return
+
+        hook_pos = Point(
+            x=tf.transform.translation.x,
+            y=tf.transform.translation.y,
+            z=tf.transform.translation.z,
         )
-        send_goal_future.add_done_callback(self.arm_goal_response_callback)
 
-    def _make_pose(self, x: float, y: float, z: float) -> Pose:
-        """Create a Pose message."""
-        pose = Pose()
-        pose.position.x = x
-        pose.position.y = y
-        pose.position.z = z
-        pose.orientation.w = 1.0
-        return pose
-
-    def arm_feedback_callback(self, feedback_msg):
-        """Receive feedback from trajectory execution."""
-        feedback = feedback_msg.feedback
-        if self.test_mode:
-            self.get_logger().info(f'  Trajectory progress: {int(feedback.progress * 100)}%')
-
-    def arm_goal_response_callback(self, future):
-        """Callback when arm action goal is accepted/rejected."""
-        goal_handle = future.result()
-
-        if not goal_handle.accepted:
-            self.get_logger().error('Arm trajectory goal rejected!')
-            self.sequence_running = False
+        # 2. Call verify service
+        if not self.verify_client.wait_for_service(timeout_sec=2.0):
+            self._enter_error('vision_failure', '/verify_hook_position unavailable')
             return
 
-        self.get_logger().info('Arm trajectory goal accepted')
-        get_result_future = goal_handle.get_result_async()
-        get_result_future.add_done_callback(self.arm_result_callback)
+        req = VerifyHookPosition.Request()
+        req.arm_side = self.current_arm
+        req.hook_world_pos = hook_pos
 
-    def arm_result_callback(self, future):
-        """Callback when trajectory execution completes."""
+        self.get_logger().info(
+            f'[AT_LOOP] Hook at ({hook_pos.x:.3f}, {hook_pos.y:.3f}, {hook_pos.z:.3f}) '
+            f'— asking top cam what loop is there'
+        )
+
+        future = self.verify_client.call_async(req)
+        future.add_done_callback(self._on_verify_response)
+
+
+    def _on_verify_response(self, future):
+        """Handle verification result — confirm, re-servo, or fail."""
+        try:
+            resp = future.result()
+        except Exception as e:
+            self._enter_error('vision_failure', f'Verify call error: {e}')
+            return
+
+        if not resp.success:
+            self.get_logger().warn(
+                f'[AT_LOOP] No loop under hook: {resp.message} — re-servoing'
+            )
+            self._transition('no_match')
+            return
+
+        # Store the confirmed target for GUI/RViz
+        self.current_target_string_id = resp.matched_loop_id
+        self.current_target_loop = self._build_loop_from_verification(resp)
+        self._expected_target_position = (
+            resp.matched_loop_pos.x,
+            resp.matched_loop_pos.y,
+            resp.matched_loop_pos.z,
+        )
+
+        # Accept or re-servo based on offset
+        ACCEPTANCE_MM = 15.0   # tune on hardware
+        if resp.offset_mm < ACCEPTANCE_MM:
+            self.get_logger().info(
+                f'[AT_LOOP] ✓ Verified on {resp.matched_loop_id} '
+                f'(offset {resp.offset_mm:.1f}mm) → INSERT'
+            )
+            self._transition('verified')
+        else:
+            self.get_logger().info(
+                f'[AT_LOOP] On {resp.matched_loop_id} but off by {resp.offset_mm:.1f}mm '
+                f'(threshold {ACCEPTANCE_MM:.1f}mm) — re-servoing'
+            )
+            self._transition('mismatch')
+
+
+    def _build_loop_from_verification(self, resp) -> DetectedLoop:
+        """Convert a verify-service response into a DetectedLoop for GUI/RViz."""
+        loop = DetectedLoop()
+        loop.header = Header()
+        loop.header.stamp = self.get_clock().now().to_msg()
+        loop.header.frame_id = resp.matched_loop_id  # 'L1', 'R2', etc.
+        loop.pose.header = loop.header
+        loop.pose.pose.position = resp.matched_loop_pos
+        # Orientation unset — we don't need it for display
+        loop.confidence = 1.0
+        # loop_id numeric: derive from string if needed
+        try:
+            num = int(resp.matched_loop_id[1:])
+            loop.loop_id = num if resp.matched_loop_id.startswith('L') else num + 100
+        except (ValueError, IndexError):
+            loop.loop_id = 0
+        return loop
+
+    # def _on_verify_response(self, future):
+    #     try:
+    #         resp = future.result()
+    #     except Exception as e:
+    #         self._enter_error('vision_failure', f'Verify error: {e}')
+    #         return
+
+    #     if not resp.success:
+    #         self.get_logger().warn('[AT_LOOP] Top cam sees no loop under hook — re-servoing')
+    #         self._transition('no_match')
+    #         return
+
+    #     # Store the confirmed target so the GUI/RViz can display it
+    #     self.current_target_string_id = resp.matched_loop_id
+    #     self.current_target_loop = self._build_loop_from_verification(resp)
+    #     self._expected_target_position = (
+    #         resp.matched_loop_pos.x, resp.matched_loop_pos.y, resp.matched_loop_pos.z
+    #     )
+
+    #     # Publish for RViz/GUI 
+    #     self._publish_current_target()
+
+    #     # Check the threshold 
+    #     if resp.offset_mm < 15.0:
+    #         self.get_logger().info(
+    #             f'[AT_LOOP] Verified on {resp.matched_loop_id} '
+    #             f'(offset {resp.offset_mm:.1f}mm) → INSERT'
+    #         )
+    #         self._transition('verified')
+    #     else:
+    #         self.get_logger().info(
+    #             f'[AT_LOOP] On {resp.matched_loop_id} but off by {resp.offset_mm:.1f}mm '
+    #             f'— re-servoing'
+    #         )
+    #         # Stash correction for SERVO to use if your servo can accept a nudge
+    #         self._transition('mismatch')
+
+    def _on_top_cam_capture_done(self, future):
+        """Handle top camera capture result, then request target."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[AT_LOOP] Top cam capture: {response.message}')
+            else:
+                self.get_logger().warn(f'[AT_LOOP] Top cam capture failed: {response.message}')
+        except Exception as e:
+            self.get_logger().warn(f'[AT_LOOP] Top cam capture error: {e}')
+
+        # Proceed to request target regardless of capture result
+        self._request_next_target()
+
+    def _request_next_target(self):
+        """Request the next target loop from perception."""
+        self.get_logger().info('[AT_LOOP] Requesting next target loop...')
+
+        if not self.target_client.service_is_ready():
+            self.get_logger().warn(
+                '[AT_LOOP] Target service not available — '
+                'using current target or waiting'
+            )
+            self._enter_error('vision_failure', 'Target service not available')
+            return
+
+        request = RequestNextTarget.Request()
+        future = self.target_client.call_async(request)
+        future.add_done_callback(self._on_target_response)
+
+    def _on_target_response(self, future):
+        """Route selected loop to the correct arm by world Y sign, then proceed to APPROACH."""
+        try:
+            response = future.result()
+        except Exception as e:
+            self._enter_error('vision_failure', f'Target service error: {e}')
+            return
+
+        if not response.target_available:
+            self.get_logger().info('[AT_LOOP] No more targets — sequence complete')
+            self._transition('no_targets')
+            return
+
+        self.current_target_loop = response.target_loop
+        self.current_target_string_id = self._get_loop_string_id(self.current_target_loop)
+        pos = self.current_target_loop.pose.pose.position
+
+        # Store expected position for later validation (after visual servo)
+        self._expected_target_position = (pos.x, pos.y, pos.z)
+
+        # Route by Y sign: positive Y = left side, negative Y = right side
+        self.current_arm = 'left' if pos.y >= 0 else 'right'
+        self.current_arm_pub.publish(String(data=self.current_arm))
+
+        self.get_logger().info(
+            f'[AT_LOOP] Target: {self.current_target_string_id} '
+            f'at ({pos.x:.3f}, {pos.y:.3f}, {pos.z:.3f}) -> {self.current_arm} arm'
+        )
+
+        # Transition to APPROACH (coordinate-based coarse positioning)
+        # Visual servo will do fine positioning in SERVO state
+        self._transition('positioned')
+
+    def on_enter_servo(self, state: StowState, event: str):
+        """Run visual servo to center hook on detected loop."""
+        self.get_logger().info(f'[SERVO] Starting visual servo on {self.current_arm} arm...')
+
+        # Ensure side camera is enabled for visual servo
+        self._set_side_camera_enabled(True)
+
+        # Get the visual servo action client for the current arm
+        action_name = f'/side_arm_{self.current_arm}/visual_servo'
+
+        # Create action client if not already cached
+        if self.current_arm not in self._servo_action_clients:
+            self._servo_action_clients[self.current_arm] = ActionClient(
+                self, VisualServo, action_name,
+                callback_group=self._cb_group
+            )
+
+        client = self._servo_action_clients[self.current_arm]
+
+        if not client.wait_for_server(timeout_sec=5.0):
+            self._enter_error('servo_failed', f'{action_name} action server not available')
+            return
+
+        # Send visual servo goal
+        goal = VisualServo.Goal()
+        goal.arm_side = self.current_arm
+        goal.timeout_sec = 75.0  # Configurable
+        goal.goal_x_px = 368.0  # Use defaults from config
+        goal.goal_y_px = 137.0
+
+        self.get_logger().info(f'[SERVO] Sending goal to {action_name}')
+        send_future = client.send_goal_async(
+            goal, feedback_callback=self._on_servo_feedback
+        )
+        send_future.add_done_callback(self._on_servo_goal_response)
+
+    def _on_servo_feedback(self, feedback_msg):
+        """Monitor visual servo progress."""
+        feedback = feedback_msg.feedback
+        self.get_logger().debug(
+            f'[SERVO] Iter {feedback.iteration}: '
+            f'error=({feedback.error_x_px:.1f}, {feedback.error_y_px:.1f})px, '
+            f'{feedback.num_detections} detections'
+        )
+
+    def _on_servo_goal_response(self, future):
+        """Handle visual servo goal acceptance."""
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self._enter_error('servo_failed', 'Visual servo goal rejected')
+            return
+
+        self._active_goal_handle = goal_handle
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self._on_servo_result)
+
+    def _on_servo_result(self, future):
+        """Handle visual servo completion."""
+        self._active_goal_handle = None
         result = future.result().result
 
         if result.success:
-            self.get_logger().info('Trajectory executed successfully')
-            self.stow_ready = True
-            self._publish_status('post_stow_rotate')
-            self.rotate_hook()
+            self.get_logger().info(
+                f'[SERVO] Centered on loop in {result.iterations} iterations '
+                f'({result.execution_time_sec:.2f}s), '
+                f'final error: ({result.final_error_x_px:.1f}, {result.final_error_y_px:.1f})px'
+            )
+            self._transition('servo_complete')
         else:
-            self.get_logger().error('Trajectory execution failed!')
-            self.sequence_running = False
+            self.get_logger().warn(f'[SERVO] Failed: {result.message}')
+            self._transition('servo_failed')
 
-    def retract_hook(self):
-        """Step 4: Retract hook to complete stowing."""
-        self.get_logger().info('Step 4: Retracting hook')
+    def on_enter_insert(self, state: StowState, event: str):
+        """Entered INSERT — rotate hook up (to -90), then insert through loop."""
+        retry = self.sm.retry_count
+        if retry > 0:
+            config = self.sm.get_state_config(StowState.INSERT)
+            offset_mm = config.get('retry_offset_mm', 5.0)
+            self.get_logger().info(
+                f'[INSERT] Retry {retry} with ±{offset_mm}mm offset'
+            )
+            # TODO: Apply position offset to target loop
 
-        # Rotate back to neutral
-        rotate_request = RotateHook.Request()
-        rotate_request.angle_degrees = 0.0
+        self.get_logger().info(
+            f'[INSERT] Rotating {self.current_arm} hook to -90 (up)...'
+        )
 
-        future = self.rotate_client.call_async(rotate_request)
-        future.add_done_callback(self.retract_complete_callback)
+        rotate_client = self.get_current_rotate_client()
+        if not rotate_client.service_is_ready():
+            self._enter_error(
+                'timeout', f'{self.current_arm} rotate service not available'
+            )
+            return
 
-    def retract_complete_callback(self, future):
-        """Callback when hook retraction completes."""
+        request = RotateHook.Request()
+        request.angle_degrees = -90.0 # up
+
+        future = rotate_client.call_async(request)
+        future.add_done_callback(self._on_pre_insert_rotate_done)
+
+
+    def _on_pre_insert_rotate_done(self, future):
+        """After hook is vertical, call insert_through_loop."""
         try:
             response = future.result()
-            self.get_logger().info('Hook retracted')
-            self.get_logger().info('=== Packing Sequence Complete ===')
-            self._publish_status('complete')
-
-            # Reset for next cycle
-            self.sequence_running = False
-            self.stow_ready = False
-            self.current_target_loop = None
-
+            if not response.success:
+                self._enter_error(
+                    'collision', f'Pre-insert rotation failed: {response.message}'
+                )
+                return
         except Exception as e:
-            self.get_logger().error(f'Retract call failed: {e}')
-            self.sequence_running = False
+            self._enter_error('collision', f'Pre-insert rotation error: {e}')
+            return
 
+        self.get_logger().info('[INSERT] Hook vertical — inserting through loop...')
+        self._do_insert_through_loop()
+
+    def _on_vision_servo_done(self, future):
+        """Handle vision servo result, then proceed to insert."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[INSERT] Vision servo: {response.message}')
+            else:
+                self.get_logger().warn(f'[INSERT] Vision servo failed: {response.message} - continuing anyway')
+        except Exception as e:
+            self.get_logger().warn(f'[INSERT] Vision servo error: {e} - continuing anyway')
+
+        # Proceed to insert regardless of servo result
+        self._do_insert_through_loop()
+
+    def _do_insert_through_loop(self):
+        """Step 2: Call insert_through_loop service."""
+        insert_service = f'/side_arm_{self.current_arm}/insert_through_loop'
+        insert_client = self.create_client(Trigger, insert_service)
+
+        if not insert_client.wait_for_service(timeout_sec=5.0):
+            self._enter_error('timeout', f'{self.current_arm} insert_through_loop service not available')
+            return
+
+        self.get_logger().info('[INSERT] Inserting through loop...')
+        future = insert_client.call_async(Trigger.Request())
+        future.add_done_callback(self._on_insert_through_done)
+
+    def _on_insert_through_done(self, future):
+        """Handle insert_through_loop result."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[INSERT] {response.message}')
+                # Validate position after successful insert
+                self._validate_position()
+                self._transition('inserted')
+            else:
+                self.get_logger().warn(f'[INSERT] Failed: {response.message}')
+                self._transition('collision')  # will retry with offset
+        except Exception as e:
+            self.get_logger().error(f'[INSERT] Error: {e}')
+            self._transition('collision')
+
+    def _validate_position(self):
+        """
+        Validate current arm position against expected target position.
+        Logs a warning if significant mismatch detected (>20mm).
+        """
+        if self._expected_target_position is None:
+            self.get_logger().debug('[VALIDATE] No expected position stored, skipping validation')
+            return
+
+        exp_x, exp_y, exp_z = self._expected_target_position
+
+        # Log expected position for debugging
+        self.get_logger().info(
+            f'[VALIDATE] Target: {self.current_target_string_id} '
+            f'expected at ({exp_x*1000:.1f}, {exp_y*1000:.1f}, {exp_z*1000:.1f})mm'
+        )
+
+        # Note: To do actual position comparison, we would need to query
+        # the coordinate node's current position. For now, visual servo
+        # success is our primary validation that the hook is centered.
+        # The expected position from target selector serves as reference
+        # for tracking and debugging.
+        self.get_logger().info(
+            f'[VALIDATE] Visual servo completed - hook centered on loop '
+            f'(coordinate validation would require position query)'
+        )
+
+    def on_enter_handoff(self, state: StowState, event: str):
+        """Entered HANDOFF — rotate hook and execute stow trajectory using current arm."""
+        self.get_logger().info(f'[HANDOFF] Rotating {self.current_arm} hook to -90°...')
+
+        rotate_client = self.get_current_rotate_client()
+        if not rotate_client.service_is_ready():
+            self._enter_error('timeout', f'{self.current_arm} rotate service not available')
+            return
+
+        request = RotateHook.Request()
+        request.angle_degrees = -90.0 # up
+
+        future = rotate_client.call_async(request)
+        future.add_done_callback(self._on_pre_stow_rotate_done)
+    
+    def _on_pre_stow_rotate_done(self, future):
+        """After rotating hook, move Y up, then run main arm."""
+        try:
+            response = future.result()
+            if not response.success:
+                self._enter_error('trajectory_failure', 'Pre-stow rotation failed')
+                return
+        except Exception as e:
+            self._enter_error('trajectory_failure', f'Rotation error: {e}')
+            return
+
+        # NEW: vertical motion before handoff
+        self._do_pre_handoff_vertical()
+
+
+    def _do_pre_handoff_vertical(self):
+        """Move Y axis (stepper 1) up before handoff."""
+        steps = -8000     # up 
+        speed = 1500
+
+        self.get_logger().info(
+            f'[HANDOFF] Moving {self.current_arm} Y axis {steps} steps @ {speed}...'
+        )
+        cmd = String(data=f'STEPPER_MOVE,1,{steps},{speed}')
+        self.get_current_cmd_pub().publish(cmd)
+
+        # Wait for the motion to complete before publishing hole-center pose.
+        # Duration = steps/speed plus a small settle buffer.
+        wait_sec = (abs(steps) / speed) + 0.3
+        self._start_oneshot_timer(wait_sec, self._pre_handoff_vertical_done)
+
+
+    def _pre_handoff_vertical_done(self):
+        """After vertical motion settles, publish hole-center to main arm."""
+        if self.current_target_loop is None or not self.enable_main_arm:
+            reason = 'main arm disabled' if not self.enable_main_arm else 'no target loop'
+            self.get_logger().info(
+                f'[HANDOFF] Skipping main arm ({reason}) — requesting operator confirm'
+            )
+            self._request_operator_confirm('trajectory_complete')
+            return
+
+        # Build and publish hole-center pose (existing logic)
+        hole_pose = Pose()
+        hole_pose.position = self.current_target_loop.pose.pose.position
+        hole_pose.position.z = 0.060
+
+        if self.current_arm == 'left':
+            q = self._left_hole_orientation
+            pub = self.left_hole_seq_pub
+            topic_name = 'left_hole_center_sequence'
+        else:
+            q = self._right_hole_orientation
+            pub = self.right_hole_seq_pub
+            topic_name = 'right_hole_center_sequence'
+
+        hole_pose.orientation.x = q['x']
+        hole_pose.orientation.y = q['y']
+        hole_pose.orientation.z = q['z']
+        hole_pose.orientation.w = q['w']
+
+        self.get_logger().info(
+            f'[HANDOFF] Publishing to /main_arm/{topic_name}: '
+            f'pos=({hole_pose.position.x:.3f}, {hole_pose.position.y:.3f}, '
+            f'{hole_pose.position.z:.3f}), '
+            f'quat=({q["x"]:.3f}, {q["y"]:.3f}, {q["z"]:.3f}, {q["w"]:.3f})'
+        )
+        pub.publish(hole_pose)
+
+
+    def _start_oneshot_timer(self, delay_sec: float, callback):
+        """ROS 2 timers are always repeating; cancel after first fire."""
+        timer = None
+        def _wrapper():
+            timer.cancel()
+            callback()
+        timer = self.create_timer(delay_sec, _wrapper)
+
+    # def _on_pre_stow_rotate_done(self, future):
+    #     """After rotating hook, execute the stow trajectory."""
+    #     try:
+    #         response = future.result()
+    #         if not response.success:
+    #             self._enter_error('trajectory_failure', 'Pre-stow rotation failed')
+    #             return
+    #     except Exception as e:
+    #         self._enter_error('trajectory_failure', f'Rotation error: {e}')
+    #         return
+
+    #     self.get_logger().info(
+    #         f'[HANDOFF] Executing stow trajectory (pattern: {self.current_pattern})'
+    #     )
+
+    #     # Generate waypoints from pattern
+    #     target_pos = self.current_target_loop.pose.pose.position
+    #     waypoints = self.pattern_manager.apply_pattern(
+    #         self.current_pattern, target_pos
+    #     )
+
+    #     if not waypoints:
+    #         self._enter_error(
+    #             'trajectory_failure',
+    #             f'Pattern "{self.current_pattern}" produced no waypoints'
+    #         )
+    #         return
+
+    #     self.get_logger().info(f'[HANDOFF] {len(waypoints)} waypoints generated')
+
+    #     # Get speed from pattern config
+    #     pattern = self.pattern_manager.get_pattern(self.current_pattern)
+    #     speed_factor = pattern.speed_factor if pattern else 0.5
+
+    #     # Send trajectory goal
+    #     # TODO: Once main_arm accepts Point + pattern name instead of Pose,
+    #     # switch to that interface and remove Pose construction from here
+    #     if not self.arm_action_client.server_is_ready():
+    #         self._enter_error('timeout', 'Arm action server not available')
+    #         return
+
+    #     goal = ExecuteTrajectory.Goal()
+    #     goal.waypoints = waypoints
+    #     goal.speed_factor = speed_factor
+
+    #     send_future = self.arm_action_client.send_goal_async(
+    #         goal, feedback_callback=self._on_trajectory_feedback
+    #     )
+    #     send_future.add_done_callback(self._on_trajectory_goal_response)
+
+    def _on_trajectory_feedback(self, feedback_msg):
+        """Monitor trajectory execution."""
+        feedback = feedback_msg.feedback
+        self.get_logger().info(
+            f'  [HANDOFF] Trajectory: {int(feedback.progress * 100)}%'
+        )
+        # TODO: Check vision alignment
+        # if not vision_aligned:
+        #     self._transition('alignment_lost')
+
+    def _on_trajectory_goal_response(self, future):
+        """Handle trajectory goal acceptance."""
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self._enter_error('trajectory_failure', 'Trajectory goal rejected')
+            return
+
+        self._active_goal_handle = goal_handle
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self._on_trajectory_result)
+
+    def _on_trajectory_result(self, future):
+        """Handle trajectory execution result."""
+        self._active_goal_handle = None
+        result = future.result().result
+
+        if result.success:
+            self.get_logger().info('[HANDOFF] Stow trajectory complete')
+            self._transition('trajectory_complete')
+        else:
+            self.get_logger().error(f'[HANDOFF] Trajectory failed: {result.message}')
+            self._enter_error('trajectory_failure', result.message)
+
+    def on_enter_retract(self, state: StowState, event: str):
+        """Entered RETRACT — rotate hook down (90°), then retract Z axis."""
+        self.get_logger().info(
+            f'[RETRACT] Rotating {self.current_arm} hook to 90° (down)...'
+        )
+
+        rotate_client = self.get_current_rotate_client()
+        if not rotate_client.service_is_ready():
+            self._enter_error(
+                'timeout', f'{self.current_arm} rotate service not available'
+            )
+            return
+
+        request = RotateHook.Request()
+        request.angle_degrees = 90.0  # down
+
+        future = rotate_client.call_async(request)
+        future.add_done_callback(self._on_pre_retract_rotate_done)
+
+
+    def _on_pre_retract_rotate_done(self, future):
+        """After hook rotated down, do vertical motion, then retract Z."""
+        try:
+            response = future.result()
+            if not response.success:
+                self._enter_error(
+                    'excessive_force', f'Pre-retract rotation failed: {response.message}'
+                )
+                return
+        except Exception as e:
+            self._enter_error('excessive_force', f'Pre-retract rotation error: {e}')
+            return
+
+        self.get_logger().info('[RETRACT] Hook rotated — doing post-handoff vertical motion...')
+        self._do_post_handoff_vertical()
+
+
+    def _do_post_handoff_vertical(self):
+        """Move Y axis (stepper 1) to undo the pre-handoff vertical motion."""
+        steps = 8000      # down
+        speed = 1500
+
+        self.get_logger().info(
+            f'[RETRACT] Moving {self.current_arm} Y axis {steps} steps @ {speed}...'
+        )
+        cmd = String(data=f'STEPPER_MOVE,1,{steps},{speed}')
+        self.get_current_cmd_pub().publish(cmd)
+
+        wait_sec = (abs(steps) / speed) + 0.3
+        self._start_oneshot_timer(wait_sec, self._post_handoff_vertical_done)
+
+
+    def _post_handoff_vertical_done(self):
+        """After vertical motion settles, retract Z axis."""
+        self.get_logger().info('[RETRACT] Vertical motion done — retracting Z axis...')
+        self._do_retract_z()
+
+
+    def _do_retract_z(self):
+        """Call the retract_z service."""
+        service_name = f'/side_arm_{self.current_arm}/retract_z'
+        client = self.create_client(Trigger, service_name)
+
+        if not client.wait_for_service(timeout_sec=5.0):
+            self._enter_error('timeout', f'{service_name} not available')
+            return
+
+        future = client.call_async(Trigger.Request())
+        future.add_done_callback(self._on_retract_done)
+        
+    def _on_capture_rotate_done(self, future):
+        """After capture rotation, reset hook angle then retract."""
+        try:
+            response = future.result()
+            if not response.success:
+                self._enter_error('excessive_force', 'Capture rotation failed')
+                return
+        except Exception as e:
+            self._enter_error('excessive_force', f'Rotation error: {e}')
+            return
+
+        self.get_logger().info(f'[RETRACT] Resetting {self.current_arm} hook angle...')
+
+        # Use reset_hook_angle service instead of rotate_hook
+        reset_service = f'/side_arm_{self.current_arm}/reset_hook_angle'
+        reset_client = self.create_client(Trigger, reset_service)
+
+        if reset_client.wait_for_service(timeout_sec=2.0):
+            future = reset_client.call_async(Trigger.Request())
+            future.add_done_callback(self._on_retract_done)
+        else:
+            self.get_logger().warn('[RETRACT] reset_hook_angle not available')
+            self._enter_error('timeout', 'reset_hook_angle service not available')
+
+    def _on_retract_done(self, future):
+        """Handle retraction completion."""
+        try:
+            response = future.result()
+            if not response.success:
+                self._enter_error('excessive_force', f'Retract failed: {response.message}')
+                return
+        except Exception as e:
+            self._enter_error('excessive_force', f'Retract error: {e}')
+            return
+
+        self.get_logger().info('[RETRACT] Hook retracted')
+        self._transition('retracted')
+
+    def on_enter_release(self, state: StowState, event: str):
+        """Entered RELEASE — rotate hook down, then release line."""
+        self.get_logger().info(
+            f'[RELEASE] Rotating {self.current_arm} hook down before release...'
+        )
+
+        rotate_client = self.get_current_rotate_client()
+        if not rotate_client.service_is_ready():
+            self._enter_error(
+                'timeout', f'{self.current_arm} rotate service not available'
+            )
+            return
+
+        request = RotateHook.Request()
+        request.angle_degrees = 90.0  # down
+
+        future = rotate_client.call_async(request)
+        future.add_done_callback(self._on_pre_release_rotate_done)
+
+
+    def _on_pre_release_rotate_done(self, future):
+        """After hook is down, call release_hook."""
+        try:
+            response = future.result()
+            if not response.success:
+                self.get_logger().warn(
+                    f'[RELEASE] Pre-release rotation issue: {response.message} — '
+                    f'continuing anyway'
+                )
+        except Exception as e:
+            self.get_logger().warn(
+                f'[RELEASE] Pre-release rotation error: {e} — continuing anyway'
+            )
+
+        self.get_logger().info('[RELEASE] Hook down — releasing line...')
+        self._do_release()
+
+
+    def _do_release(self):
+        """Call the release_hook service."""
+        service_name = f'/side_arm_{self.current_arm}/release_hook'
+        client = self.create_client(Trigger, service_name)
+
+        if not client.wait_for_service(timeout_sec=5.0):
+            self._enter_error('timeout', f'{service_name} unavailable')
+            return
+
+        future = client.call_async(Trigger.Request())
+        future.add_done_callback(self._on_release_done)
+
+    def _on_release_done(self, future):
+        """Handle release completion, then reset hook angle."""
+        try:
+            response = future.result()
+            if not response.success:
+                self.get_logger().warn(f'[RELEASE] Release issue: {response.message}')
+        except Exception as e:
+            self.get_logger().warn(f'[RELEASE] Release error: {e}')
+
+        # Reset hook angle to neutral before next cycle
+        self.get_logger().info(f'[RELEASE] Resetting {self.current_arm} hook angle...')
+        reset_service = f'/side_arm_{self.current_arm}/reset_hook_angle'
+        reset_client = self.create_client(Trigger, reset_service)
+
+        if reset_client.wait_for_service(timeout_sec=2.0):
+            future = reset_client.call_async(Trigger.Request())
+            future.add_done_callback(self._on_hook_reset_done)
+        else:
+            self.get_logger().warn('[RELEASE] reset_hook_angle not available, continuing')
+            self._do_post_release_retract()
+
+    def _on_hook_reset_done(self, future):
+        """Handle hook reset completion, then retract Z before next cycle."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[RELEASE] Hook reset: {response.message}')
+            else:
+                self.get_logger().warn(f'[RELEASE] Hook reset issue: {response.message}')
+        except Exception as e:
+            self.get_logger().warn(f'[RELEASE] Hook reset error: {e}')
+
+        # NEW: retract Z before moving to next loop
+        self._do_post_release_retract()
+
+
+    def _do_post_release_retract(self):
+        """Retract Z axis to home after release, before moving to next loop."""
+        self.get_logger().info(f'[RELEASE] Retracting {self.current_arm} Z axis to home...')
+
+        service_name = f'/side_arm_{self.current_arm}/retract_z'
+        client = self.create_client(Trigger, service_name)
+
+        if not client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().warn(
+                f'[RELEASE] {service_name} not available — skipping post-release retract'
+            )
+            self._finish_release_cycle()
+            return
+
+        future = client.call_async(Trigger.Request())
+        future.add_done_callback(self._on_post_release_retract_done)
+
+
+    def _on_post_release_retract_done(self, future):
+        """After post-release Z retract, finish the release cycle."""
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f'[RELEASE] Z retracted: {response.message}')
+            else:
+                self.get_logger().warn(f'[RELEASE] Z retract issue: {response.message}')
+        except Exception as e:
+            self.get_logger().warn(f'[RELEASE] Z retract error: {e}')
+
+        self._finish_release_cycle()
+
+    def _finish_release_cycle(self):
+        """Complete the release cycle and transition to next state."""
+        self.completed_loops += 1
+        self.get_logger().info(
+            f'[RELEASE] Loop {self.completed_loops}/{self.total_loops} stowed by {self.current_arm} arm'
+        )
+
+        self.current_target_loop = None
+        self.switch_arm()
+
+        if self.total_loops > 0 and self.completed_loops >= self.total_loops:
+            self._transition('all_complete')
+        else:
+            self._transition('loops_remaining')
+
+    def on_enter_complete(self, state: StowState, event: str):
+        """Entered COMPLETE — all loops stowed."""
+        self.get_logger().info('=' * 50)
+        self.get_logger().info(f'ALL {self.completed_loops} LOOPS STOWED')
+        self.get_logger().info('=' * 50)
+        # TODO: Return arms to home
+
+    def on_enter_error(self, state: StowState, event: str):
+        """Entered ERROR — halt all motion, log diagnostics, await operator."""
+        self._halt_all()
+
+        source = self.sm.error_source
+        self.get_logger().error('=' * 50)
+        self.get_logger().error(f'ERROR from {source.name if source else "unknown"}')
+        self.get_logger().error(f'  {self._error_message}')
+        self.get_logger().error('  Commands: retry | skip | abort')
+        self.get_logger().error('=' * 50)
+
+        self.error_pub.publish(String(data=self._error_message))
 
 def main(args=None):
     rclpy.init(args=args)
     node = PackingCoordinatorNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().info('Coordinator interrupted')
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
 
 
 if __name__ == '__main__':

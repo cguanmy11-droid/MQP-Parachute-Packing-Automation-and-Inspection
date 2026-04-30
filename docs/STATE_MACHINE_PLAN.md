@@ -1,320 +1,367 @@
-# State Machine Architecture & Implementation Plan
+# Automated Parachute Line Stowing System - State Machine Documentation
 
-## Overview
+## System Overview
 
-This document outlines the plan for implementing a proper ROS 2 state machine coordinator for the automated parachute line stowing system. It serves as a reference for development priorities, architectural decisions, and the target interface contracts between packages.
+This system automates the process of stowing parachute suspension lines using a **dual-arm robotic system** with **computer vision guidance**. The system uses:
 
-The state machine replaces the linear step-sequence approach in `full_stow_demo_node.py` (archived as a working reference) with an event-driven coordinator that matches the system design described in the MQP paper.
-
----
-
-## Current State (What Works)
-
-The `full_stow_demo_node.py` (renamed to `stow_demo_legacy_node.py`) demonstrates:
-
-- Loading and applying motion patterns from JSON files
-- Sending trajectory goals to the main arm via `ExecuteTrajectory` action
-- Moving the side arm via `MoveToCoordinate` action and `MoveToPosition` service
-- Rotating the hook via `RotateHook` service
-- Sequential step execution with timer-based delays
-
-**Known limitations of the legacy node:**
-
-- Linear step list, not a state machine — no branching, no recovery
-- Timer-driven sequencing instead of event-driven transitions
-- Coordinator builds `Pose` messages with hardcoded orientation (`w=1.0`), causing IK failures
-- Motion pattern waypoints and trajectory details managed by the coordinator instead of the arm node
-- Side arm position parameters are disconnected from trajectory generation
-- No error handling, retry logic, or operator intervention
-- No perception integration — uses hardcoded target positions
-- No verification at any stage
+- **Main Arm (WX200)**: A 5-DOF robotic arm for manipulating parachute lines
+- **Side Arm (Custom 3-axis gantry)**: A hook mechanism for capturing and guiding lines through loops
+- **YOLO-based Vision System**: Real-time detection of parachute loops using a USB camera
+- **ROS 2 State Machine**: Event-driven coordinator orchestrating the entire stowing sequence
 
 ---
 
-## Target Architecture
+## State Machine Architecture
 
-### State Machine States
-
-These match Figure 6 from the paper:
-
-| State | Description | Entry Condition |
-|-------|-------------|-----------------|
-| **IDLE** | System ready, arms homed | Startup / reset |
-| **AT_LOOP** | Vision-guided positioning at next loop | Target loop selected |
-| **INSERT** | Hook insertion through loop with collision detection | Both arms positioned |
-| **HANDOFF** | Synchronized dual-arm line transfer | Hook inserted and verified |
-| **RETRACT** | Hook withdrawal with line seating | Handoff complete |
-| **RELEASE** | Cycle completion and stow verification | Retraction complete |
-| **COMPLETE** | All loops stowed | No remaining loops |
-| **ERROR** | Fault handling with operator recovery options | Any failure condition |
-
-### Transition Table
+### State Diagram
 
 ```
-IDLE
-  → AT_LOOP          (operator starts / loops remaining)
-
-AT_LOOP
-  → INSERT           (both arms report positioned successfully)
-  → ERROR            (vision failure, IK failure, timeout)
-
-INSERT
-  → HANDOFF          (hook depth verified)
-  → INSERT           (collision detected, retries remaining — apply offset)
-  → ERROR            (max retries exceeded, depth verification failed)
-
-HANDOFF
-  → RETRACT          (trajectory complete, alignment verified)
-  → AT_LOOP          (alignment lost — recoverable, retry from positioning)
-  → ERROR            (unrecoverable failure)
-
-RETRACT
-  → RELEASE          (hook fully retracted, line position verified)
-  → ERROR            (excessive force / current spike, position verification failed)
-
-RELEASE
-  → AT_LOOP          (more loops remain)
-  → COMPLETE         (all loops stowed)
-  → ERROR            (quality verification failed)
-
-ERROR
-  → (origin state)   (operator selects retry)
-  → AT_LOOP          (operator selects skip loop)
-  → IDLE             (operator selects abort)
+                              ┌─────────────────────────────────────────┐
+                              │                                         │
+                              ▼                                         │
+    ┌──────────┐  start   ┌──────────┐  homed   ┌──────────┐           │
+    │   IDLE   │ ───────► │  HOMING  │ ───────► │ AT_LOOP  │ ◄─────────┤
+    └──────────┘          └──────────┘          └──────────┘           │
+         ▲                      │                    │                  │
+         │                      │ fail          positioned              │
+         │                      ▼                    │                  │
+         │                ┌──────────┐               ▼                  │
+         │ abort          │  ERROR   │ ◄────── ┌──────────┐             │
+         │◄───────────────│          │         │  INSERT  │─┐           │
+         │                └──────────┘         └──────────┘ │ collision │
+         │                      │                    │      │ (retry)   │
+         │                  retry│               inserted   └───────────┘
+         │                      │                    │
+         │                      ▼                    ▼
+         │               (returns to           ┌──────────┐
+         │                error source)        │ HANDOFF  │
+         │                                     └──────────┘
+         │                                          │
+         │                                   trajectory_complete
+         │                                          │
+         │                                          ▼
+         │                                     ┌──────────┐
+         │                                     │ RETRACT  │
+         │                                     └──────────┘
+         │                                          │
+         │                                      retracted
+         │                                          │
+         │                                          ▼
+         │                                     ┌──────────┐    loops_remaining
+         │              ┌──────────┐           │ RELEASE  │ ──────────────────►
+         └───────────── │ COMPLETE │ ◄──────── └──────────┘
+                        └──────────┘  all_complete
 ```
+
+### States Description
+
+| State | Description | Key Actions |
+|-------|-------------|-------------|
+| **IDLE** | System ready, waiting for operator | Arms homed, ready for start command |
+| **HOMING** | Initializing side arm position | Sends HOME_ALL, captures loop positions |
+| **AT_LOOP** | Targeting next loop | Calls `/request_next_target` service, positions arms |
+| **INSERT** | Hook insertion | Vision servo centering, hook through loop |
+| **HANDOFF** | Dual-arm coordination | Rotates hook 90°, executes stow trajectory |
+| **RETRACT** | Hook withdrawal | Rotates hook again, retracts through loop |
+| **RELEASE** | Cycle completion | Verifies stow quality, increments counter |
+| **COMPLETE** | All loops stowed | Success state, can restart |
+| **ERROR** | Fault handling | Halts motion, awaits operator recovery |
 
 ---
 
-## Package Responsibilities
+## Key Components
 
-### parachute_coordinator (this is the state machine)
+### ROS 2 Nodes
 
-**Owns:** State transitions, sequencing, operator interface, progress tracking.
+| Node | Package | Purpose |
+|------|---------|---------|
+| `packing_coordinator_node` | parachute_coordinator | State machine controller |
+| `target_selector_node` | parachute_perception | Loop selection and ordering |
+| `yolo_detector` | yolo_detect_ros | Real-time loop detection |
+| `camera_to_3d_node` | parachute_perception | Pixel to 3D coordinate conversion |
+| `loop_visualizer_node` | parachute_perception | RViz visualization |
+| `main_arm_interface_node` | main_arm_control | WX200 arm control |
+| `side_arm_interface_node` | side_arm_control | Gantry hook control |
+| `side_arm_coordinate_node` | side_arm_control | Motor command translation |
 
-**Does NOT own:** IK solving, orientation selection, trajectory feasibility, motor commands, perception processing.
+### Topic Flow
 
-The coordinator sends high-level goals and reacts to results. It should read like the paper's state diagram.
+```
+USB Camera
+    │
+    ▼
+┌──────────────┐    /yolo/centers    ┌────────────────┐   /detected_loops   ┌───────────────────┐
+│ yolo_detector│ ─────────────────► │ camera_to_3d   │ ─────────────────► │ target_selector   │
+└──────────────┘   (pixel coords)   └────────────────┘   (3D world coords) └───────────────────┘
+                                                                                     │
+                                                                    /request_next_target (service)
+                                                                                     │
+                                                                                     ▼
+                                                                           ┌─────────────────────┐
+                                                                           │ packing_coordinator │
+                                                                           └─────────────────────┘
+                                                                                     │
+                                          ┌──────────────────────────────────────────┼──────────────┐
+                                          │                                          │              │
+                                          ▼                                          ▼              ▼
+                                 /side_arm/insert_hook                    /main_arm/execute   /stow/status
+                                       (action)                             _trajectory
+                                                                              (action)
+```
 
-**Key node:** `stow_coordinator_node.py`
+### Services
 
-**Publishes:**
-- `/stow/status` — current state, progress, loop count
-- `/stow/error` — error details for operator interface
+| Service | Type | Provider | Purpose |
+|---------|------|----------|---------|
+| `/request_next_target` | RequestNextTarget | target_selector_node | Get next loop to stow |
+| `/capture_loops` | CaptureLoops | target_selector_node | Snapshot loop positions |
+| `/side_arm/rotate_hook` | RotateHook | side_arm_interface_node | Rotate hook mechanism |
+| `/side_arm/move_to_position` | MoveToPosition | side_arm_interface_node | Direct position move |
 
-**Subscribes:**
-- `/main_arm/status` — arm state enum + pose
-- `/side_arm/status` — hook state enum + position (already exists as `HookStatus`)
-- `/target_loop` — next loop to stow (from perception)
-- `/detected_loops` — all visible loops (for verification)
+### Actions
 
-**Action clients:**
-- `/main_arm/execute_stow` — send target point + pattern, arm handles the rest
-- `/side_arm/insert_hook` — already exists
-- `/side_arm/move_to_coordinate` — already exists
-
-**Service clients:**
-- `/side_arm/rotate_hook` — already exists
-- `/perception/request_next_target` — get next loop to stow
-
-**Subscribes for commands:**
-- `/stow/command` — operator input (start, stop, retry, skip, abort)
-
-### main_arm_control
-
-**Owns:** IK solving, end-effector orientation, trajectory feasibility, motion execution, workspace limits.
-
-**Changes needed:**
-
-1. **New action: `ExecuteStowTrajectory`** — accepts a target `Point` (not `Pose`) and a pattern name. The arm node internally resolves orientation per waypoint, checks IK feasibility, and executes. Returns success/failure with diagnostics.
-
-2. **New service: `CheckTrajectoryFeasibility`** — accepts waypoints as `Point[]`, returns which (if any) are unreachable. Allows the coordinator to fail fast before committing to execution.
-
-3. **Status topic: `/main_arm/status`** — publish an enum state (IDLE, MOVING, HOMING, ERROR) plus current end-effector pose. The coordinator subscribes to this for transition decisions.
-
-4. **Orientation handling** — the `_make_pose` helper (or equivalent) should select appropriate orientation based on position and task phase. For low-Z stowing work, the gripper likely needs to point downward. This logic lives here, not in the coordinator.
-
-### side_arm_control
-
-**Mostly correct already.** The `InsertHook` action and `MoveToPosition`/`MoveToWorldPose` services are the right abstraction level.
-
-**Changes needed:**
-
-1. **Motor current feedback** — if the ESP32 reports current draw, include it in `InsertHook` action feedback so the coordinator can react to collisions.
-
-2. **Homing robustness** — firmware update (done) adds proper back-off-and-approach homing. The coordinate node should expose a `Home` service that the coordinator calls and waits for confirmation.
-
-3. **Status topic enrichment** — `HookStatus` already publishes state. Consider adding a `homing_complete` field or ensuring the state enum covers HOMING.
-
-### side_arm_motor_control_bridge (firmware)
-
-**Changes needed:**
-
-1. **Homing state machine** — done (back off if on limit, slow approach, zero on trigger).
-
-2. **Current sensing** — if ADC is available on the motor driver, add current reading to the `STATE` JSON payload. This enables collision detection without additional hardware.
-
-3. **Homing confirmation event** — publish `EVENT HOME_COMPLETE` (or per-axis) so the ROS side knows when homing finishes rather than guessing.
-
-### parachute_perception
-
-**Changes needed:**
-
-1. **`/target_loop` publisher** — a target selector node that picks the next loop to stow based on ordering logic (left-to-right, closest, etc.) and publishes it.
-
-2. **`RequestNextTarget` service** — coordinator calls this to trigger target selection, then subscribes to `/target_loop` for the result.
-
-3. **Camera frame correction** — fix the URDF camera orientation (currently 180° pitch causing inverted view). The detection simulator's FOV and projection math need to match the corrected frame.
+| Action | Type | Provider | Purpose |
+|--------|------|----------|---------|
+| `/side_arm/insert_hook` | InsertHook | side_arm_interface_node | Hook insertion sequence |
+| `/main_arm/execute_trajectory` | ExecuteTrajectory | main_arm_interface_node | Execute stow trajectory |
+| `/side_arm/move_to_coordinate` | MoveToCoordinate | coordinate_node | Position control with feedback |
 
 ---
 
-## Coordinator Node Structure
+## Vision Pipeline
 
-The coordinator should be structured as a single node with clean state management:
+### YOLO Loop Detection
 
-```
-stow_coordinator_node.py
-├── State enum (StowState)
-├── Transition table (dict of state → {event: next_state})
-├── State handlers (enter/execute/exit per state)
-├── Action/service clients (to arm nodes and perception)
-├── Subscriber callbacks (status, detection, operator commands)
-└── Transition method (event-driven, logs all transitions)
-```
+1. **Camera Input**: USB camera captures frames at 30 FPS
+2. **YOLO Inference**: Custom-trained YOLOv8 model detects parachute loops
+3. **Pixel Centers**: Detection centers published as pixel coordinates
+4. **3D Conversion**: Using camera intrinsics and assumed depth, convert to 3D
+5. **TF Transform**: Transform from camera_frame to world frame
 
-Each state handler:
+### Camera Configuration
 
-- **AT_LOOP:** Calls `RequestNextTarget`, waits for `/target_loop`, commands both arms to position, transitions on both-ready or timeout.
-- **INSERT:** Sends `InsertHook` goal, monitors feedback for collision/current, handles retry with offset, transitions on depth verification.
-- **HANDOFF:** Calls `RotateHook(90)`, sends main arm stow trajectory goal, monitors vision alignment via feedback, transitions on completion.
-- **RETRACT:** Sends retraction goal (reversed insertion path), monitors current, calls `RotateHook` oscillation, transitions on full retraction + vision verification.
-- **RELEASE:** Calls `RotateHook(0)`, verifies stow quality via vision, increments counter, transitions to AT_LOOP or COMPLETE.
-- **ERROR:** Halts all motion, logs diagnostics, waits for operator command on `/stow/command`.
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `camera_index` | 4 | USB camera device index |
+| `image_width` | 640 | Image width in pixels |
+| `image_height` | 480 | Image height in pixels |
+| `camera_fov` | 80.0 | Horizontal field of view (degrees) |
+| `assumed_depth` | 0.22 | Distance from camera to loop plane (meters) |
+| `conf_threshold` | 0.5 | YOLO confidence threshold |
+
+### Target Selection Strategies
+
+| Strategy | Description |
+|----------|-------------|
+| `leftmost` | Process loops from left to right |
+| `rightmost` | Process loops from right to left |
+| `nearest` | Process closest loop first |
 
 ---
 
-## Interface Contracts
+## Coordinate System
 
-### Main Arm Status (`/main_arm/status`)
-
-```
-uint8 state          # IDLE=0, MOVING=1, HOMING=2, ERROR=3
-geometry_msgs/Pose current_pose
-bool is_homed
-string error_message  # empty if no error
-```
-
-### Stow Status (`/stow/status`)
+### Frame Hierarchy
 
 ```
-uint8 state           # matches StowState enum
-uint32 current_loop   # which loop we're on
-uint32 total_loops    # total loops to stow
-string state_name     # human-readable state name
-string details        # current activity description
+world (base frame)
+    │
+    ├── wx200/base_link (main arm base)
+    │       └── ... (arm links)
+    │
+    ├── framemodel_root (physical frame structure)
+    │
+    └── side_arm_origin (gantry origin)
+            └── y_carriage_link
+                    └── camera_frame (attached to Y carriage)
 ```
 
-### Operator Command (`/stow/command`)
+### Side Arm Coordinate Mapping
 
+The side arm uses a custom coordinate transformation:
+
+| Axis | Direction | Range | Notes |
+|------|-----------|-------|-------|
+| X | Inverted (SA X+ = World X-) | 0-300mm | Horizontal rails |
+| Y | Normal | 0-50mm | Vertical lead screw |
+| Z | Normal | 0-180mm | Depth lead screw |
+
+**Hook Offset Calibration** (position when arm is homed):
+- Hook X: 350mm in world frame
+- Hook Y: 180mm in world frame
+- Hook Z: -10mm in world frame
+
+**Conversion Formula**:
 ```
-string command        # start, stop, retry, skip, abort, home
+arm_x = hook_offset_x - world_x  (inverted)
+arm_y = world_y - hook_offset_y  (normal)
+arm_z = world_z - hook_offset_z  (normal)
 ```
 
 ---
 
-## Implementation Order
+## Motion Patterns
 
-### Phase 1: Foundation (do first)
+The system supports configurable stow trajectories defined as motion patterns:
 
-- [ ] Archive `full_stow_demo_node.py` → `stow_demo_legacy_node.py`
-- [ ] Fix main arm orientation handling — move `_make_pose` orientation logic into `main_arm_control`
-- [ ] Create new `ExecuteStowTrajectory` action that accepts `Point` + pattern name
-- [ ] Fix side arm URDF offsets to match physical dimensions
-- [ ] Fix camera frame orientation in URDF
-- [ ] Verify `world → side_arm_origin` transform accuracy with physical measurements
+### Built-in Patterns
 
-### Phase 2: Coordinator Skeleton
+| Pattern | Description |
+|---------|-------------|
+| `square_stow` | Square motion path for stowing |
+| `recorded_stow` | Pre-recorded optimal trajectory |
+| `direct` | Straight-line movement |
 
-- [ ] Create `stow_coordinator_node.py` with state enum, transition table, and logging
-- [ ] Implement IDLE → AT_LOOP → INSERT flow with hardcoded positions (no perception yet)
-- [ ] Wire up action clients for main arm and side arm
-- [ ] Add `/stow/status` publisher
-- [ ] Add `/stow/command` subscriber for operator control (start/stop/abort)
+### Pattern Configuration
 
-### Phase 3: Full State Machine
-
-- [ ] Implement HANDOFF state with dual-arm coordination
-- [ ] Implement RETRACT state with reversed trajectory
-- [ ] Implement RELEASE state with hook neutral and cycle counting
-- [ ] Implement ERROR state with halt-all and operator recovery options
-- [ ] Add retry logic in INSERT with position offset
-
-### Phase 4: Perception Integration
-
-- [ ] Wire `/target_loop` into AT_LOOP state
-- [ ] Add vision verification callbacks in HANDOFF and RETRACT
-- [ ] Implement stow quality check in RELEASE
-- [ ] Fix detection simulator projection to match corrected camera frame
-
-### Phase 5: Safety & Polish
-
-- [ ] Add motor current monitoring for collision detection (firmware + ROS)
-- [ ] Add `CheckTrajectoryFeasibility` service to main arm
-- [ ] Add timeout handling for every action call
-- [ ] Test full multi-loop stowing sequence
-- [ ] Tune parameters (thresholds, speeds, offsets) on hardware
+Patterns can be defined in JSON files with waypoints:
+```json
+{
+  "name": "square_stow",
+  "speed_factor": 0.5,
+  "waypoints": [
+    {"x": 0.0, "y": 0.0, "z": 0.0},
+    {"x": 0.05, "y": 0.0, "z": -0.02},
+    ...
+  ]
+}
+```
 
 ---
 
-## File Locations
+## Launch Files
 
+### State Machine with Real Camera
+
+```bash
+ros2 launch parachute_coordinator state_machine_demo.launch.py \
+    use_real_camera:=true
 ```
-src/parachute_coordinator/
-├── parachute_coordinator/
-│   ├── stow_coordinator_node.py      # NEW — the state machine
-│   ├── stow_demo_legacy_node.py      # ARCHIVED — old step-based demo
-│   ├── motion_pattern_manager.py     # Keep — pattern loading (used by main_arm later)
-│   └── ...
-├── config/
-│   └── motion_patterns/              # Keep — JSON pattern files
-├── launch/
-│   ├── stow.launch.py                # NEW — launches coordinator + arms
-│   ├── full_stow_demo.launch.py      # Keep for legacy testing
-│   └── dual_arm_test.launch.py       # Keep for hardware testing
-└── ...
 
-src/main_arm_control/
-├── main_arm_control/
-│   ├── main_arm_interface_node.py    # UPDATE — add orientation handling, new action
-│   └── ...
-└── ...
+### Key Launch Arguments
 
-src/side_arm_control/
-├── urdf/
-│   └── side_arm.urdf                 # UPDATE — fix joint offsets, camera frame
-├── side_arm_control/
-│   ├── side_arm_interface_node.py    # Minor updates — homing service, current feedback
-│   └── ...
-└── ...
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `main_arm_sim` | false | Run main arm in simulation |
+| `side_arm_sim` | false | Run side arm in simulation |
+| `use_real_camera` | false | Use USB camera + YOLO |
+| `vision_test_mode` | false | Use simulated loop detections |
+| `use_test_loops` | false | Use hardcoded test positions |
+| `camera_index` | 4 | Camera device index |
+| `selection_strategy` | leftmost | Loop ordering strategy |
+| `stow_pattern` | square_stow | Motion pattern name |
+| `expected_loop_count` | 0 | Expected loops (0 = auto) |
 
-src/side_arm_motor_control_bridge/
-├── firmware/
-│   └── src/
-│       └── main.cpp                  # UPDATED — homing state machine (done)
-└── ...
+### Common Launch Configurations
+
+```bash
+# Full hardware with real camera
+ros2 launch parachute_coordinator state_machine_demo.launch.py \
+    use_real_camera:=true
+
+# Simulation mode (no hardware)
+ros2 launch parachute_coordinator state_machine_demo.launch.py \
+    main_arm_sim:=true side_arm_sim:=true vision_test_mode:=true
+
+# Hardware with simulated vision
+ros2 launch parachute_coordinator state_machine_demo.launch.py \
+    vision_test_mode:=true
+
+# Side arm only testing
+ros2 launch parachute_coordinator dual_arm_test.launch.py \
+    enable_main_arm:=false use_real_camera:=true
 ```
+
+---
+
+## Operator Commands
+
+Commands are sent via `/stow/command` topic:
+
+```bash
+# Start the stowing sequence
+ros2 topic pub --once /stow/command std_msgs/String "data: start"
+
+# Check current status
+ros2 topic pub --once /stow/command std_msgs/String "data: status"
+
+# Emergency stop and reset
+ros2 topic pub --once /stow/command std_msgs/String "data: stop"
+
+# Change motion pattern
+ros2 topic pub --once /stow/command std_msgs/String "data: pattern:recorded_stow"
+
+# Error recovery
+ros2 topic pub --once /stow/command std_msgs/String "data: retry"
+ros2 topic pub --once /stow/command std_msgs/String "data: skip"
+ros2 topic pub --once /stow/command std_msgs/String "data: abort"
+```
+
+---
+
+## Error Handling
+
+### Error Sources
+
+| Error | Source State | Recovery Options |
+|-------|--------------|------------------|
+| `homing_failed` | HOMING | Check hardware, retry |
+| `vision_failure` | AT_LOOP | Check camera, lighting |
+| `ik_failure` | AT_LOOP | Adjust target position |
+| `collision` | INSERT | Auto-retry with offset |
+| `max_retries` | INSERT | Skip or manual intervention |
+| `trajectory_failure` | HANDOFF | Check IK, waypoints |
+| `excessive_force` | RETRACT | Check for jams |
+
+### Recovery Flow
+
+1. Error occurs → System enters ERROR state
+2. All motion halted, diagnostics logged
+3. Operator chooses:
+   - `retry`: Return to error source state
+   - `skip`: Skip current loop, try next
+   - `abort`: Return to IDLE
+
+---
+
+## System Performance
+
+### Timing (Typical Values)
+
+| Phase | Duration |
+|-------|----------|
+| Homing | 10-30 seconds |
+| Target acquisition | <1 second |
+| Hook insertion | 3-5 seconds |
+| Vision servo centering | 1-3 seconds |
+| Stow trajectory | 5-10 seconds |
+| Hook retraction | 2-4 seconds |
+| **Total per loop** | **~20-45 seconds** |
+
+### Vision Specifications
+
+| Metric | Value |
+|--------|-------|
+| Detection rate | 30 FPS |
+| YOLO confidence | >50% |
+| Position accuracy | ±5mm |
+| Depth assumption | 220mm |
 
 ---
 
 ## Design Principles
 
-1. **The coordinator reads like the state diagram.** Anyone looking at the transition table should see Figure 6 from the paper.
+1. **Event-driven transitions**: State changes happen because actions complete, not timers
+2. **Thin coordinator**: Send high-level goals, let arm nodes handle details
+3. **Single source of truth**: One detected loop drives both arms
+4. **Fail safely**: Every action has timeout, every failure goes to ERROR
+5. **Operator in the loop**: ERROR state requires human decision to continue
 
-2. **Push implementation details down.** The coordinator says "stow at this point." The arm node figures out how.
+---
 
-3. **Event-driven, not timer-driven.** State transitions happen because an action completed or a sensor fired, not because a timer elapsed.
+## References
 
-4. **Single source of truth for loop position.** One detected (or hardcoded) loop position drives both arms. No independent position parameters.
-
-5. **Fail safely and loudly.** Every action call has a timeout. Every failure transitions to ERROR with diagnostics. No silent failures.
-
-6. **Keep the legacy demo runnable.** The archived node stays functional for quick hardware tests while the state machine is under development.
+- MQP Paper: Figure 6 (State Machine Diagram)
+- ROS 2 Humble Documentation
+- YOLOv8 Ultralytics Documentation
+- Interbotix WX200 Documentation

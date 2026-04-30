@@ -59,7 +59,7 @@ State JSON fields: `l1~l3` (limit triggered=1), `s1/s2` (stepper positions in st
 
 1) **PlatformIO / firmware**
 ```bash
-cd side_arm_motor_control/firmware
+cd src/side_arm_motor_control/firmware
 pio run -t upload --upload-port /dev/ttyUSB0
 pio device monitor -b 115200 --port /dev/ttyUSB0
 ```

@@ -26,9 +26,9 @@ constexpr uint8_t DC_L_PWM = 15;
 constexpr uint8_t DC_EN    = 4;   // tie both EN pins to GPIO4
 
 // Motion defaults
-constexpr float DEFAULT_MAX_SPEED    = 800.0F;   // steps / s
+constexpr float DEFAULT_MAX_SPEED    = 1500.0F;   // steps / s
 constexpr float DEFAULT_ACCELERATION = 200.0F;   // steps / s^2
-constexpr float HOMING_SPEED         = 800.0F;
+constexpr float HOMING_SPEED         = 1200.0F;
 
 // DC PWM
 constexpr uint8_t DC_R_PWM_CHANNEL = 0;

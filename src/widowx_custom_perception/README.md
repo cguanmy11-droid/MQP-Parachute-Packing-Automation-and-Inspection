@@ -1,260 +1,261 @@
 # WidowX Custom Perception
 
-自定义感知节点包，用于 WidowX-200 机械臂系统。
+> **LEGACY PACKAGE**: This package was used for early color segmentation experiments. The active perception pipeline now uses `yolo_detect_ros` and `top_cam_loop_state` for YOLO-based loop detection.
 
-## 功能
+---
 
-### 1. Color Segmentation Node (颜色分割节点)
+Custom perception node package for the WidowX-200 robot arm system.
 
-使用 HSV 颜色空间检测和分割方形目标，提取四个角点并计算平均位置。
+## Features
 
-**订阅:**
-- `/camera1/image_raw` (sensor_msgs/Image) - 输入图像
-- `/camera1/camera_info` (sensor_msgs/CameraInfo) - 相机标定信息
+### Color Segmentation Node
 
-**发布:**
-- `/segmentation/results` (widowx_custom_msgs/SegmentationResult) - 分割结果
+Uses HSV color space to detect and segment square targets, extracting four corner points and calculating the average position.
 
-## 安装
+**Subscribes:**
+- `/camera1/image_raw` (sensor_msgs/Image) - Input image
+- `/camera1/camera_info` (sensor_msgs/CameraInfo) - Camera calibration info
 
-### 1. 构建消息包
+**Publishes:**
+- `/segmentation/results` (widowx_custom_msgs/SegmentationResult) - Segmentation results
+
+## Installation
+
+### 1. Build the message package
 
 ```bash
-cd /home/my11/interbotix_ws
 colcon build --packages-select widowx_custom_msgs
 source install/setup.bash
 ```
 
-### 2. 构建感知包
+### 2. Build the perception package
 
 ```bash
 colcon build --packages-select widowx_custom_perception
 source install/setup.bash
 ```
 
-### 3. 安装依赖
+### 3. Install dependencies
 
 ```bash
-pip3 install opencv-python
-pip3 install numpy
+pip3 install opencv-python numpy
 ```
 
-## 使用方法
+## Usage
 
-### 快速启动
+### Quick Start
 
 ```bash
-# 启动颜色分割节点
+# Launch color segmentation node
 ros2 launch widowx_custom_perception color_segmentation.launch.py
 ```
 
-### 使用自定义参数
+### Using Custom Parameters
 
 ```bash
 ros2 launch widowx_custom_perception color_segmentation.launch.py \
     config_file:=/path/to/your/params.yaml
 ```
 
-### 直接运行节点
+### Run Node Directly
 
 ```bash
 ros2 run widowx_custom_perception color_segmentation_node \
     --ros-args --params-file src/widowx_custom_perception/config/color_segmentation_params.yaml
 ```
 
-## 可调参数详解
+## Parameters
 
-### HSV 颜色范围参数
+### HSV Color Range Parameters
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `hsv_lower_h` | int | 0 | 色调下限 (0-179) |
-| `hsv_lower_s` | int | 100 | 饱和度下限 (0-255) |
-| `hsv_lower_v` | int | 100 | 明度下限 (0-255) |
-| `hsv_upper_h` | int | 10 | 色调上限 (0-179) |
-| `hsv_upper_s` | int | 255 | 饱和度上限 (0-255) |
-| `hsv_upper_v` | int | 255 | 明度上限 (0-255) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `hsv_lower_h` | int | 0 | Hue lower bound (0-179) |
+| `hsv_lower_s` | int | 100 | Saturation lower bound (0-255) |
+| `hsv_lower_v` | int | 100 | Value lower bound (0-255) |
+| `hsv_upper_h` | int | 10 | Hue upper bound (0-179) |
+| `hsv_upper_s` | int | 255 | Saturation upper bound (0-255) |
+| `hsv_upper_v` | int | 255 | Value upper bound (0-255) |
 
-**常见颜色的 HSV 范围:**
+**Common HSV Ranges by Color:**
 
-| 颜色 | H范围 | S范围 | V范围 |
-|------|-------|-------|-------|
-| 红色(低) | 0-10 | 100-255 | 100-255 |
-| 红色(高) | 170-179 | 100-255 | 100-255 |
-| 橙色 | 10-25 | 100-255 | 100-255 |
-| 黄色 | 20-40 | 100-255 | 100-255 |
-| 绿色 | 40-80 | 50-255 | 50-255 |
-| 蓝色 | 100-130 | 100-255 | 100-255 |
-| 紫色 | 130-160 | 50-255 | 50-255 |
+| Color | H Range | S Range | V Range |
+|-------|---------|---------|---------|
+| Red (low) | 0-10 | 100-255 | 100-255 |
+| Red (high) | 170-179 | 100-255 | 100-255 |
+| Orange | 10-25 | 100-255 | 100-255 |
+| Yellow | 20-40 | 100-255 | 100-255 |
+| Green | 40-80 | 50-255 | 50-255 |
+| Blue | 100-130 | 100-255 | 100-255 |
+| Purple | 130-160 | 50-255 | 50-255 |
 
-### 形态学操作参数
+### Morphological Operation Parameters
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `morph_kernel_size` | int | 5 | 形态学核大小（必须为奇数）|
-| `morph_iterations` | int | 2 | 形态学操作迭代次数 |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `morph_kernel_size` | int | 5 | Morphological kernel size (must be odd) |
+| `morph_iterations` | int | 2 | Number of morphological iterations |
 
-### 轮廓筛选参数
+### Contour Filtering Parameters
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `min_area` | float | 500.0 | 最小面积（像素）|
-| `max_area` | float | 50000.0 | 最大面积（像素）|
-| `min_aspect_ratio` | float | 0.7 | 最小宽高比 |
-| `max_aspect_ratio` | float | 1.3 | 最大宽高比（1.0为正方形）|
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `min_area` | float | 500.0 | Minimum area (pixels) |
+| `max_area` | float | 50000.0 | Maximum area (pixels) |
+| `min_aspect_ratio` | float | 0.7 | Minimum aspect ratio |
+| `max_aspect_ratio` | float | 1.3 | Maximum aspect ratio (1.0 = square) |
 
-### 角点检测参数
+### Corner Detection Parameters
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `approx_epsilon_factor` | float | 0.02 | 轮廓逼近精度因子 (0.01-0.05) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `approx_epsilon_factor` | float | 0.02 | Contour approximation precision (0.01-0.05) |
 
-### 其他参数
+### Other Parameters
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enable_debug_view` | bool | true | 是否显示调试窗口 |
-| `color_name` | string | 'red' | 目标颜色名称 |
-| `image_topic` | string | '/camera1/image_raw' | 图像话题 |
-| `camera_info_topic` | string | '/camera1/camera_info' | 相机信息话题 |
-| `result_topic` | string | '/segmentation/results' | 结果发布话题 |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enable_debug_view` | bool | true | Show debug window |
+| `color_name` | string | 'red' | Target color name |
+| `image_topic` | string | '/camera1/image_raw' | Image topic |
+| `camera_info_topic` | string | '/camera1/camera_info' | Camera info topic |
+| `result_topic` | string | '/segmentation/results' | Result publish topic |
 
-## 参数调优指南
+## Parameter Tuning Guide
 
-### 1. 光照条件调整
+### 1. Lighting Adjustments
 
-**强光环境:**
-- 提高 `hsv_lower_v` (150-200)
-- 可能需要提高 `hsv_lower_s` (150-200)
+**Bright environment:**
+- Increase `hsv_lower_v` (150-200)
+- May need to increase `hsv_lower_s` (150-200)
 
-**弱光环境:**
-- 降低 `hsv_lower_v` (50-80)
-- 降低 `hsv_lower_s` (50-80)
+**Low light environment:**
+- Decrease `hsv_lower_v` (50-80)
+- Decrease `hsv_lower_s` (50-80)
 
-### 2. 目标大小调整
+### 2. Target Size Adjustments
 
-**目标太小:**
-- 降低 `min_area` (100-300)
-- 减少 `morph_iterations` (1)
+**Target too small:**
+- Decrease `min_area` (100-300)
+- Reduce `morph_iterations` (1)
 
-**目标太大或有噪点:**
-- 提高 `max_area` (100000+)
-- 增加 `morph_iterations` (3-4)
+**Target too large or noisy:**
+- Increase `max_area` (100000+)
+- Increase `morph_iterations` (3-4)
 
-### 3. 形状要求调整
+### 3. Shape Requirements
 
-**长方形目标:**
-- 扩大宽高比范围: `min_aspect_ratio: 0.5`, `max_aspect_ratio: 2.0`
+**Rectangular targets:**
+- Expand aspect ratio range: `min_aspect_ratio: 0.5`, `max_aspect_ratio: 2.0`
 
-**严格正方形:**
-- 缩小宽高比范围: `min_aspect_ratio: 0.9`, `max_aspect_ratio: 1.1`
+**Strict squares:**
+- Narrow aspect ratio range: `min_aspect_ratio: 0.9`, `max_aspect_ratio: 1.1`
 
-### 4. 角点检测精度
+### 4. Corner Detection Precision
 
-**角点不准确:**
-- 减小 `approx_epsilon_factor` (0.01)
+**Corners inaccurate:**
+- Decrease `approx_epsilon_factor` (0.01)
 
-**角点过于贴合噪点:**
-- 增大 `approx_epsilon_factor` (0.03-0.05)
+**Corners fitting to noise:**
+- Increase `approx_epsilon_factor` (0.03-0.05)
 
-## 实时参数调整
+## Live Parameter Adjustment
 
-使用 `rqt_reconfigure` 可以实时调整参数:
+Use `rqt_reconfigure` for real-time parameter tuning:
 
 ```bash
 ros2 run rqt_reconfigure rqt_reconfigure
 ```
 
-或使用命令行:
+Or via command line:
 
 ```bash
-# 调整 HSV 色调上限
+# Adjust HSV hue upper bound
 ros2 param set /color_segmentation_node hsv_upper_h 15
 
-# 调整最小面积
+# Adjust minimum area
 ros2 param set /color_segmentation_node min_area 1000.0
 
-# 开启/关闭调试视图
+# Toggle debug view
 ros2 param set /color_segmentation_node enable_debug_view false
 ```
 
-## 输出消息格式
+## Output Message Format
 
 ```
 std_msgs/Header header
-string color_name              # 颜色名称
-geometry_msgs/Point centroid   # 质心坐标
-geometry_msgs/Point corner_average  # 四角平均位置
-geometry_msgs/Point[4] corners # 四个角点 [TL, TR, BR, BL]
-float32 area                   # 面积
-float32 confidence             # 置信度
-sensor_msgs/CameraInfo camera_info  # 相机信息
+string color_name              # Color name
+geometry_msgs/Point centroid   # Centroid coordinates
+geometry_msgs/Point corner_average  # Average of four corners
+geometry_msgs/Point[4] corners # Four corners [TL, TR, BR, BL]
+float32 area                   # Area
+float32 confidence             # Confidence
+sensor_msgs/CameraInfo camera_info  # Camera info
 ```
 
-## 测试与调试
+## Testing & Debugging
 
-### 1. 查看发布的结果
+### 1. View published results
 
 ```bash
 ros2 topic echo /segmentation/results
 ```
 
-### 2. 检查图像订阅
+### 2. Check image subscription
 
 ```bash
 ros2 topic hz /camera1/image_raw
 ```
 
-### 3. 可视化
+### 3. Visualization
 
-节点会自动显示两个窗口（如果 `enable_debug_view: true`）:
-- **Original**: 带标注的原始图像（绿色轮廓、蓝色角点、红色质心、黄色角点平均）
-- **Mask**: HSV 分割后的二值掩码
+The node displays two windows (if `enable_debug_view: true`):
+- **Original**: Annotated original image (green contours, blue corners, red centroid, yellow corner average)
+- **Mask**: Binary mask after HSV segmentation
 
-## 故障排查
+## Troubleshooting
 
-### 问题: 没有检测到轮廓
+### Problem: No contours detected
 
-**可能原因:**
-1. HSV 范围不正确
-2. 目标太小或太大
-3. 光照条件不佳
+**Possible causes:**
+1. Incorrect HSV range
+2. Target too small or too large
+3. Poor lighting conditions
 
-**解决方法:**
-1. 使用 HSV 颜色拾取工具调整范围
-2. 调整 `min_area` 和 `max_area`
-3. 调整 `hsv_lower_v` 和 `hsv_upper_v`
+**Solutions:**
+1. Use HSV color picker tool to adjust range
+2. Adjust `min_area` and `max_area`
+3. Adjust `hsv_lower_v` and `hsv_upper_v`
 
-### 问题: 角点检测不准确
+### Problem: Inaccurate corner detection
 
-**可能原因:**
-1. 目标边缘模糊
-2. 逼近精度不合适
+**Possible causes:**
+1. Blurry target edges
+2. Inappropriate approximation precision
 
-**解决方法:**
-1. 增加 `morph_iterations` 进行边缘平滑
-2. 调整 `approx_epsilon_factor`
+**Solutions:**
+1. Increase `morph_iterations` to smooth edges
+2. Adjust `approx_epsilon_factor`
 
-### 问题: 多个轮廓被检测
+### Problem: Multiple contours detected
 
-**可能原因:**
-1. 背景中有相似颜色
-2. 形态学操作不足
+**Possible causes:**
+1. Similar colors in background
+2. Insufficient morphological operations
 
-**解决方法:**
-1. 缩小 HSV 范围
-2. 增加 `morph_iterations`
-3. 调整 `min_area` 过滤小轮廓
+**Solutions:**
+1. Narrow HSV range
+2. Increase `morph_iterations`
+3. Adjust `min_area` to filter small contours
 
-## 开发者信息
+## Developer Info
 
 - Package: `widowx_custom_perception`
 - Node: `color_segmentation_node`
 - Language: Python 3
-- ROS Version: ROS 2 Humble/Foxy/Iron
+- ROS Version: ROS 2 Humble
 - Dependencies: OpenCV, NumPy, cv_bridge
 
 ## License
 
 BSD-3-Clause
-

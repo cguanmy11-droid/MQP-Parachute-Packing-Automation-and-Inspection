@@ -1,0 +1,25 @@
+# Visual Servo Action
+# Centers the arm on a detected loop using P-control
+# Selects leftmost loop for right arm, rightmost loop for left arm
+
+# Goal
+string arm_side         # 'left' or 'right' for which loop to target
+float32 timeout_sec     # Max time to servo (default 10.0 if 0)
+float32 goal_x_px       # Target X pixel (0 = use leftmost/rightmost based on arm_side)
+float32 goal_y_px       # Target Y pixel (0 = use image center)
+---
+# Result
+bool success
+string message
+float32 final_error_x_px
+float32 final_error_y_px
+int32 iterations
+float32 execution_time_sec
+---
+# Feedback
+float32 target_x_px     # Current target loop X pixel
+float32 target_y_px     # Current target loop Y pixel
+float32 error_x_px      # Current X error
+float32 error_y_px      # Current Y error
+int32 iteration
+int32 num_detections    # How many loops currently visible

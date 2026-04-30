@@ -1,14 +1,18 @@
 # Main Arm Control
 
-This package provides several ROS 2 nodes for controlling the WidowX-200 main arm, testing arm poses by hand, and running waypoint-based task motions.
+Controls the WidowX-200 robot arm for parachute line stowing, including motion planning, gripper control, and teleoperation.
 
-## Executables
+## Nodes
 
-- `main_arm_interface_node`: low-level arm interface and direct command bridge
-- `main_arm_planner_node`: end-effector pose planner and waypoint sequence executor
-- `main_arm_teleop_node`: starts/stops Interbotix joystick teleoperation
-- `xbox_arm_controller_node`: Xbox-based incremental end-effector control
-- `main_arm_human_move_for_test`: live arm-state monitor for hand-guided testing
+| Node | Description |
+|------|-------------|
+| `main_arm_interface_node` | Low-level arm interface and command bridge |
+| `main_arm_planner_node` | End-effector pose planner and waypoint sequence executor |
+| `gripper_control_node` | Gripper open/close with load sensing |
+| `main_arm_teleop_node` | Starts/stops Interbotix joystick teleoperation |
+| `xbox_arm_controller_node` | Xbox-based incremental end-effector control |
+| `motor_health_monitor` | Monitors motor temperatures and load |
+| `test_kinematics` | Kinematics testing utility |
 
 ## Coordinate System
 

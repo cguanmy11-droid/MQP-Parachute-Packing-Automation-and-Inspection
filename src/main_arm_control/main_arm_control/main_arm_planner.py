@@ -76,8 +76,18 @@ LEFT_HOLE_WAYPOINTS = [
         'finger_m': 0.01657,
     },
     {  # pose 1
-        'dx': -0.0167, 'dy': -0.0486, 'dz': -0.0653,
-        'droll_deg': -60.03, 'dpitch_deg': -10, 'dyaw_deg': -0.62,
+        'dx': -0.0367, 'dy': -0.0486, 'dz': -0.0653,
+        'droll_deg': 60.03, 'dpitch_deg': -10, 'dyaw_deg': -0.62,
+        'finger_m': 0.01657,
+    },
+    {  # pose 2nd to last
+        'dx': -0.0567, 'dy': -0.1586, 'dz': +0.0053,
+        'droll_deg': 60.03, 'dpitch_deg': -10, 'dyaw_deg': -0.62,
+        'finger_m': 0.01657,
+    },
+    {  # pose last
+        'dx': -0.0467, 'dy': -0.1286, 'dz': +0.0053,
+        'droll_deg': 60.03, 'dpitch_deg': -40, 'dyaw_deg': -0.62,
         'finger_m': 0.01657,
     },
 ]

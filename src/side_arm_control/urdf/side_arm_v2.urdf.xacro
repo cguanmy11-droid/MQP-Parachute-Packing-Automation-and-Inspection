@@ -1,0 +1,360 @@
+<?xml version="1.0"?>
+<!--
+  Side Arm V2 URDF (Xacro) - Cartesian Gantry Manipulator
+
+  Version 2 differences from V1:
+  - Frame structure around the carriage
+  - Dual stepper motors for Y-axis (larger Y range)
+  - Moving crossbar that travels with Y carriage
+
+  Axes:
+  - X axis: Horizontal movement (belt drive, 0-300mm)
+  - Y axis: Vertical movement (dual steppers, 0-350mm) - increased range
+  - Z axis: Depth movement (DC motor, 0-150mm)
+  - Servo: Hook rotation (revolute, +/-0.5 rad)
+
+  Parameters:
+  - prefix: Optional prefix for all link/joint names (for multi-arm setups)
+            e.g., prefix="right_" creates "right_side_arm_origin", "right_joint_x", etc.
+
+  Usage:
+    xacro side_arm_v2.urdf.xacro prefix:=right_
+    xacro side_arm_v2.urdf.xacro  (no prefix)
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="side_arm_v2">
+
+  <!-- ==================== XACRO ARGUMENTS ==================== -->
+  <xacro:arg name="prefix" default=""/>
+  <xacro:property name="prefix" value="$(arg prefix)"/>
+
+  <!-- ==================== MATERIALS ==================== -->
+  <material name="rail_gray">
+    <color rgba="0.5 0.5 0.5 1.0"/>
+  </material>
+
+  <material name="carriage_blue">
+    <color rgba="0.2 0.4 0.8 1.0"/>
+  </material>
+
+  <material name="carriage_green">
+    <color rgba="0.2 0.7 0.3 1.0"/>
+  </material>
+
+  <material name="carriage_orange">
+    <color rgba="0.9 0.5 0.1 1.0"/>
+  </material>
+
+  <material name="hook_dark">
+    <color rgba="0.3 0.3 0.3 1.0"/>
+  </material>
+
+  <material name="frame_silver">
+    <color rgba="0.7 0.7 0.75 1.0"/>
+  </material>
+
+  <material name="motor_black">
+    <color rgba="0.15 0.15 0.15 1.0"/>
+  </material>
+
+  <!-- ==================== BASE LINK ==================== -->
+  <!-- Root link - connects to TF tree via static transform publisher -->
+  <link name="${prefix}side_arm_origin">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.01"/>
+      </geometry>
+      <material name="rail_gray"/>
+    </visual>
+  </link>
+
+  <!-- ==================== FRAME STRUCTURE ==================== -->
+  <!-- Vertical frame rails (left and right sides) -->
+  <link name="${prefix}frame_left_rail">
+    <visual>
+      <origin xyz="0 0.175 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.025 0.40 0.025"/>
+      </geometry>
+      <material name="frame_silver"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}origin_to_frame_left" type="fixed">
+    <parent link="${prefix}side_arm_origin"/>
+    <child link="${prefix}frame_left_rail"/>
+    <origin xyz="-0.05 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="${prefix}frame_right_rail">
+    <visual>
+      <origin xyz="0 0.175 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.025 0.40 0.025"/>
+      </geometry>
+      <material name="frame_silver"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}origin_to_frame_right" type="fixed">
+    <parent link="${prefix}side_arm_origin"/>
+    <child link="${prefix}frame_right_rail"/>
+    <origin xyz="0.35 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Bottom frame crossbar (fixed) -->
+  <link name="${prefix}frame_bottom_bar">
+    <visual>
+      <origin xyz="0.20 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.40 0.025 0.025"/>
+      </geometry>
+      <material name="frame_silver"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}frame_left_to_bottom" type="fixed">
+    <parent link="${prefix}frame_left_rail"/>
+    <child link="${prefix}frame_bottom_bar"/>
+    <origin xyz="0 -0.01 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Top frame crossbar (fixed) -->
+  <link name="${prefix}frame_top_bar">
+    <visual>
+      <origin xyz="0.20 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.40 0.025 0.025"/>
+      </geometry>
+      <material name="frame_silver"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}frame_left_to_top" type="fixed">
+    <parent link="${prefix}frame_left_rail"/>
+    <child link="${prefix}frame_top_bar"/>
+    <origin xyz="0 0.375 0" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ==================== STEPPER MOTORS (at base of frame) ==================== -->
+  <!-- Stepper motor 1 (left side, bottom) -->
+  <link name="${prefix}stepper_left">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.042 0.042 0.04"/>
+      </geometry>
+      <material name="motor_black"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}frame_to_stepper_left" type="fixed">
+    <parent link="${prefix}frame_left_rail"/>
+    <child link="${prefix}stepper_left"/>
+    <origin xyz="0 -0.04 -0.03" rpy="0 0 0"/>
+  </joint>
+
+  <!-- Stepper motor 2 (right side, bottom) -->
+  <link name="${prefix}stepper_right">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.042 0.042 0.04"/>
+      </geometry>
+      <material name="motor_black"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}frame_to_stepper_right" type="fixed">
+    <parent link="${prefix}frame_right_rail"/>
+    <child link="${prefix}stepper_right"/>
+    <origin xyz="0 -0.04 -0.03" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ==================== X-AXIS (HORIZONTAL) ==================== -->
+  <link name="${prefix}x_rail_link">
+    <visual>
+      <origin xyz="0.15 0 0" rpy="0 0 0"/>  <!-- was 0.15 0 0 -->
+      <geometry>
+        <box size="0.32 0.02 0.02"/>
+      </geometry>
+      <material name="rail_gray"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}base_to_x_rail" type="fixed">
+    <parent link="${prefix}side_arm_origin"/>
+    <child link="${prefix}x_rail_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="${prefix}x_carriage_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.04 0.03 0.03"/>
+      </geometry>
+      <material name="carriage_blue"/>
+    </visual>
+  </link>
+
+  <!-- Prismatic joint for X movement (0 to 0.3m) -->
+  <joint name="${prefix}joint_x" type="prismatic">
+    <parent link="${prefix}x_rail_link"/>
+    <child link="${prefix}x_carriage_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="-1 0 0"/>  <!-- Same as V1 - config inversions handle mirroring -->
+    <limit lower="0.0" upper="0.3" effort="10" velocity="0.1"/>
+  </joint>
+
+  <!-- ==================== Y-AXIS (VERTICAL - DUAL STEPPER) ==================== -->
+  <!-- Y rail attached to X carriage -->
+  <link name="${prefix}y_rail_link">
+    <visual>
+      <origin xyz="0 0.175 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.004 0.38 0.02"/>
+      </geometry>
+      <material name="rail_gray"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}x_carriage_to_y_rail" type="fixed">
+    <parent link="${prefix}x_carriage_link"/>
+    <child link="${prefix}y_rail_link"/>
+    <origin xyz="0 0.02 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="${prefix}y_carriage_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.03 0.05 0.07"/>
+      </geometry>
+      <material name="carriage_green"/>
+    </visual>
+  </link>
+
+  <!-- Prismatic joint for Y movement (0 to 0.35m) - increased range -->
+  <joint name="${prefix}joint_y" type="prismatic">
+    <parent link="${prefix}y_rail_link"/>
+    <child link="${prefix}y_carriage_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="0.0" upper="0.35" effort="10" velocity="0.05"/>
+  </joint>
+
+  <!-- ==================== MOVING CROSSBAR (travels with Y) ==================== -->
+  <!-- This crossbar moves up/down with the Y carriage -->
+  <link name="${prefix}moving_crossbar">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.38 0.03 0.02"/>
+      </geometry>
+      <material name="frame_silver"/>
+    </visual>
+  </link>
+
+  <!-- <joint name="${prefix}y_carriage_to_crossbar" type="fixed">
+    <parent link="${prefix}y_carriage_link"/>
+    <child link="${prefix}moving_crossbar"/>
+    <origin xyz="0.14 0 0" rpy="0 0 0"/>
+  </joint> -->
+  <joint name="${prefix}y_carriage_to_crossbar" type="prismatic">
+    <parent link="${prefix}frame_left_rail"/>
+    <child link="${prefix}moving_crossbar"/>
+    <origin xyz="0.14 0 0" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="0.0" upper="0.35" effort="10" velocity="0.05"/>
+  </joint>
+
+  <!-- ==================== Z-AXIS (DEPTH) ==================== -->
+  <link name="${prefix}z_rail_link">
+    <visual>
+      <origin xyz="0 0 -0.08" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.004 0.20"/>
+      </geometry>
+      <material name="rail_gray"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}y_carriage_to_z_rail" type="fixed">
+    <parent link="${prefix}y_carriage_link"/>
+    <child link="${prefix}z_rail_link"/>
+    <origin xyz="0 0.07 0" rpy="0.1 0 0"/>
+  </joint>
+
+  <link name="${prefix}z_carriage_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.025 0.025 0.04"/>
+      </geometry>
+      <material name="carriage_orange"/>
+    </visual>
+  </link>
+
+  <!-- Prismatic joint for Z movement (0 to 0.20m) -->
+  <joint name="${prefix}joint_z" type="prismatic">
+    <parent link="${prefix}z_rail_link"/>
+    <child link="${prefix}z_carriage_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0.0" upper="0.20" effort="10" velocity="0.01"/>
+  </joint>
+
+  <!-- ==================== SERVO/HOOK ==================== -->
+  <link name="${prefix}servo_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.02 0.02"/>
+      </geometry>
+      <material name="hook_dark"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}joint_servo" type="revolute">
+    <parent link="${prefix}z_carriage_link"/>
+    <child link="${prefix}servo_link"/>
+    <origin xyz="0 0.02 0.02" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-0.5" upper="0.5" effort="1" velocity="1.0"/>
+  </joint>
+
+  <link name="${prefix}hook_link">
+    <visual>
+      <origin xyz="0 -0.015 0" rpy="-1.5708 0 1.5708"/>
+      <geometry>
+        <mesh filename="package://side_arm_control/meshes/hook.stl" scale="0.001 0.001 0.001"/>
+      </geometry>
+      <material name="hook_dark"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}servo_to_hook" type="fixed">
+    <parent link="${prefix}servo_link"/>
+    <child link="${prefix}hook_link"/>
+    <origin xyz="0.01 0.009 -0.18" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ==================== CAMERA FRAME ==================== -->
+  <link name="${prefix}camera_frame">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.02 0.015 0.015"/>
+      </geometry>
+      <material name="carriage_blue"/>
+    </visual>
+  </link>
+
+  <joint name="${prefix}y_carriage_to_camera" type="fixed">
+    <parent link="${prefix}y_carriage_link"/>
+    <child link="${prefix}camera_frame"/>
+    <origin xyz="-0.04 0.08 -0.05" rpy="0.1 3.2116 3.1416"/>
+  </joint>
+
+</robot>

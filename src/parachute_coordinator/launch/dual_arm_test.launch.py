@@ -39,6 +39,10 @@ Test with simulated vision (loops in RViz):
     ros2 launch parachute_coordinator dual_arm_test.launch.py \\
         side_arm_test_mode:=true vision_test_mode:=true enable_main_arm:=false
 
+Test with real camera (YOLO detection):
+    ros2 launch parachute_coordinator dual_arm_test.launch.py \\
+        use_real_camera:=true camera_index:=4
+
 Move side arm in simulation:
     ros2 service call /side_arm/move_to_position \\
         parachute_interfaces/srv/MoveToPosition \\
@@ -46,9 +50,10 @@ Move side arm in simulation:
 """
 
 import os
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, GroupAction, OpaqueFunction, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition, UnlessCondition
@@ -56,7 +61,14 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
-def generate_launch_description():
+def load_side_arm_config(config_file: str) -> dict:
+    """Load side arm configuration from YAML file."""
+    with open(config_file, 'r') as f:
+        return yaml.safe_load(f)
+
+
+def launch_setup(context, *args, **kwargs):
+    """Setup function called at launch time when arguments are resolved."""
     # Load custom RViz config
     rviz_config_path = os.path.join(
         get_package_share_directory('parachute_coordinator'),
@@ -77,112 +89,58 @@ def generate_launch_description():
     except Exception:
         pass  # main_arm_control not built — main arm nodes will be skipped
 
-    # Load side arm URDF (optional — only needed when side arm is enabled)
-    side_arm_urdf = ''
-    try:
-        side_arm_urdf_path = os.path.join(
+    # =============================================================================
+    # SIDE ARM CONFIGURATION
+    # =============================================================================
+    # Get the arm_config argument value (resolved at launch time)
+    arm_config_file = LaunchConfiguration('arm_config').perform(context)
+
+    # If it's just a filename (not a full path), look in the config directory
+    if not os.path.isabs(arm_config_file) and not os.path.exists(arm_config_file):
+        side_arm_config_dir = os.path.join(
             get_package_share_directory('side_arm_control'),
-            'urdf',
-            'side_arm.urdf'
+            'config'
         )
+        arm_config_file = os.path.join(side_arm_config_dir, arm_config_file)
+
+    print(f"[dual_arm_test] Loading side arm config: {arm_config_file}")
+    side_arm_config = load_side_arm_config(arm_config_file)
+
+    # Extract URDF/xacro filename and frame prefix from config
+    side_arm_identity = side_arm_config.get('side_arm', {})
+    urdf_filename = side_arm_identity.get('urdf_file', 'side_arm.urdf.xacro')
+    frame_prefix = side_arm_identity.get('frame_prefix', '')
+    arm_namespace = side_arm_identity.get('namespace', 'side_arm')
+
+    side_arm_urdf_path = os.path.join(
+        get_package_share_directory('side_arm_control'),
+        'urdf',
+        urdf_filename
+    )
+
+    # Process xacro with prefix parameter
+    if urdf_filename.endswith('.xacro'):
+        import xacro
+        side_arm_urdf = xacro.process_file(
+            side_arm_urdf_path,
+            mappings={'prefix': frame_prefix}
+        ).toxml()
+    else:
         with open(side_arm_urdf_path, 'r') as f:
             side_arm_urdf = f.read()
-    except Exception:
-        pass  # side_arm_control not built — side arm nodes will be skipped
 
-    # ==================== LAUNCH ARGUMENTS ====================
+    # Extract config sections for easier access
+    serial_config = side_arm_config.get('serial_bridge', {})
+    coord_config = side_arm_config.get('coordinate_node', {})
+    workspace_config = side_arm_config.get('workspace', {})
+    interface_config = side_arm_config.get('interface_node', {})
+    viz_config = side_arm_config.get('visualizer', {})
+    joint_pub_config = side_arm_config.get('joint_state_publisher', {})
+    tf_config = side_arm_config.get('tf_transform', {})
 
-    # Main arm arguments
-    enable_main_arm_arg = DeclareLaunchArgument(
-        'enable_main_arm',
-        default_value='true',
-        description='Enable main arm (WX200) control'
-    )
-
-    main_arm_sim_arg = DeclareLaunchArgument(
-        'main_arm_sim',
-        default_value='false',
-        description='Run main arm in simulation mode'
-    )
-
-    enable_teleop_arg = DeclareLaunchArgument(
-        'enable_teleop',
-        default_value='false',
-        description='Enable Xbox controller teleoperation for main arm'
-    )
-
-    controller_type_arg = DeclareLaunchArgument(
-        'controller_type',
-        default_value='xboxone',
-        description='Controller type (xboxone, ps4, etc.)'
-    )
-
-    robot_model_arg = DeclareLaunchArgument(
-        'robot_model',
-        default_value='wx200',
-        description='Main arm robot model'
-    )
-
-    # Side arm arguments
-    enable_side_arm_arg = DeclareLaunchArgument(
-        'enable_side_arm',
-        default_value='true',
-        description='Enable side arm control'
-    )
-
-    side_arm_sim_arg = DeclareLaunchArgument(
-        'side_arm_sim',
-        default_value='false',
-        description='Run side arm in pure simulation mode (no serial bridge)'
-    )
-
-    side_arm_test_mode_arg = DeclareLaunchArgument(
-        'side_arm_test_mode',
-        default_value='false',
-        description='Run side arm in test mode (simulated movements alongside hardware)'
-    )
-
-    # Use environment variable if set, otherwise fall back to default
-    # Set SIDE_ARM_PORT in ~/.bashrc for persistent configuration
-    side_arm_port_default = os.environ.get('SIDE_ARM_PORT', '/dev/ttyUSB0')
-
-    serial_port_arg = DeclareLaunchArgument(
-        'serial_port',
-        default_value=side_arm_port_default,
-        description='Serial port for side arm ESP32 connection (or set SIDE_ARM_PORT env var)'
-    )
-
-    use_joint_sliders_arg = DeclareLaunchArgument(
-        'use_joint_sliders',
-        default_value='false',
-        description='Use joint_state_publisher_gui for manual side arm control via sliders'
-    )
-
-    # Visualization arguments
-    enable_visualization_arg = DeclareLaunchArgument(
-        'enable_visualization',
-        default_value='true',
-        description='Enable side arm RViz visualization marker'
-    )
-
-    use_rviz_arg = DeclareLaunchArgument(
-        'use_rviz',
-        default_value='true',
-        description='Launch RViz for main arm visualization'
-    )
-
-    # Vision/perception arguments
-    vision_test_mode_arg = DeclareLaunchArgument(
-        'vision_test_mode',
-        default_value='false',
-        description='Use simulated loop detections instead of camera'
-    )
-
-    enable_loop_visualization_arg = DeclareLaunchArgument(
-        'enable_loop_visualization',
-        default_value='true',
-        description='Enable loop detection visualization in RViz'
-    )
+    # Camera frame name from config (supports prefixed frames like left_camera_frame)
+    camera_frame_id = viz_config.get('camera_frame_id', 'camera_frame')
+    print(f"[dual_arm_test] Using camera frame: {camera_frame_id}")
 
     # Side camera perception arguments
     enable_side_cam_arg = DeclareLaunchArgument(
@@ -207,6 +165,12 @@ def generate_launch_description():
         'side_cam_depth',
         default_value='0.22',
         description='Assumed depth from side camera to loop plane (meters)'
+    )
+
+    side_cam_display_arg = DeclareLaunchArgument(
+        'side_cam_display',
+        default_value='false',
+        description='Show side camera cv2 window (set false when using GUI)'
     )
 
     # Top camera loop state arguments
@@ -238,6 +202,12 @@ def generate_launch_description():
             'MQP_ws/MQP-Parachute-Packing-Automation-and-Inspection/src/top_cam_yolo/runs/classify/runs/classify/yolo26m_cls_custom_aug/weights/best.pt'
         ),
         description='Top camera YOLO classification weights'
+    )
+
+    top_cam_display_arg = DeclareLaunchArgument(
+        'top_cam_display',
+        default_value='false',
+        description='Show top camera cv2 window (set false when using GUI)'
     )
 
     # ==================== MAIN ARM NODES ====================
@@ -300,19 +270,68 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('enable_main_arm'))
     )
 
-    # Main arm teleop node (optional)
-    main_arm_teleop = Node(
+    gripper_control = Node(
         package='main_arm_control',
-        executable='main_arm_teleop_node',
-        name='main_arm_teleop_node',
+        executable='gripper_control_node',
+        name='gripper_control_node',
         output='screen',
         parameters=[{
-            'robot_model': LaunchConfiguration('robot_model'),
-            'controller_type': LaunchConfiguration('controller_type'),
-            'auto_start': True,
+            'robot_name': LaunchConfiguration('robot_model'),
+            'grip_pwm': -200,
+            'release_pwm': 200,
+            'load_threshold': 40.0,
+            'settle_time': 0.5,
+            'test_mode': False,
+        }],
+        condition=IfCondition(LaunchConfiguration('enable_main_arm'))
+    )
+
+    motor_health_monitor = Node(
+        package='main_arm_control',
+        executable='motor_health_monitor',
+        name='motor_health_monitor',
+        output='screen',
+        parameters=[{
+            'robot_name': LaunchConfiguration('robot_model'),
+            'monitor_rate': 0.2,
+            'load_warn_threshold': 75.0,
+            'load_critical_threshold': 85.0,
+            'auto_clear': False, # set True to auto recover from stalls
         }],
         condition=IfCondition(
             PythonExpression([
+                "'", LaunchConfiguration('enable_main_arm'), "' == 'true' and '",
+                LaunchConfiguration('main_arm_sim'), "' != 'true' and '", 
+                LaunchConfiguration('enable_monitor'), "' == 'true'",
+            ])
+        )
+    )
+
+    # Main arm teleop node (optional)
+    # main_arm_teleop = Node(
+    #     package='main_arm_control',
+    #     executable='main_arm_teleop_node',
+    #     name='main_arm_teleop_node',
+    #     output='screen',
+    #     parameters=[{
+    #         'robot_model': LaunchConfiguration('robot_model'),
+    #         'controller_type': LaunchConfiguration('controller_type'),
+    #         'auto_start': True,
+    #     }],
+    #     condition=IfCondition(
+    #         PythonExpression([
+    #             "'", LaunchConfiguration('enable_main_arm'), "' == 'true' and '",
+    #             LaunchConfiguration('enable_teleop'), "' == 'true'"
+    #         ])
+    #     )
+    # )
+
+    main_arm_xbox = Node(
+        package='main_arm_control',
+        executable='xbox_arm_controller_node',
+        name='xbox_arm_controller_node',
+        output='screen',
+        condition=IfCondition(PythonExpression([
                 "'", LaunchConfiguration('enable_main_arm'), "' == 'true' and '",
                 LaunchConfiguration('enable_teleop'), "' == 'true'"
             ])
@@ -324,12 +343,11 @@ def generate_launch_description():
         package='joy',
         executable='joy_node',
         name='joy_node',
-        parameters=[{
-            'device_id': 0,
-            'deadzone': 0.1,
-            'autorepeat_rate': 20.0,
-        }],
-        condition=IfCondition(LaunchConfiguration('enable_teleop'))
+        condition=IfCondition(PythonExpression([
+                "'", LaunchConfiguration('enable_main_arm'), "' == 'true' and '",
+                LaunchConfiguration('enable_teleop'), "' == 'true'"
+            ])
+        )
     )
 
     # ==================== SIDE ARM NODES ====================
@@ -341,13 +359,14 @@ def generate_launch_description():
         package='side_arm_motor_control_bridge',
         executable='serial_bridge',
         name='side_arm_serial_bridge',
+        namespace=arm_namespace,  # Use namespace from config
         parameters=[{
             'serial_port': LaunchConfiguration('serial_port'),
-            'baud_rate': 115200,
-            'command_topic': '/side_arm/command',
-            'state_topic': '/side_arm/state',
-            'state_request_hz': 10.0,
-            'auto_request_state': True,
+            'baud_rate': serial_config.get('baud_rate', 115200),
+            'command_topic': 'command',  # Relative topic for namespace support
+            'state_topic': 'state',      # Relative topic for namespace support
+            'state_request_hz': serial_config.get('state_request_hz', 10.0),
+            'auto_request_state': serial_config.get('auto_request_state', True),
         }],
         output='screen',
         condition=IfCondition(
@@ -370,32 +389,59 @@ def generate_launch_description():
         package='side_arm_control',
         executable='coordinate_node',
         name='side_arm_coordinate_node',
+        namespace=arm_namespace,  # Use namespace from config
         parameters=[{
             'simulation_mode': side_arm_simulation_enabled,  # Enable simulation when sim or test mode
-            'sim_speed_mm_per_sec': 50.0,  # Simulation motion speed
-            'steps_per_mm_horizontal': 300.0,
-            'steps_per_mm_vertical': 100.0,
-            'dc_mm_per_second': 4.0,
-            'dc_speed_percent': 50,
-            'default_speed_horizontal': 1200.0,
-            'default_speed_vertical': 500.0,
-            'max_x_mm': 300.0,
-            'max_y_mm': 200.0,
-            'max_z_mm': 150.0,
+            'sim_speed_mm_per_sec': coord_config.get('sim_speed_mm_per_sec', 50.0),
+            'steps_per_mm_horizontal': coord_config.get('steps_per_mm_horizontal', 300.0),
+            'steps_per_mm_vertical': coord_config.get('steps_per_mm_vertical', 100.0),
+            'dc_mm_per_second': coord_config.get('dc_mm_per_second', 4.0),
+            'dc_speed_percent': coord_config.get('dc_speed_percent', 50),
+            'default_speed_horizontal': coord_config.get('default_speed_horizontal', 1200.0),
+            'default_speed_vertical': coord_config.get('default_speed_vertical', 500.0),
+            'max_x_mm': workspace_config.get('max_x_mm', 300.0),
+            'max_y_mm': workspace_config.get('max_y_mm', 200.0),
+            'max_z_mm': workspace_config.get('max_z_mm', 150.0),
+            # Homing position (V1 defaults to 0, V2 homes to max_x)
+            'home_x_mm': coord_config.get('home_x_mm', 0.0),
+            'home_y_mm': coord_config.get('home_y_mm', 0.0),
+            'home_z_mm': coord_config.get('home_z_mm', 0.0),
+            # Position invert flags (V2 inverts X and Z)
+            'position_invert_x': coord_config.get('position_invert_x', False),
+            'position_invert_y': coord_config.get('position_invert_y', False),
+            'position_invert_z': coord_config.get('position_invert_z', False),
         }],
         output='screen',
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
 
     # Side arm interface node (high-level actions/services)
+    # Construct the frame name with prefix
+    side_arm_frame_name = f"{frame_prefix}side_arm_origin"
+
     side_arm_interface = Node(
         package='side_arm_control',
         executable='side_arm_interface_node',
         name='side_arm_interface_node',
+        namespace=arm_namespace,  # Use namespace from config
         parameters=[{
             'test_mode': side_arm_simulation_enabled,
-            'approach_offset_z': 50.0,
-            'insert_depth_z': 30.0,
+            'side_arm_frame': side_arm_frame_name,  # TF frame name with prefix
+            'approach_offset_z': interface_config.get('approach_offset_z', 50.0),
+            'insert_depth_z': interface_config.get('insert_depth_z', 30.0),
+            'hook_offset_x_mm': interface_config.get('hook_offset_x_mm', 10.0),
+            'hook_offset_y_mm': interface_config.get('hook_offset_y_mm', 210.0),
+            'hook_offset_z_mm': interface_config.get('hook_offset_z_mm', -156.0),
+            'invert_x': interface_config.get('invert_x', False),
+            'invert_y': interface_config.get('invert_y', False),
+            'invert_z': interface_config.get('invert_z', False),
+            'enable_vision_servo': interface_config.get('enable_vision_servo', True),
+            'servo_kp_x': interface_config.get('servo_kp_x', 1.2),
+            'servo_deadband_px': interface_config.get('servo_deadband_px', 5.0),
+            'servo_timeout_sec': interface_config.get('servo_timeout_sec', 10.0),
+            'servo_min_speed': interface_config.get('servo_min_speed', 400),
+            'servo_max_speed': interface_config.get('servo_max_speed', 1100),
+            'image_width_px': interface_config.get('image_width_px', 640),
         }],
         output='screen',
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
@@ -406,40 +452,40 @@ def generate_launch_description():
         package='side_arm_control',
         executable='side_arm_visualizer',
         name='side_arm_visualizer',
+        namespace=arm_namespace,  # Use namespace from config
         output='screen',
         parameters=[{
-            # Hook mesh orientation
-            'roll': -1.5708,
-            'pitch': 0.0,
-            'yaw': -1.5708,
+            # Hook mesh orientation (from config)
+            'roll': viz_config.get('roll', -1.5708),
+            'pitch': viz_config.get('pitch', 0.0),
+            'yaw': viz_config.get('yaw', -1.5708),
             # Hook mesh offset
-            'offset_x': -0.01,
-            'offset_y': 0.009,
-            'offset_z': 0.07,
-            'scale': 0.001,
+            'offset_x': viz_config.get('offset_x', -0.01),
+            'offset_y': viz_config.get('offset_y', 0.009),
+            'offset_z': viz_config.get('offset_z', 0.07),
+            'scale': viz_config.get('scale', 0.001),
             # Servo rotation
-            'servo_axis': 'pitch',
-            'servo_scale': 0.001,
+            'servo_axis': viz_config.get('servo_axis', 'pitch'),
+            'servo_scale': viz_config.get('servo_scale', 0.001),
             # Test mode (enabled in sim or test mode)
             'test_mode': side_arm_simulation_enabled,
             'test_x': 0.0,
             'test_y': 0.0,
             'test_z': 0.0,
             # TF publishing
-            'publish_hook_tf': True,
-            'hook_frame_id': 'side_arm_hook',
+            'publish_hook_tf': viz_config.get('publish_hook_tf', False),
+            'hook_frame_id': viz_config.get('hook_frame_id', 'side_arm_hook'),
             # Camera frame is now published by URDF robot_state_publisher (attached to y_carriage)
             # Set to False to avoid TF conflict with URDF's camera_frame
-            'publish_camera_tf': False,
-            'camera_frame_id': 'camera_frame',
-            'camera_offset_x': 0.0,    # Not used when publish_camera_tf is False
-            'camera_offset_y': 0.0,
-            'camera_offset_z': 0.05,
+            'publish_camera_tf': viz_config.get('publish_camera_tf', False),
+            'camera_frame_id': viz_config.get('camera_frame_id', 'camera_frame'),
+            'camera_offset_x': viz_config.get('camera_offset_x', 0.0),
+            'camera_offset_y': viz_config.get('camera_offset_y', 0.0),
+            'camera_offset_z': viz_config.get('camera_offset_z', 0.05),
             # Rotate camera to look toward the ground truth loops
-            # These values need tuning based on actual setup
-            'camera_roll': 0.0,
-            'camera_pitch': 3.1416,    # 180 degrees - flip forward direction
-            'camera_yaw': 0.0,
+            'camera_roll': viz_config.get('camera_roll', 0.0),
+            'camera_pitch': viz_config.get('camera_pitch', 3.1416),
+            'camera_yaw': viz_config.get('camera_yaw', 0.0),
         }],
         condition=IfCondition(
             PythonExpression([
@@ -451,13 +497,17 @@ def generate_launch_description():
 
     # ==================== SIDE ARM URDF ====================
 
-    # Side arm robot state publisher (publishes URDF to /side_arm/robot_description)
+    # Side arm robot state publisher (publishes URDF to /{namespace}/robot_description)
     side_arm_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
         name='side_arm_robot_state_publisher',
-        namespace='side_arm',
+        namespace=arm_namespace,
         parameters=[{'robot_description': side_arm_urdf}],
+        remappings=[
+            (f'/{arm_namespace}/tf', '/tf'),
+            (f'/{arm_namespace}/tf_static', '/tf_static'),
+        ],
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
 
@@ -466,7 +516,7 @@ def generate_launch_description():
         package='joint_state_publisher_gui',
         executable='joint_state_publisher_gui',
         name='side_arm_joint_gui',
-        namespace='side_arm',
+        namespace=arm_namespace,
         condition=IfCondition(
             PythonExpression([
                 "'", LaunchConfiguration('enable_side_arm'), "' == 'true' and '",
@@ -480,15 +530,16 @@ def generate_launch_description():
         package='side_arm_control',
         executable='side_arm_joint_state_publisher',
         name='side_arm_joint_state_publisher',
-        namespace='side_arm',
+        namespace=arm_namespace,
         parameters=[{
-            'servo_scale': 0.001,
-            'publish_rate': 50.0,
+            'joint_prefix': frame_prefix,  # Prefix for joint names
+            'servo_scale': joint_pub_config.get('servo_scale', 0.001),
+            'publish_rate': joint_pub_config.get('publish_rate', 50.0),
             'test_mode': side_arm_simulation_enabled,
-            'test_x': 0.15,
-            'test_y': 0.10,
-            'test_z': 0.05,
-            'test_servo': 0.0,
+            'test_x': joint_pub_config.get('test_x', 0.15),
+            'test_y': joint_pub_config.get('test_y', 0.10),
+            'test_z': joint_pub_config.get('test_z', 0.05),
+            'test_servo': joint_pub_config.get('test_servo', 0.0),
         }],
         output='screen',
         condition=IfCondition(
@@ -544,16 +595,21 @@ def generate_launch_description():
         )
     )
 
-    # Side arm origin TF
+    # Side arm origin TF (position from config)
+    # Uses frame_prefix for the child frame name
     side_arm_tf = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='side_arm_static_tf',
         arguments=[
-            '--x', '0.37', '--y', '0.41', '--z', '-0.26',
-            '--roll', '1.5708', '--pitch', '0', '--yaw', '3.1416',
-            '--frame-id', 'world', # wx200/base_link
-            '--child-frame-id', 'side_arm_origin'
+            '--x', str(tf_config.get('x', 0.37)),
+            '--y', str(tf_config.get('y', 0.41)),
+            '--z', str(tf_config.get('z', -0.26)),
+            '--roll', str(tf_config.get('roll', 1.5708)),
+            '--pitch', str(tf_config.get('pitch', 0)),
+            '--yaw', str(tf_config.get('yaw', 3.1416)),
+            '--frame-id', tf_config.get('parent_frame', 'world'),
+            '--child-frame-id', side_arm_frame_name  # Uses prefix from config
         ],
         condition=IfCondition(LaunchConfiguration('enable_side_arm'))
     )
@@ -564,6 +620,22 @@ def generate_launch_description():
     # ==================== PERCEPTION VISUALIZATION NODES ====================
 
     # Loop ground truth (publishes actual loop positions in world frame)
+    # Dual-sided: 5 loops on left (positive Y), 5 loops on right (negative Y)
+    static_loop_positions = [
+        # Left side loops (positive Y ~0.15, for left arm) - straight line
+        0.25, 0.15, -0.015,  # Loop 0
+        0.29, 0.15, -0.015,  # Loop 1
+        0.33, 0.15, -0.015,  # Loop 2
+        0.37, 0.15, -0.015,  # Loop 3
+        0.40, 0.15, -0.015,  # Loop 4
+        # Right side loops (negative Y ~-0.15, for right arm) - straight line
+        0.25, -0.15, -0.015, # Loop 5
+        0.29, -0.15, -0.015, # Loop 6
+        0.33, -0.15, -0.015, # Loop 7
+        0.37, -0.15, -0.015, # Loop 8
+        0.40, -0.15, -0.015, # Loop 9
+    ]
+
     loop_ground_truth = Node(
         package='parachute_perception',
         executable='loop_ground_truth_node',
@@ -572,24 +644,10 @@ def generate_launch_description():
         parameters=[{
             'frame_id': 'world',
             'publish_rate': 10.0,
-            'pattern': 'line',  # static, random, grid, line
-            'num_loops': 5,
+            'pattern': 'static',
+            'num_loops': 10,
             'loop_radius': 0.015,
-            # Position bounds for random/grid/line patterns
-            'x_min': 0.25,
-            'x_max': 0.40,
-            'y_min': 0.148,
-            'y_max': 0.152,
-            'z_min': -0.04,
-            'z_max': 0.01,
-            # Static positions: [x0,y0,z0, x1,y1,z1, ...] - adjust to match physical setup
-            'static_positions': [
-                0.35, -0.05, -0.02,
-                0.38, -0.05, 0.00,
-                0.41, -0.05, -0.01,
-                0.44, -0.05, 0.01,
-                0.47, -0.05, -0.02,
-            ],
+            'static_positions': static_loop_positions,
             # Marker visualization (blue for ground truth)
             'marker_color_r': 0.2,
             'marker_color_g': 0.4,
@@ -608,8 +666,8 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'marker_scale': 0.015,
-            'input_frame_id': 'camera_frame',  # Frame detections arrive in
-            'output_frame_id': 'world',        # Frame to publish markers in
+            'input_frame_id': camera_frame_id,  # Frame detections arrive in (from config)
+            'output_frame_id': 'world',         # Frame to publish markers in
             'grid_enabled': True,
             'grid_size_x': 0.4,
             'grid_size_y': 0.3,
@@ -626,22 +684,22 @@ def generate_launch_description():
         name='detection_simulator_node',
         output='screen',
         parameters=[{
-            'camera_frame_id': 'camera_frame',
+            'camera_frame_id': camera_frame_id,  # From config
             'world_frame_id': 'world',
             # Camera FOV - set wide for testing, narrow later to match real camera
-            'camera_fov_horizontal': 80.0,  # degrees 
-            'camera_fov_vertical': 80.0,    # degrees 
+            'camera_fov_horizontal': 80.0,  # degrees
+            'camera_fov_vertical': 80.0,    # degrees
             'max_detection_range': 1.0,      # meters (extended for testing)
             'min_detection_range': 0.01,     # meters
             # Detection simulation
-            'detection_noise_stddev': 0.003,  # meters
+            'detection_noise_stddev': 0.00003,  # meters
             'confidence_base': 0.90,
-            'confidence_noise': 0.05,
+            'confidence_noise': 0.0001,
             'false_negative_rate': 0.0,
             'publish_rate': 5.0,
             # Debug - enable to bypass FOV checks and see what's happening
             'debug_bypass_fov': True,   # TEMP: Enable to detect loops even if camera wrong way
-            'debug_verbose': True,      # Show detailed logging
+            'debug_verbose': False,      # Show detailed logging
         }],
         condition=IfCondition(LaunchConfiguration('vision_test_mode'))
     )
@@ -660,7 +718,10 @@ def generate_launch_description():
             'frame_rate': 30.0,
             'camera_frame_id': 'camera_frame',
             'centers_topic': '/yolo/centers',
-            'display': True,
+            'image_topic': '/yolo/image',
+            'enable_service': '/yolo/enable',
+            'publish_image': True,
+            'display': LaunchConfiguration('side_cam_display'),
         }],
         condition=IfCondition(LaunchConfiguration('enable_side_cam'))
     )
@@ -705,45 +766,80 @@ def generate_launch_description():
             'conf_threshold': 0.35,
             'iou_threshold': 0.45,
             'frame_rate': 30.0,
-            'display': True,
+            'display': LaunchConfiguration('top_cam_display'),
+            'publish_image': True,
+            'image_topic': '/top_cam/image',
         }],
         condition=IfCondition(LaunchConfiguration('enable_top_cam'))
     )
 
-    # ==================== LAUNCH DESCRIPTION ====================
+    # ==================== REAL CAMERA NODES ====================
+    # YOLO detector (real USB camera)
+    yolo_detector = Node(
+        package='yolo_detect_ros',
+        executable='yolo_detector',
+        name='yolo_detector',
+        output='screen',
+        parameters=[{
+            'camera_index': LaunchConfiguration('camera_index'),
+            'conf_threshold': 0.5,
+            'iou_threshold': 0.5,
+            'frame_rate': 30.0,
+            'camera_frame_id': camera_frame_id,  # From config
+            'centers_topic': '/yolo/centers',
+            'display': LaunchConfiguration('camera_display'),
+        }],
+        condition=IfCondition(LaunchConfiguration('use_real_camera'))
+    )
 
-    return LaunchDescription([
-        # Arguments
-        enable_main_arm_arg,
-        main_arm_sim_arg,
-        enable_teleop_arg,
-        controller_type_arg,
-        robot_model_arg,
-        enable_side_arm_arg,
-        side_arm_sim_arg,
-        side_arm_test_mode_arg,
-        serial_port_arg,
-        use_joint_sliders_arg,
-        enable_visualization_arg,
-        use_rviz_arg,
-        vision_test_mode_arg,
-        enable_loop_visualization_arg,
+    # Pixel to 3D converter (converts YOLO pixel detections to 3D world coordinates)
+    camera_to_3d = Node(
+        package='parachute_perception',
+        executable='camera_to_3d_node',
+        name='camera_to_3d_node',
+        output='screen',
+        parameters=[{
+            # Camera intrinsics
+            'image_width': 640,
+            'image_height': 480,
+            'camera_fov_horizontal': 80.0,
+            # Depth assumption
+            'assumed_depth': LaunchConfiguration('assumed_depth'),
+            # Topics
+            'input_topic': '/yolo/centers',
+            'output_topic': '/detected_loops',
+            'camera_frame_id': camera_frame_id,  # From config
+            # Detection confidence
+            'base_confidence': 0.85,
+        }],
+        condition=IfCondition(LaunchConfiguration('use_real_camera'))
+    )
+
+    # ==================== RETURN NODES ====================
+    # Return list of nodes (arguments are declared in generate_launch_description)
+
+    return [
         enable_side_cam_arg,
         side_cam_device_arg,
         side_cam_conf_arg,
         side_cam_depth_arg,
+        side_cam_display_arg,
         enable_top_cam_arg,
         top_cam_device_arg,
         top_cam_det_weights_arg,
         top_cam_cls_weights_arg,
+        top_cam_display_arg,
         top_cam_env,
         joy_node,
 
         # Main arm nodes
         main_arm_control_launch,
         main_arm_interface,
+        gripper_control,
+        motor_health_monitor,
         # main_arm_planner,  # Disabled - main_arm_interface handles target_point with pitch
-        main_arm_teleop,
+        # main_arm_teleop,
+        main_arm_xbox,
 
         # RViz with custom config
         rviz_node,
@@ -777,4 +873,137 @@ def generate_launch_description():
 
         # Top camera loop state
         top_cam_loop_state,
+
+        # Real camera nodes
+        yolo_detector,
+        camera_to_3d,
+    ]
+
+
+def generate_launch_description():
+    """Generate launch description with arguments and OpaqueFunction for config loading."""
+
+    # Default config paths
+    side_arm_config_dir = os.path.join(
+        get_package_share_directory('side_arm_control'),
+        'config'
+    )
+    default_arm_config = os.environ.get(
+        'SIDE_ARM_CONFIG',
+        os.path.join(side_arm_config_dir, 'side_arm_v1.yaml')
+    )
+
+    return LaunchDescription([
+        # ==================== LAUNCH ARGUMENTS ====================
+
+        # Main arm arguments
+        DeclareLaunchArgument(
+            'enable_main_arm',
+            default_value='true',
+            description='Enable main arm (WX200) control'
+        ),
+        DeclareLaunchArgument(
+            'main_arm_sim',
+            default_value='false',
+            description='Run main arm in simulation mode'
+        ),
+        DeclareLaunchArgument(
+            'enable_teleop',
+            default_value='false',
+            description='Enable Xbox controller teleoperation for main arm'
+        ),
+        DeclareLaunchArgument(
+            'controller_type',
+            default_value='xboxone',
+            description='Controller type (xboxone, ps4, etc.)'
+        ),
+        DeclareLaunchArgument(
+            'robot_model',
+            default_value='wx200',
+            description='Main arm robot model'
+        ),
+        DeclareLaunchArgument(
+            'enable_monitor',
+            default_value='false',
+            description='Enable Motor Monitoring for Main Arm'
+        ),
+
+        # Side arm arguments
+        DeclareLaunchArgument(
+            'enable_side_arm',
+            default_value='true',
+            description='Enable side arm control'
+        ),
+        DeclareLaunchArgument(
+            'side_arm_sim',
+            default_value='false',
+            description='Run side arm in pure simulation mode (no serial bridge)'
+        ),
+        DeclareLaunchArgument(
+            'side_arm_test_mode',
+            default_value='false',
+            description='Run side arm in test mode (simulated movements alongside hardware)'
+        ),
+        DeclareLaunchArgument(
+            'arm_config',
+            default_value=default_arm_config,
+            description='Path or filename of side arm YAML config (e.g., side_arm_v2.yaml)'
+        ),
+        DeclareLaunchArgument(
+            'serial_port',
+            default_value=os.environ.get('SIDE_ARM_PORT', '/dev/ttyUSB0'),
+            description='Serial port for side arm ESP32 connection (or set SIDE_ARM_PORT env var)'
+        ),
+        DeclareLaunchArgument(
+            'use_joint_sliders',
+            default_value='false',
+            description='Use joint_state_publisher_gui for manual side arm control via sliders'
+        ),
+
+        # Visualization arguments
+        DeclareLaunchArgument(
+            'enable_visualization',
+            default_value='true',
+            description='Enable side arm RViz visualization marker'
+        ),
+        DeclareLaunchArgument(
+            'use_rviz',
+            default_value='true',
+            description='Launch RViz for main arm visualization'
+        ),
+
+        # Vision/perception arguments
+        DeclareLaunchArgument(
+            'vision_test_mode',
+            default_value='false',
+            description='Use simulated loop detections instead of camera'
+        ),
+        DeclareLaunchArgument(
+            'use_real_camera',
+            default_value='false',
+            description='Use real USB camera with YOLO detection'
+        ),
+        DeclareLaunchArgument(
+            'camera_index',
+            default_value='4',
+            description='USB camera index for YOLO detector'
+        ),
+        DeclareLaunchArgument(
+            'camera_display',
+            default_value='true',
+            description='Show YOLO detection window'
+        ),
+        DeclareLaunchArgument(
+            'assumed_depth',
+            default_value='0.22',
+            description='Assumed depth from camera to loop plane (meters)'
+        ),
+        DeclareLaunchArgument(
+            'enable_loop_visualization',
+            default_value='true',
+            description='Enable loop detection visualization in RViz'
+        ),
+
+        # Use OpaqueFunction to load config at launch time
+        OpaqueFunction(function=launch_setup),
     ])

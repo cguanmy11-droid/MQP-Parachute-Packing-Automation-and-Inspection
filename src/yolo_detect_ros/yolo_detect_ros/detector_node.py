@@ -7,10 +7,13 @@ from pathlib import Path
 from typing import Optional
 
 import cv2
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from geometry_msgs.msg import Pose, PoseArray
+from sensor_msgs.msg import Image
+from std_srvs.srv import SetBool
 
 try:
     from ultralytics import YOLO
@@ -25,16 +28,21 @@ class YoloDetectorNode(Node):
 
     def __init__(self) -> None:
         super().__init__('yolo_detector')
-        self.declare_parameter('camera_index', 0)
+        # self.declare_parameter('camera_index', 0)
+        self.declare_parameter('camera_index', '/dev/video4')
         self.declare_parameter('weights_path', 'runs/yolo26m_hole2_100/weights/best.pt')
         self.declare_parameter('conf_threshold', 0.5)
         self.declare_parameter('iou_threshold', 0.5)
         self.declare_parameter('frame_rate', 30.0)
         self.declare_parameter('camera_frame_id', 'camera_frame')
         self.declare_parameter('centers_topic', 'yolo/centers')
+        self.declare_parameter('image_topic', 'yolo/image')
+        self.declare_parameter('enable_service', 'yolo/enable')  # Enable/disable service name
+        self.declare_parameter('publish_image', True)
         self.declare_parameter('display', True)
 
-        self.camera_index = int(self.get_parameter('camera_index').get_parameter_value().integer_value)
+        # self.camera_index = int(self.get_parameter('camera_index').get_parameter_value().integer_value)
+        self.camera_index = self.get_parameter('camera_index').get_parameter_value().string_value
         weights_arg = self.get_parameter('weights_path').get_parameter_value().string_value
         self.weights_path = self._resolve_weights_path(weights_arg)
         self.conf_threshold = float(self.get_parameter('conf_threshold').get_parameter_value().double_value)
@@ -43,7 +51,10 @@ class YoloDetectorNode(Node):
         self.frame_rate = self.frame_rate if self.frame_rate > 0 else 30.0
         self.camera_frame_id = self.get_parameter('camera_frame_id').get_parameter_value().string_value
         self.display = bool(self.get_parameter('display').get_parameter_value().bool_value)
+        self.publish_image = bool(self.get_parameter('publish_image').get_parameter_value().bool_value)
         centers_topic = self.get_parameter('centers_topic').get_parameter_value().string_value
+        image_topic = self.get_parameter('image_topic').get_parameter_value().string_value
+        enable_service = self.get_parameter('enable_service').get_parameter_value().string_value
 
         self.device = self._select_device()
         self.get_logger().info(
@@ -57,13 +68,19 @@ class YoloDetectorNode(Node):
             raise RuntimeError(f'无法打开摄像头索引 {self.camera_index}')
 
         self.publisher = self.create_publisher(PoseArray, centers_topic, 10)
+        self.image_publisher = self.create_publisher(Image, image_topic, 10)
         self.window_name = 'YOLO Detection'
         if self.display:
             cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
 
+        # Enable/disable service for resource management (pause during top cam capture)
+        self._processing_enabled = True
+        self.enable_srv = self.create_service(
+            SetBool, enable_service, self._enable_callback)
+
         timer_period = 1.0 / self.frame_rate
         self.timer = self.create_timer(timer_period, self._process_frame)
-        self.get_logger().info('YOLO 检测节点已启动，按 ESC 可在窗口中退出。')
+        self.get_logger().info(f'YOLO detector started. Services: {enable_service} (on/off)')
 
     def _select_device(self) -> str:
         try:
@@ -71,6 +88,20 @@ class YoloDetectorNode(Node):
             return 'cuda:0' if torch.cuda.is_available() else 'cpu'
         except Exception:
             return 'cpu'
+
+    def _cv2_to_imgmsg(self, cv_image: np.ndarray) -> Image:
+        """Convert OpenCV image to ROS Image message (without cv_bridge)."""
+        msg = Image()
+        msg.height = cv_image.shape[0]
+        msg.width = cv_image.shape[1]
+        if len(cv_image.shape) == 3:
+            msg.encoding = 'bgr8'
+            msg.step = cv_image.shape[1] * 3
+        else:
+            msg.encoding = 'mono8'
+            msg.step = cv_image.shape[1]
+        msg.data = cv_image.tobytes()
+        return msg
 
     def _resolve_weights_path(self, raw_path: str) -> Path:
         """依次尝试绝对路径、share 目录、源码目录。"""
@@ -96,10 +127,26 @@ class YoloDetectorNode(Node):
 
         raise FileNotFoundError(f'未找到指定权重文件: {raw_path}')
 
+    def _enable_callback(self, request, response):
+        """Enable or disable YOLO inference processing."""
+        self._processing_enabled = request.data
+        state = "ENABLED" if request.data else "DISABLED"
+        self.get_logger().info(f'[YOLO] Processing {state}')
+        response.success = True
+        response.message = f'Processing {state}'
+        return response
+
     def _process_frame(self) -> None:
         ret, frame = self.cap.read()
         if not ret:
             self.get_logger().warning('读取摄像头失败，等待下一帧')
+            return
+
+        # Skip inference if processing is disabled (but keep camera alive)
+        if not self._processing_enabled:
+            if self.display:
+                cv2.imshow(self.window_name, frame)
+                cv2.waitKey(1)
             return
 
         results = self.model.predict(
@@ -128,8 +175,17 @@ class YoloDetectorNode(Node):
         self.publisher.publish(pose_array)
         self.get_logger().debug(f'发布 {len(pose_array.poses)} 个检测中心')
 
+        # Get annotated frame for display/publishing
+        annotated = result.plot()
+
+        # Publish annotated image to ROS2
+        if self.publish_image:
+            img_msg = self._cv2_to_imgmsg(annotated)
+            img_msg.header.stamp = pose_array.header.stamp
+            img_msg.header.frame_id = self.camera_frame_id
+            self.image_publisher.publish(img_msg)
+
         if self.display:
-            annotated = result.plot()
             cv2.imshow(self.window_name, annotated)
             key = cv2.waitKey(1) & 0xFF
             if key == 27:  # ESC

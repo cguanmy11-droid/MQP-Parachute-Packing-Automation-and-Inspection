@@ -1,0 +1,150 @@
+# Side Arm Configuration - Version 2
+# Template for the second side arm version.
+# Modify these values to match the V2 arm's specifications.
+#
+# Usage:
+#   ros2 launch parachute_coordinator dual_arm_test.launch.py arm_config:=side_arm_v2.yaml
+
+# =============================================================================
+# ARM IDENTITY
+# =============================================================================
+side_arm:
+  arm_id: "v2"
+  description: "Side Arm Version 2 - Framed gantry with dual Y-axis steppers"
+
+  # URDF/Xacro file to use (V2-specific URDF with frame structure)
+  urdf_file: "side_arm_v2.urdf.xacro"
+
+  # Frame prefix for TF frames (for multi-arm setups)
+  frame_prefix: ""  # TODO: Set to "right_" for dual arm setup
+
+  # Namespace for topics/services
+  namespace: "side_arm"  # TODO: Set to "side_arm_right" for dual arm setup
+
+# =============================================================================
+# HARDWARE COMMUNICATION
+# =============================================================================
+serial_bridge:
+  # V2 arm uses a different serial port
+  serial_port: "/dev/ttyUSB1"
+  baud_rate: 115200
+  state_request_hz: 10.0
+  auto_request_state: true
+
+# =============================================================================
+# MOTOR CALIBRATION
+# =============================================================================
+# TODO: Calibrate these values for the V2 arm
+coordinate_node:
+  # Stepper motor calibration - ADJUST FOR V2 HARDWARE
+  steps_per_mm_horizontal: 300.0  # TODO: Calibrate
+  # V2 uses dual steppers for Y-axis - may have different ratio
+  steps_per_mm_vertical: 100.0    # TODO: Calibrate for dual stepper setup
+
+  # DC motor calibration
+  dc_mm_per_second: 4.0   # TODO: Calibrate
+  dc_speed_percent: 50
+
+  # Default motion speeds
+  default_speed_horizontal: 1200.0
+  default_speed_vertical: 500.0
+  sim_speed_mm_per_sec: 50.0
+
+  # Homing position - V2 homes to max X (carriage at far end)
+  home_x_mm: 340.0
+  home_y_mm: 0.0
+  home_z_mm: 0.0
+
+  # Position invert - V2 steps decrease from max X
+  position_invert_x: true
+  position_invert_y: false
+  position_invert_z: true
+
+# =============================================================================
+# WORKSPACE LIMITS
+# =============================================================================
+# V2 has increased Y range due to dual stepper motors
+workspace:
+  max_x_mm: 340.0  # TODO: Verify
+  max_y_mm: 350.0  # Increased range with dual steppers
+  max_z_mm: 150.0  # TODO: Verify
+
+# =============================================================================
+# HOOK POSITIONING
+# =============================================================================
+# TODO: Calibrate hook offsets for V2 arm using:
+#   ros2 run tf2_ros tf2_echo side_arm_origin hook_link
+interface_node:
+  # TF frame name (must match frame_prefix + "side_arm_origin")
+  side_arm_frame: "side_arm_origin"  # TODO: Update if using prefix
+
+  hook_offset_x_mm: 10.0   # TODO: Calibrate for V2
+  hook_offset_y_mm: 210.0  # TODO: Calibrate for V2
+  hook_offset_z_mm: -156.0 # TODO: Calibrate for V2
+
+  # Motor direction inversions - V2 is rotated 180° from V1
+  # Adjust these based on observed motion direction
+  invert_x: true   # X motor direction flipped due to 180° rotation
+  invert_y: false  # Y should be same (vertical)
+  invert_z: true   # Z motor direction flipped due to 180° rotation
+
+  approach_offset_z: 50.0
+  insert_depth_z: 30.0
+
+  enable_vision_servo: true
+  servo_kp_x: 1.2
+  servo_deadband_px: 5.0
+  servo_timeout_sec: 10.0
+  servo_min_speed: 400
+  servo_max_speed: 1100
+  image_width_px: 640
+
+# =============================================================================
+# VISUALIZATION
+# =============================================================================
+visualizer:
+  # TODO: Adjust if V2 has different hook geometry
+  roll: -1.5708
+  pitch: 0.0
+  yaw: -1.5708
+  offset_x: -0.01
+  offset_y: 0.009
+  offset_z: 0.07
+  scale: 0.001
+  servo_axis: "pitch"
+  servo_scale: 0.001
+  publish_hook_tf: false
+  hook_frame_id: "side_arm_hook"
+  publish_camera_tf: false
+  camera_frame_id: "camera_frame"
+  camera_offset_x: 0.0
+  camera_offset_y: 0.0
+  camera_offset_z: 0.05
+  camera_roll: 0.0
+  camera_pitch: 3.1416
+  camera_yaw: 0.0
+
+# =============================================================================
+# JOINT STATE PUBLISHER
+# =============================================================================
+joint_state_publisher:
+  servo_scale: 0.001
+  publish_rate: 50.0
+  test_x: 0.15
+  test_y: 0.175  # Mid-range for V2's larger Y travel
+  test_z: 0.05
+  test_servo: 0.0
+
+# =============================================================================
+# TF TRANSFORM
+# =============================================================================
+# V2 arm mounted on opposite side (negative Y), facing toward +Y
+tf_transform:
+  x: 0.07
+  y: -0.41   # Opposite side (negative Y)
+  z: -0.26
+  roll: 1.5708
+  pitch: 0.0
+  yaw: 0.0   # Rotated 180° from V1 - hook points toward +Y
+  parent_frame: "world"
+  child_frame: "side_arm_origin"

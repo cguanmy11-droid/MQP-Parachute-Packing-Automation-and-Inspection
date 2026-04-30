@@ -231,15 +231,15 @@ class XboxArmController(Node):
             self.gripper_cmd_pub.publish(msg)
 
         elif idx == BUTTONS['X']:
-            self.get_logger().info('Gripper close step')
+            self.get_logger().info('Gripper STOP')
             msg = String()
             msg.data = 'dec'
             self.gripper_cmd_pub.publish(msg)
 
         elif idx == BUTTONS['Y']:
-            self.get_logger().info('Gripper open step')
+            self.get_logger().info('Gripper clear error')
             msg = String()
-            msg.data = 'inc'
+            msg.data = 'clear_error'
             self.gripper_cmd_pub.publish(msg)
 
         # ── Poses ──
@@ -624,15 +624,20 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
+        pass
+    finally:
         node.get_logger().info('Shutting down Xbox controller')
         # Final save if recording
         if node.is_recording:
-            node.toggle_continuous_recording()
-        elif node.waypoints:
+            if node.record_timer is not None:
+                node.record_timer.cancel()
+                node.record_timer = None
+            node.is_recording = False
+        if node.waypoints:
             node._write_waypoints_to_file()
-    finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
